@@ -1,3 +1,4 @@
+import { research } from './research';
 import { subagent, subagents } from './subagent';
 import { resumeWork } from './work';
 import { readFileSync } from 'node:fs';
@@ -76,7 +77,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   console.error('[thinking]');
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider)], ctx, budgetChars,
+      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
