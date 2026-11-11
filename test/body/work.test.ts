@@ -1,3 +1,4 @@
+import { readAgenda } from '../../body/agenda';
 import { test, expect } from 'bun:test';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -63,7 +64,7 @@ test('checkpoint tool preserves same-task recovery but never imports it into ano
  expect(readWork(join(dir,'work.json'))?.recovery).toBe('counter.json');
  expect(workContext(join(dir,'work.json'))).toContain('Counter equals one');
  await work.run({status:'queued',task:'Other',next:'Inspect'},ctx);
- expect(readWork(join(dir,'work.json'))?.recovery).toBeUndefined();
+ expect(readAgenda(join(dir,'work.json')).items.find(w=>w.task==='Other')?.recovery).toBeUndefined();
  } finally {rmSync(dir,{recursive:true});}
 });
 
@@ -110,8 +111,10 @@ test('malformed checkpoints are rejected without overwriting valid saved work', 
    const before=readFileSync(path,'utf8');
    await expect(work.run({status:'queued',task:'Invalid',next:'Inspect',[key]:value},ctx)).rejects.toThrow();
    expect(readFileSync(path,'utf8')).toBe(before);
-   writeFileSync(path,JSON.stringify({...JSON.parse(before),[key]:value}));
+   const corrupt=JSON.parse(before);corrupt.items[0][key]=value;
+   writeFileSync(path,JSON.stringify(corrupt));
    expect(readWork(path)).toBeNull();
+   writeFileSync(path,before);
   }
  }
  } finally {rmSync(dir,{recursive:true});}

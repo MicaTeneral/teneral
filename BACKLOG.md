@@ -78,3 +78,8 @@ Owner authorized general initiative via confirmed Zulip ID 997799. Inspection sh
 
 ## Initiative step 2: explicit outcome and recovery checkpoints
 Inspection after 91686c6 shows saved work has only task/next; recovery pointers and completion criteria can be lost when next is rewritten. Add optional outcome/recovery/evidence fields, preserve on same-task updates and clear on task changes. Recovery is an instruction/pointer, never an automatic replay or proof of success. Test persistence and a local receipt-backed counter recovery scenario; do not claim generic exactly-once execution.
+
+## Initiative step 3: ordered agenda core
+Single-task work.json overwrites other commitments. Add a generic bounded ordered agenda with stable task-name keys, checkpoint-preserving updates, explicit queued/waiting/done selection, and strict persisted-state validation. First tested slice is the storage/selection core; wire it into work tool/scheduler in the next step. No automatic new goals or external actions. Success: multiple commitments survive reload; blocked/done entries are skipped; updates preserve order/recovery; invalid storage is never silently overwritten.
+
+Agenda integration: keep the existing work.json path, accept legacy single-task content in memory, and atomically upgrade it on the first successful write. No separate migration sidecar or dual writers. Corruption must block writes; context reports it without crashing inference. Work updates address the named task rather than whichever is selected. Scheduler updates preserve other commitments.
