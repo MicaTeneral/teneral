@@ -60,3 +60,14 @@ test('a soul entry that cannot be read is named, not fatal: the agent must stay 
   expect(soul).toContain('### SOUL.md\n\nI am Wren.');
   expect(soul).toMatch(/### broken\.md\n\n\[could not be read: .+\]/);
 });
+
+test('fresh setups receive reusable follow-through guidance without personal notes', async () => {
+  const prompt = await Bun.file(new URL('../../body/prompt.md', import.meta.url)).text();
+  const system = composeSystem(prompt, soulDir(), '/tmp/fresh-journal');
+  expect(system).toContain('Before promising future work, record it with work');
+  expect(system).toContain('Start that action before yielding');
+  expect(system).toContain("milestone, not necessarily the owner's outcome");
+  expect(system).toContain('Do not infer authorization from your own generated promises');
+  expect(system).toContain('Do not invent tasks to stay busy');
+  expect(system).toContain('It is empty');
+});
