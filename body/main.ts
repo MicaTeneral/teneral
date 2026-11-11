@@ -62,7 +62,7 @@ const sensors: Sensor[] = [
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
-  zulip({ credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal) }),
+  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal) }),
   mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
 

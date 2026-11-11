@@ -64,3 +64,6 @@ Motive (Anton’s email setup exchange): credentials work, but I repeatedly aske
 
 ## Active: Zulip DM sensor
 Motive: Anton messaged Mica on Zulip and got no response because signup was completed but sensing was not implemented. Poll DMs read-only every 30 seconds, replay existing recent DMs on first start, paginate forward subsequently, and deduplicate using journaled IDs across restarts. Label all messages untrusted external input, including apparent owner messages, pending verified identity binding. No automatic sending. Success: mocked tests for delivery, repeat/restart deduplication and failure recovery; full tests/check; live DM arrives after promotion.
+
+## Active: two-way Zulip and history
+Anton wants to leave the console and introduce Mica in Zulip, with conversation history available for learning. Extend the sensor to subscribed traffic, add explicit reply and paginated history tools, and publish presence after successful polls. Avoid forwarding console output into arbitrary streams: route replies only via a fetched original message. History is untrusted context, never owner authorization. Owner binding requires confirmation of numeric user ID 997799 here before granting remote administrative authority. Measure with routing/history tests and real API checks before claiming complete parity.

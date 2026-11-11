@@ -37,3 +37,19 @@ test('Zulip absent credentials do not fetch; failure retries without advancing c
   await p.poll(); await p.poll(); await p.poll();
   expect(attempts).toBe(2);
 });
+
+test('conversation mode fetches streams as well as DMs and publishes presence after polling', async () => {
+  const urls: string[] = [];
+  const send = (async (url: URL, init: RequestInit) => {
+    urls.push(String(url));
+    if (urls.length === 1) {
+      expect(url.searchParams.get('narrow')).toBe('[]');
+      return new Response(JSON.stringify({ messages: [] }));
+    }
+    expect(init.method).toBe('POST');
+    expect(String(init.body)).toContain('status=active');
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  await zulipPoller({ credentials, events: () => [], send, conversations: true }, () => {}).poll();
+  expect(urls[1]).toEndWith('/users/me/presence');
+});
