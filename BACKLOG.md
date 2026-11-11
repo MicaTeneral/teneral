@@ -86,3 +86,6 @@ Agenda integration: keep the existing work.json path, accept legacy single-task 
 
 ## Default follow-through guidance
 Motive: after agenda promotion, owner repeatedly said “stopped again” because I announced next work without queuing/starting it, then treated small implementation milestones as the entire approved goal. Default prompt currently only says report plainly and prefer small changes. Add generic guidance to record and start authorized commitments before yielding, distinguish milestones from outcomes, and stop only at outcome/blocker/boundary. No prose-driven automatic execution. Test guidance in a fresh empty-soul system prompt. Concrete demonstration: this correction turn recorded work, inspected prompt/loop and implemented the guidance before replying.
+
+## Quiet Zulip self-echoes
+Repeated history shows own replies triggering another turn merely to acknowledge an echo. Approved quieter-reporting commitment: skip messages whose API sender_email exactly matches authenticated credential email, advancing the in-memory cursor even on self-only pages. Never match display names/content. Restart may refetch skipped messages, but must skip them again without stimuli; incoming delivery remains journal-backed. Tests cover mixed traffic, self-only pagination, restart and misleading names/text. No new sidecar state needed.

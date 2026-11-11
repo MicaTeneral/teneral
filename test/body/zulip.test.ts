@@ -53,3 +53,37 @@ test('conversation mode fetches streams as well as DMs and publishes presence af
   await zulipPoller({ credentials, events: () => [], send, conversations: true }, () => {}).poll();
   expect(urls[1]).toEndWith('/users/me/presence');
 });
+
+test('own echoes are silent, self-only pages advance, and incoming identity is not guessed from text', async () => {
+  const notices: Stimulus[] = [];
+  const anchors: string[] = [];
+  const pages = [
+    [{id: 1, sender_email: 'mica@test', content: 'own reply'}],
+    [{id: 2, sender_email: 'human@test', sender_full_name: 'Mica', content: 'own reply'},
+     {id: 3, sender_email: 'mica@test', content: 'own reply'}],
+    [{id: 4, content: 'unknown sender still delivered'}],
+  ];
+  const send = (async (url: URL) => {
+    anchors.push(url.searchParams.get('anchor')!);
+    return new Response(JSON.stringify({messages: pages.shift() ?? []}));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({credentials, events: () => [], send}, s => notices.push(s));
+  await p.poll(); expect(notices).toHaveLength(0);
+  await p.poll(); await p.poll();
+  expect(anchors).toEqual(['newest', '1', '3']);
+  expect(notices).toHaveLength(2);
+  expect(notices[0].text).toStartWith('Zulip DM 2\n');
+  expect(notices[1].text).toStartWith('Zulip DM 4\n');
+});
+
+test('self echoes refetched after restart remain silent', async () => {
+  let emitted = 0;
+  const send = (async () => new Response(JSON.stringify({messages: [
+    {id: 5, sender_email: 'mica@test'},
+  ]}))) as unknown as typeof fetch;
+  for (let restart = 0; restart < 2; restart++) {
+    const p = zulipPoller({credentials, events: () => [], send}, () => { emitted++; });
+    await p.poll(); p.stop();
+  }
+  expect(emitted).toBe(0);
+});
