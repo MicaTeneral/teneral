@@ -26,14 +26,13 @@ test('scheduler resumes once, stops while busy, and pauses at budget', async () 
  } finally {stop();rmSync(dir,{recursive:true});}
 },20000);
 
-test('status footer describes saved state without claiming active execution', () => {
+test('agenda states never append unrelated automatic reply footers', () => {
  const dir=mkdtempSync(join(tmpdir(),'footer-'));const path=join(dir,'work.json');
  try {
  expect(workFooter(path)).toBe('');
  for(const status of ['queued','waiting','done'] as const){
  saveWork(path,{status,task:'Test task',next:'Concrete step',attempts:0,due:0});
- const f=workFooter(path);expect(f).toContain('Test task');
- expect(f).toContain(status==='queued'?'automatic continuation':status==='waiting'?'Work paused':'No continuation queued');
+ expect(workFooter(path)).toBe('');
  }
  } finally {rmSync(dir,{recursive:true});}
 });
@@ -44,6 +43,8 @@ test('every-round work context follows persisted changes and does not invent fre
  expect(workContext(path)).toBe('');
  saveWork(path,{status:'queued',task:'Test outcome',next:'Inspect existing receipt',attempts:0,due:0});
  expect(workContext(path)).toContain('inbox traffic');
+ expect(workContext(path)).toContain('continue concrete ready steps in this turn');
+ expect(workContext(path)).toContain('A completed step or checkpoint update is not a reason to end the turn');
  expect(workContext(path)).toContain('timed-out action may already have succeeded');
  expect(workContext(path)).toContain('Inspect existing receipt');
  saveWork(path,{status:'waiting',task:'Test outcome',next:'Owner decision',attempts:1,due:0});

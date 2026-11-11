@@ -46,7 +46,7 @@ test('legacy checkpoint migrates on write and tool completion selects the next c
  await work.run({status:'done',task:'Legacy',next:'Verified'},ctx);
  expect(readAgenda(path).items[0].recovery).toBe('receipt');
  expect(readWork(path)?.task).toBe('Second');
- expect(workContext(path)).toContain('Second');expect(workFooter(path)).toContain('Second');
+ expect(workContext(path)).toContain('Second');expect(workFooter(path)).toBe('');
  await work.run({status:'waiting',task:'Second',next:'Owner decision'},ctx);
  expect(selectWork(readAgenda(path))).toBeUndefined();
  expect(workContext(path)).toContain('BLOCKED');
