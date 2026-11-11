@@ -26,3 +26,36 @@ test('invalid requests never reach provider and tool requests never execute', as
  const result=JSON.parse(await worker.run({task:'Review',context:''},ctx));
  expect(result.status).toBe('failed');expect(result.text).toBeUndefined();expect(calls).toBe(1);
 });
+
+test('batch starts all workers concurrently and preserves ordered independent results', async () => {
+ const {subagents} = await import('../../body/subagent');
+ let started=0; let release!:()=>void;
+ const barrier=new Promise<void>(r=>{release=r;});
+ const tool=subagents(async (messages, tools)=>{
+  expect(tools).toEqual([]); started++;
+  if(started===3) release();
+  await barrier;
+  const task=JSON.parse(messages[1]!.content as string).task;
+  if(task==='fail') throw new Error('private transport details');
+  if(task==='hang') return new Promise(()=>{});
+  return {text:'ok',toolCalls:[]};
+ },30);
+ const result=JSON.parse(await tool.run({jobs:['ok','fail','hang'].map(task=>({label:task,task,context:''}))},ctx));
+ expect(started).toBe(3);
+ expect(result.results.map((r:any)=>r.status)).toEqual(['completed','failed','timed_out']);
+ expect(result.results.map((r:any)=>r.label)).toEqual(['ok','fail','hang']);
+ expect(new Set(result.results.map((r:any)=>r.worker)).size).toBe(3);
+ expect(JSON.stringify(result)).not.toContain('private transport');
+});
+
+test('entire batch is preflighted before any call', async () => {
+ const {subagents} = await import('../../body/subagent');
+ let calls=0; const tool=subagents(async()=>{calls++;return {text:'ok',toolCalls:[]};});
+ const job={label:'a',task:'x',context:''};
+ for(const jobs of [[], [job,job], [job,{...job,label:'b',task:''}], Array(4).fill(job),
+  ['a','b','c'].map(label=>({label,task:'x',context:'x'.repeat(20000)})),
+  [{...job,context:'x'.repeat(20001)}], [{...job,label:'bad label'}]]) {
+  await expect(tool.run({jobs},ctx)).rejects.toThrow();
+ }
+ expect(calls).toBe(0);
+});

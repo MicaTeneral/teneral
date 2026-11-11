@@ -32,3 +32,30 @@ export function subagent(provider: Provider, timeoutMs = 60_000): Tool {
     },
   };
 }
+
+/** All jobs are validated before fan-out; children retain no tool capabilities. */
+export function subagents(provider: Provider, timeoutMs = 60_000): Tool {
+  const worker = subagent(provider, timeoutMs);
+  return {
+    spec: { name: 'subagents', description: 'Run 1–3 labeled no-tools analysis workers concurrently on supplied context. Not source retrieval or background execution. Maximum 44000 total task/context characters. Independent 60-second local deadlines; remote billing and transport memory are not bounded. Returns ordered attributed untrusted results.', parameters: {
+      type: 'object', properties: { jobs: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'object', properties: {
+        label: {type:'string'}, task: {type:'string'}, context: {type:'string'},
+      }, required: ['label','task','context'] } } }, required: ['jobs'],
+    } },
+    async run(args, ctx) {
+      const jobs = (args as {jobs?: unknown} | null)?.jobs;
+      if (!Array.isArray(jobs) || jobs.length < 1 || jobs.length > 3) throw new Error('Provide 1–3 jobs');
+      const labels = new Set<string>();
+      let size = 0;
+      const validated = jobs.map(j => {
+        if (!j || typeof j.label !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(j.label) || labels.has(j.label)) throw new Error('Use unique labels of 1–64 letters, digits, underscores or hyphens');
+        if (typeof j.task !== 'string' || !j.task.trim() || j.task.length > 2000 || typeof j.context !== 'string' || j.context.length > 20000) throw new Error('Invalid worker task/context');
+        labels.add(j.label); size += j.task.length + j.context.length;
+        return {label:j.label, task:j.task, context:j.context};
+      });
+      if (size > 44000) throw new Error('Batch input exceeds 44000 characters');
+      const results = await Promise.all(validated.map(async j => ({label:j.label, ...JSON.parse(await worker.run({task:j.task,context:j.context},ctx))})));
+      return JSON.stringify({untrusted:true, results});
+    },
+  };
+}
