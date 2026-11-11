@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readWork, saveWork, resumeWork, workFooter } from '../../body/work';
+import { readWork, saveWork, resumeWork, workFooter, workContext } from '../../body/work';
 test('durable task survives reload; waiting and done are explicit states', () => {
  const dir=mkdtempSync(join(tmpdir(),'work-')); const path=join(dir,'work.json');
  try {
@@ -34,5 +34,21 @@ test('status footer describes saved state without claiming active execution', ()
  const f=workFooter(path);expect(f).toContain('Test task');
  expect(f).toContain(status==='queued'?'automatic continuation':status==='waiting'?'Work paused':'No continuation queued');
  }
+ } finally {rmSync(dir,{recursive:true});}
+});
+
+test('every-round work context follows persisted changes and does not invent fresh-install goals', () => {
+ const dir=mkdtempSync(join(tmpdir(),'work-context-'));const path=join(dir,'work.json');
+ try {
+ expect(workContext(path)).toBe('');
+ saveWork(path,{status:'queued',task:'Test outcome',next:'Inspect existing receipt',attempts:0,due:0});
+ expect(workContext(path)).toContain('inbox traffic');
+ expect(workContext(path)).toContain('timed-out action may already have succeeded');
+ expect(workContext(path)).toContain('Inspect existing receipt');
+ saveWork(path,{status:'waiting',task:'Test outcome',next:'Owner decision',attempts:1,due:0});
+ expect(workContext(path)).toContain('BLOCKED');
+ expect(workContext(path)).toContain('Owner decision');
+ saveWork(path,{status:'done',task:'Test outcome',next:'Verified',attempts:1,due:0});
+ expect(workContext(path)).toBe('');
  } finally {rmSync(dir,{recursive:true});}
 });

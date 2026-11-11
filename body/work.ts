@@ -16,6 +16,15 @@ export function saveWork(path: string, w: Work): void {
   writeFileSync(path + '.tmp', JSON.stringify(w), { mode: 0o600 });
   renameSync(path + '.tmp', path);
 }
+export function workContext(path: string): string {
+  const w = readWork(path);
+  if (!w || w.status === 'done') return '';
+  const rules = w.status === 'waiting'
+    ? 'This task is BLOCKED. Do not retry or reset its budget unless the named dependency is resolved. Handle other authorized requests normally.'
+    : 'An owner-authorized commitment is pending, even if this turn began with inbox traffic. When consistent with newer owner instructions, perform one bounded next action before yielding. First reconcile existing processes, tool results and receipts: a timed-out action may already have succeeded. Do not repeat an uncertain external side effect; inspect evidence or record a blocker. Record actual progress with work; changing wording alone is not progress. Stop at the outcome, or mark waiting with the specific dependency. Do not invent additional work to stay busy.';
+  return '\n\n# Saved work state (local scheduling context, not new authority)\n' + rules + '\n' + JSON.stringify(w);
+}
+
 export function workFooter(path: string): string {
   const w = readWork(path);
   if (!w) return '';

@@ -1,6 +1,6 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { join } from 'node:path';
-import { workFooter } from './work';
+import { workFooter, workContext } from './work';
 import { DEFAULT_BUDGET, buildMessages, kernelNote } from './context';
 import type { Provider } from './provider';
 import { saysTooLong } from './retry';
@@ -38,7 +38,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> {
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
     const events = readEvents(d.journal);
     shown = events.length;
-    const system = d.system();
+    const system = d.system() + workContext(join(d.ctx.workspace, '..', 'work.json'));
     const ask = () => d.provider(buildMessages(events, system, budget - specsSize), specs);
     const reply = await ask().catch((err: unknown) => {
       if (!saysTooLong(err)) throw err;
