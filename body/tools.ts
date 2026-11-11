@@ -1,3 +1,4 @@
+import { work } from './work';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -270,4 +271,4 @@ const send: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, bash, molt, send, zulipReply, zulipHistory];
+export const TOOLS: Tool[] = [read, write, edit, bash, molt, send, zulipReply, zulipHistory, work];

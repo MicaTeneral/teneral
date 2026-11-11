@@ -1,3 +1,4 @@
+import { resumeWork } from './work';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../kernel/journal';
@@ -43,6 +44,7 @@ const ownerDir = env('TENERAL_OWNER');
 const ctx: ToolContext = { workspace, journal, gen, moltCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
 
 let quitting = false;
+let working = false;
 let wake: (() => void) | null = null;
 /** Stimuli journaled by this process, so a failed turn can tell that one came in while it ran. */
 let arrived = 0;
@@ -62,6 +64,7 @@ const sensors: Sensor[] = [
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
+  resumeWork(join(workspace, '..', 'work.json'), () => working || quitting || needsTurn(readEvents(journal))),
   zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal) }),
   mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
@@ -107,7 +110,9 @@ for (;;) {
   // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
     const before = arrived;
+    working = true;
     const failed = await turn();
+    working = false;
     if (failed === null) {
       failures = 0;
       streak.count = 0;
