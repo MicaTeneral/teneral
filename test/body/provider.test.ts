@@ -157,3 +157,45 @@ test('every way a request can fail is a ProviderError that carries the status an
   expect(await caught(openAiProvider({ ...cfg, fetch: html })([], []))).toBeInstanceOf(ProviderError);
   expect(await caught(openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [] }) })([], []))).toBeInstanceOf(ProviderError);
 });
+
+test('both adapters propagate caller cancellation to fetch', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ for (const responses of [false, true]) {
+  const controller = new AbortController();
+  let entered!: () => void;
+  const started = new Promise<void>(r => { entered = r; });
+  const send = (async (_url: unknown, init?: RequestInit) => {
+   entered();
+   return await new Promise<Response>((_resolve, reject) => {
+    init!.signal!.addEventListener('abort', () => reject(new Error('aborted')), {once:true});
+   });
+  }) as unknown as typeof fetch;
+  const provider = responses
+   ? responsesProvider({baseUrl:()=>cfg.baseUrl, token:async()=> 'k', model:'m', fetch:send})
+   : openAiProvider({...cfg, fetch:send});
+  const pending = provider([], [], {signal:controller.signal});
+  await started; controller.abort();
+  await expect(pending).rejects.toThrow('cancelled');
+ }
+});
+
+test('Responses never posts after cancellation during token acquisition or refresh', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ for (const refresh of [false,true]) {
+  const controller = new AbortController(); let posts=0;
+  const provider = responsesProvider({baseUrl:()=>cfg.baseUrl, model:'m',
+   token:async rejected => { if (!refresh || rejected) controller.abort(); return rejected ? 'new' : 'old'; },
+   fetch:(async()=> {posts++; return new Response('{}',{status:401});}) as unknown as typeof fetch});
+  await expect(provider([],[],{signal:controller.signal})).rejects.toThrow();
+  expect(posts).toBe(refresh ? 1 : 0);
+ }
+});
+
+test('pre-aborted calls do not acquire credentials or fetch', async () => {
+ const { responsesProvider } = await import('../../body/provider');
+ let calls=0; const controller=new AbortController(); controller.abort();
+ const send=(async()=>{calls++;return new Response('{}');}) as unknown as typeof fetch;
+ const providers=[openAiProvider({...cfg,fetch:send}), responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=>{calls++;return 'k';},fetch:send})];
+ for(const provider of providers) await expect(provider([],[],{signal:controller.signal})).rejects.toThrow();
+ expect(calls).toBe(0);
+});
