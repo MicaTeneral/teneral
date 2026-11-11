@@ -8,6 +8,7 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
 import { mail, mailKey } from './mail';
+import { zulip, zulipCredentials } from './zulip';
 import { TOOLS, type ToolContext } from './tools';
 
 function env(name: string): string {
@@ -61,6 +62,7 @@ const sensors: Sensor[] = [
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
+  zulip({ credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal) }),
   mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
 
