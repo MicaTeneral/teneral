@@ -7,6 +7,7 @@ import { ProviderError, connect, type Provider } from './provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
 import { birth, composeSystem } from './soul';
+import { mail, mailKey } from './mail';
 import { TOOLS, type ToolContext } from './tools';
 
 function env(name: string): string {
@@ -60,6 +61,7 @@ const sensors: Sensor[] = [
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
+  mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
 
 /** One turn. Returns what was thrown, or null when it ran to its end. */
