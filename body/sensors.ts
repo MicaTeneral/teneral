@@ -64,8 +64,8 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true): 
       emit({
         source: 'clock',
         text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
-          'If you are waiting for an answer from them, keep waiting and say so in one line; do not start something instead. ' +
-          'Otherwise, if something on your backlog is worth doing now, do it; if not, say so in one line.',
+          'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
+          'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks.',
       });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);

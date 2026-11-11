@@ -47,6 +47,7 @@ test('clock emits on its interval until stopped', async () => {
   expect(got[0]!.text).toMatch(/^Clock tick at \d{4}-/);
   expect(got[0]!.text).not.toMatch(/no ?one is waiting/i);
   expect(got[0]!.text).toContain('keep waiting');
+  for (const phrase of ['Advance queued commitments first', 'without new evidence', 'standing owner permission', 'at most three candidates and one chosen outcome', 'exploration budget', 'stop quietly', 'Do not queue recursive']) expect(got[0]!.text).toContain(phrase);
   await new Promise((r) => setTimeout(r, 30));
   expect(got.length).toBe(count);
 });
