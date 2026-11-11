@@ -7,6 +7,7 @@ test('Zulip DMs sorted, marked untrusted, deduplicated across restart and pagina
   const notices: Stimulus[] = [];
   const urls: URL[] = [];
   const send = (async (url: URL) => {
+    if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     urls.push(new URL(url));
     return new Response(JSON.stringify({ messages: [{ id: 2, content: 'hello' }, { id: 1, content: 'earlier' }] }));
   }) as unknown as typeof fetch;
@@ -25,7 +26,8 @@ test('Zulip DMs sorted, marked untrusted, deduplicated across restart and pagina
 test('Zulip absent credentials do not fetch; failure retries without advancing cursor', async () => {
   expect(zulipCredentials('/nonexistent/mica-zulip.json')).toBeUndefined();
   let calls = 0, attempts = 0;
-  const send = (async () => {
+  const send = (async (url: URL) => {
+    if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     calls++;
     return new Response(JSON.stringify({ messages: [{ id: 10, content: 'hi' }] }));
   }) as unknown as typeof fetch;
@@ -41,6 +43,7 @@ test('Zulip absent credentials do not fetch; failure retries without advancing c
 test('conversation mode fetches streams as well as DMs and publishes presence after polling', async () => {
   const urls: string[] = [];
   const send = (async (url: URL, init: RequestInit) => {
+    if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     urls.push(String(url));
     if (urls.length === 1) {
       expect(url.searchParams.get('narrow')).toBe('[]');
@@ -58,12 +61,13 @@ test('own echoes are silent, self-only pages advance, and incoming identity is n
   const notices: Stimulus[] = [];
   const anchors: string[] = [];
   const pages = [
-    [{id: 1, sender_email: 'mica@test', content: 'own reply'}],
-    [{id: 2, sender_email: 'human@test', sender_full_name: 'Mica', content: 'own reply'},
-     {id: 3, sender_email: 'mica@test', content: 'own reply'}],
+    [{id: 1, sender_id: 99, sender_email: 'different@test', content: 'own reply'}],
+    [{id: 2, sender_id: 100, sender_email: 'mica@test', sender_full_name: 'Mica', content: 'own reply'},
+     {id: 3, sender_id: 99, sender_email: 'different@test', content: 'own reply'}],
     [{id: 4, content: 'unknown sender still delivered'}],
   ];
   const send = (async (url: URL) => {
+    if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     anchors.push(url.searchParams.get('anchor')!);
     return new Response(JSON.stringify({messages: pages.shift() ?? []}));
   }) as unknown as typeof fetch;
@@ -78,12 +82,29 @@ test('own echoes are silent, self-only pages advance, and incoming identity is n
 
 test('self echoes refetched after restart remain silent', async () => {
   let emitted = 0;
-  const send = (async () => new Response(JSON.stringify({messages: [
-    {id: 5, sender_email: 'mica@test'},
+  const send = (async (url: URL) => new Response(JSON.stringify(url.pathname === "/api/v1/users/me" ? {user_id:99} : {messages: [
+    {id: 5, sender_id: 99, sender_email: 'different@test'},
   ]}))) as unknown as typeof fetch;
   for (let restart = 0; restart < 2; restart++) {
     const p = zulipPoller({credentials, events: () => [], send}, () => { emitted++; });
     await p.poll(); p.stop();
   }
   expect(emitted).toBe(0);
+});
+
+test('identity failures preserve cursor; cache is reused and invalidated on credential rotation', async()=>{
+ let key='first', lookups=0, reads=0; const notices:Stimulus[]=[];
+ const send=(async(url:URL)=>{
+  if(url.pathname==='/api/v1/users/me') {
+   lookups++;
+   if(lookups===1) return new Response('{}');
+   return new Response(JSON.stringify({user_id:key==='first'?99:100}));
+  }
+  reads++;
+  return new Response(JSON.stringify({messages:[{id:reads,sender_id:key==='first'?99:100}]}));
+ }) as unknown as typeof fetch;
+ const p=zulipPoller({credentials:()=>({...credentials(),api_key:key}),events:()=>[],send},s=>notices.push(s));
+ await p.poll();expect(reads).toBe(0);
+ await p.poll();await p.poll();expect(lookups).toBe(2);expect(reads).toBe(2);
+ key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
 });
