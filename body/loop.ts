@@ -1,4 +1,6 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
+import { join } from 'node:path';
+import { workFooter } from './work';
 import { DEFAULT_BUDGET, buildMessages, kernelNote } from './context';
 import type { Provider } from './provider';
 import { saysTooLong } from './retry';
@@ -44,6 +46,9 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> {
       budget = Math.floor(budget / 2);
       return ask();
     });
+    if (reply.toolCalls.length === 0 && reply.text.trim()) {
+      reply.text += workFooter(join(d.ctx.workspace, '..', 'work.json'));
+    }
     appendEvent(d.journal, d.gen, { type: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
     if (reply.text !== '') d.onText?.(reply.text);
     if (reply.toolCalls.length === 0) {

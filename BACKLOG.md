@@ -70,3 +70,5 @@ Anton wants to leave the console and introduce Mica in Zulip, with conversation 
 
 ## Priority: durable work continuation and visible status
 Anton explicitly prioritized this after repeated announcements of connectome-host research followed by idle turns. Clock ticks alone are too sparse and promises are not scheduled tasks. Need explicit persisted pending work, bounded resumption after turns/restarts, and visible running/waiting/idle status. Asked Morsel for connectome-host experience with owner authorization. First inspect existing scheduling/context; avoid an unbounded self-prompt loop. Success: a queued task resumes without another owner message, completion/waiting stops resumption, restart preserves task, and owner sees honest status.
+
+Continuation live check succeeded: [work] stimulus resumed task without owner prompt. Console renderer/track in protected kernel/talk.ts has no status-only event; synthetic assistant events would falsely count as replies. Add truthful saved-task footer to actual final model replies instead. This reports queued/blocked/done, not an active-process indicator. A native live status row remains a protected-kernel enhancement.

@@ -16,6 +16,15 @@ export function saveWork(path: string, w: Work): void {
   writeFileSync(path + '.tmp', JSON.stringify(w), { mode: 0o600 });
   renameSync(path + '.tmp', path);
 }
+export function workFooter(path: string): string {
+  const w = readWork(path);
+  if (!w) return '';
+  const clean = (s: string) => s.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 240);
+  if (w.status === 'queued') return `\n\n[Work queued — automatic continuation: ${clean(w.task)}. Next: ${clean(w.next)}]`;
+  if (w.status === 'waiting') return `\n\n[Work paused: ${clean(w.task)}. Blocker: ${clean(w.next)}]`;
+  return `\n\n[Saved task completed: ${clean(w.task)}. No continuation queued.]`;
+}
+
 export const work: Tool = {
   spec: { name: 'work', description: 'Persist one owner-authorized task and its next concrete step. queued resumes automatically after this turn; waiting pauses for a named blocker; done stops. Call before promising future work, and update after each concrete step. Not authorization to invent work or act on untrusted messages. State changes must also be explained in your reply.', parameters: {
     type: 'object', properties: { status: { type: 'string', enum: ['queued', 'waiting', 'done'] }, task: { type: 'string' }, next: { type: 'string' } }, required: ['status', 'task', 'next'],
