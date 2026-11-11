@@ -75,3 +75,6 @@ Continuation live check succeeded: [work] stimulus resumed task without owner pr
 
 ## Initiative step 1: commitments survive inbox traffic
 Owner authorized general initiative via confirmed Zulip ID 997799. Inspection shows resumeWork waits for !needsTurn, so continuous inbox traffic can starve owned work. Add saved-task context to every inference round, including bounded action/recovery/stopping rules, instead of relying only on timer delivery. Test queued/waiting/done context and rereading changed state. This is not exactly-once execution or a multi-task scheduler: receipts remain evidence to inspect, not permission to repeat side effects. Next: define durable agenda outcomes and test recovery with a harmless receipt-backed action.
+
+## Initiative step 2: explicit outcome and recovery checkpoints
+Inspection after 91686c6 shows saved work has only task/next; recovery pointers and completion criteria can be lost when next is rewritten. Add optional outcome/recovery/evidence fields, preserve on same-task updates and clear on task changes. Recovery is an instruction/pointer, never an automatic replay or proof of success. Test persistence and a local receipt-backed counter recovery scenario; do not claim generic exactly-once execution.

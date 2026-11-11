@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readWork, saveWork, resumeWork, workFooter, workContext } from '../../body/work';
@@ -50,5 +50,69 @@ test('every-round work context follows persisted changes and does not invent fre
  expect(workContext(path)).toContain('Owner decision');
  saveWork(path,{status:'done',task:'Test outcome',next:'Verified',attempts:1,due:0});
  expect(workContext(path)).toBe('');
+ } finally {rmSync(dir,{recursive:true});}
+});
+
+test('checkpoint tool preserves same-task recovery but never imports it into another task', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'checkpoint-'));
+ const ctx={workspace:join(dir,'workspace')} as import('../../body/tools').ToolContext;
+ const {work}=await import('../../body/work');
+ try {
+ await work.run({status:'queued',task:'Counter',next:'Inspect receipt',outcome:'Counter equals one',recovery:'counter.json',evidence:'Not started'},ctx);
+ await work.run({status:'queued',task:'Counter',next:'Read result'},ctx);
+ expect(readWork(join(dir,'work.json'))?.recovery).toBe('counter.json');
+ expect(workContext(join(dir,'work.json'))).toContain('Counter equals one');
+ await work.run({status:'queued',task:'Other',next:'Inspect'},ctx);
+ expect(readWork(join(dir,'work.json'))?.recovery).toBeUndefined();
+ } finally {rmSync(dir,{recursive:true});}
+});
+
+test('local recovery fixture: saved-but-unstarted and lost-response checkpoints retain a usable receipt pointer', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'receipt-recovery-'));
+ const path=join(dir,'work.json'), receipt=join(dir,'receipt.json');
+ const ctx={workspace:join(dir,'workspace')} as import('../../body/tools').ToolContext;
+ const {work}=await import('../../body/work');
+ // This fixture supplies an idempotent local action, not generic exactly-once execution.
+ let executions=0;
+ function reconcile(pointer:string) {
+   if(existsSync(pointer)) return JSON.parse(readFileSync(pointer,'utf8'));
+   executions++;
+   const result={counter:executions};
+   writeFileSync(pointer,JSON.stringify(result));
+   return result;
+ }
+ try {
+ await work.run({status:'queued',task:'Local counter',next:'Reconcile receipt before action',outcome:'Counter is one',recovery:receipt},ctx);
+ // Reload models a new process with only persisted state, before work started.
+ let checkpoint=readWork(path)!;
+ expect(executions).toBe(0);
+ expect(reconcile(checkpoint.recovery!).counter).toBe(1);
+ // Simulate losing the response: leave the queued checkpoint unchanged.
+ checkpoint=readWork(path)!;
+ expect(checkpoint.status).toBe('queued');
+ expect(reconcile(checkpoint.recovery!).counter).toBe(1);
+ expect(executions).toBe(1);
+ await work.run({status:'done',task:'Local counter',next:'No action remains',evidence:'Receipt counter verified as one'},ctx);
+ expect(readWork(path)?.recovery).toBe(receipt);
+ expect(workContext(path)).toBe('');
+ } finally {rmSync(dir,{recursive:true});}
+});
+
+test('malformed checkpoints are rejected without overwriting valid saved work', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'bad-checkpoint-'));
+ const path=join(dir,'work.json');
+ const ctx={workspace:join(dir,'workspace')} as import('../../body/tools').ToolContext;
+ const {work}=await import('../../body/work');
+ try {
+ for(const key of ['outcome','recovery','evidence']) {
+  for(const value of [42,{},'x'.repeat(2001)]) {
+   await work.run({status:'queued',task:'Valid',next:'Inspect'},ctx);
+   const before=readFileSync(path,'utf8');
+   await expect(work.run({status:'queued',task:'Invalid',next:'Inspect',[key]:value},ctx)).rejects.toThrow();
+   expect(readFileSync(path,'utf8')).toBe(before);
+   writeFileSync(path,JSON.stringify({...JSON.parse(before),[key]:value}));
+   expect(readWork(path)).toBeNull();
+  }
+ }
  } finally {rmSync(dir,{recursive:true});}
 });
