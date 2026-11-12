@@ -202,3 +202,14 @@ Owner requested adoption of local main: slash command list/completion/highlight,
 unknown-command refusal and idempotent acceptance journaling. Inspected scope:
 README, kernel and kernel tests only; lineage body untouched. Success: clean
 merge, type check/full tests and owner-accepted species promotion. No extra edits.
+
+## Recall before claiming account facts absent
+Observed owner conversation: known mailbox and Zulip registration were in an
+old assistant journal entry but absent from the recent context suffix. Body
+has a memory prototype, not a deployed retrieval path. Add explicit bounded
+journal recall for terminal-owner turns and instruct retrieval before absence
+claims. Search assistant text and terminal stimuli only, never tool payloads,
+notes, credentials files or external messages; results are historical claims,
+not current instructions. No database ingestion. Test old-record recovery,
+audience isolation, limits and omitted secret-shaped lines. This is a retrieval
+fallback, not a guarantee of semantic recall or truth of old assistant claims.
