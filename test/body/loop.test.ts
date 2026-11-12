@@ -555,30 +555,16 @@ test('an image refused and then a request too long: each is answered once, in tu
 
 import { saveWork, readWork, work } from '../../body/work';
 
-for (const status of ['done', 'waiting'] as const) {
-  test(`queued work continues after prose and stops when ${status}`, async () => {
-    const s = setup([
-      { text: 'Found the cause; next I will act.', toolCalls: [] },
-      { text: '', toolCalls: [{ id: 'save', name: 'work', args: { task: 'fix', status, next: 'checked', evidence: 'test evidence' } }] },
-      { text: 'Result recorded.', toolCalls: [] },
-    ], [work]);
-    s.ctx.workspace = join(s.journal, '..', 'workspace');
-    const path = join(s.ctx.workspace, '..', 'work.json');
-    saveWork(path, { task: 'fix', status: 'queued', next: 'act', outcome: 'verified result', attempts: 0, due: 0 });
-    await runTurn(s.deps);
-    expect(s.seen).toHaveLength(3);
-    expect(JSON.stringify(s.seen[1])).toContain('bounded continuation');
-    expect(readWork(path)?.status).toBe(status);
-    expect(readWork(path)?.outcome).toBe('verified result');
-  });
-}
-
-test('repeated prose with queued work has only two continuation nudges', async () => {
-  const s = setup(Array.from({ length: 3 }, () => ({ text: 'Later', toolCalls: [] })));
-  s.ctx.workspace = join(s.journal, '..', 'workspace');
-  saveWork(join(s.ctx.workspace, '..', 'work.json'), { task: 'fix', status: 'queued', next: 'act', attempts: 0, due: 0 });
-  await runTurn(s.deps);
-  expect(s.seen).toHaveLength(3);
+test("queued work final text does not request another model round without a new event", async () => {
+  const s = setup([{ text: "Step verified.", toolCalls: [] }]);
+  s.ctx.workspace = join(s.journal, "..", "workspace");
+  const path = join(s.ctx.workspace, "..", "work.json");
+  saveWork(path, {task:"fix",status:"queued",next:"next step",outcome:"verified result",attempts:0,due:0});
+  expect(await runTurn(s.deps)).toBe("done");
+  expect(s.seen).toHaveLength(1);
+  expect(readEvents(s.journal).filter(e=>e.type==="assistant")).toHaveLength(1);
+  expect(readWork(path)?.status).toBe("queued");
+  expect(readWork(path)?.outcome).toBe("verified result");
 });
 
 test('completion cannot silently shrink an established outcome', async () => {

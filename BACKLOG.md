@@ -320,3 +320,9 @@ owner consent. Preserve lineage body; run full tests/typecheck before mutation.
 Owner supersedes pending consent with main c177a0423b3b: memory/Rayforce site
 section and acceptance owner-line notification. Reviewed full diff; merge newest
 species so one acceptance covers both updates. Preserve lineage; rerun all tests.
+
+Owner reported duplicate post-report replies on scheduled wakes (19:55/19:58).
+Confirmed queued-work branch repeats model requests twice after final prose without
+new stimulus. Removed branch and its nudge; work sensor still resumes agenda.
+Regression asserts one provider call/assistant reply and unchanged queued outcome.
+Memory experiments preserved in git stash pending isolated promotion of this fix.
