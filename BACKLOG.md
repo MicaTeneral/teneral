@@ -301,3 +301,11 @@ record episode.dismissed.v1 note, validate against preceding candidates during
 replay, suppress only that pair. Idempotent retries write no duplicate note.
 No source deletion, memory claim, extra provider call or wake. Test forged,
 external, future, reversed pairs, restart and repeat handling.
+
+## Resume pending species acceptance
+Repeated owner reports: /accept journals consent but idle body never wakes and
+needsTurn ignores it. Add conservative exact-commit pending rejection matcher,
+show matched consent as kernel evidence and owe a turn once; poll journal metadata
+to wake idle loop without synthetic stimuli. Interrupt cancels pending match;
+new mutation/lifecycle clears it; unrelated/replayed consent does not wake.
+No approval writing or automatic mutate: model reconciles candidate first.

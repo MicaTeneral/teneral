@@ -1,3 +1,4 @@
+import { acceptanceNotes } from "./acceptance";
 import { episodeCandidateContext } from './episode-candidates';
 import { memoryContext } from "./memory";
 import { isMutationRejection, type JournalEvent } from '../kernel/journal';
@@ -242,6 +243,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
     return wire;
   };
 
+  const accepted = acceptanceNotes(events);
   for (let i = 0; i < events.length; i++) {
     const e = events[i]!;
     if (e.type === 'stimulus') {
@@ -280,7 +282,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
     } else if (e.type === 'turn.interrupted') {
       out.push({ role: 'user', content: STOPPED });
     } else {
-      const note = kernelNote(e);
+      const note = kernelNote(e) ?? accepted.get(e.id) ?? null;
       if (note !== null) out.push({ role: 'user', content: note });
     }
   }
@@ -300,12 +302,13 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
 export function needsTurn(events: JournalEvent[]): boolean {
+  const accepted = acceptanceNotes(events);
   let afterReply = false;
   for (const e of events) {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;
     // The owner ended that turn. What was unanswered stays so until something else arrives.
     else if (e.type === 'turn.interrupted') afterReply = false;
-    else if (e.type === 'stimulus' || kernelNote(e) !== null) afterReply = true;
+    else if (e.type === 'stimulus' || kernelNote(e) !== null || accepted.has(e.id)) afterReply = true;
   }
   return afterReply;
 }

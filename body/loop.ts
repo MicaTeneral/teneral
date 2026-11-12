@@ -1,3 +1,4 @@
+import { acceptanceNotes } from "./acceptance";
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { join } from 'node:path';
 import { workFooter, workContext, readWork } from './work';
@@ -49,7 +50,9 @@ function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEF
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */
 function arrivedSince(journal: string, shown: number): boolean {
-  return readEvents(journal).slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || kernelNote(e) !== null);
+  const events = readEvents(journal);
+  const accepted = acceptanceNotes(events);
+  return events.slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || kernelNote(e) !== null || accepted.has(e.id));
 }
 
 /**

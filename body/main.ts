@@ -1,3 +1,4 @@
+import { watchJournal } from "./acceptance";
 import { research } from './research';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, resumeWork } from './work';
@@ -136,6 +137,7 @@ appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 const firstWords = birth(readEvents(journal), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
+stops.push(watchJournal(journal, () => wake?.()));
 
 // Failed turns in a row, and how many of the latest kind. What each kind leads to is in body/retry.ts.
 let failures = 0;
