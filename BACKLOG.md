@@ -309,3 +309,10 @@ show matched consent as kernel evidence and owe a turn once; poll journal metada
 to wake idle loop without synthetic stimuli. Interrupt cancels pending match;
 new mutation/lifecycle clears it; unrelated/replayed consent does not wake.
 No approval writing or automatic mutate: model reconciles candidate first.
+
+## Adopt species 55da840
+Owner requested merge of local main including project site and inert-path rule.
+Reviewed species kernel/tests and site/workflow changes. Inert species-only
+site/docs/CI/README/LICENSE updates bypass consent/handover, but protected-path
+identity/signature checks remain. This rule itself changes kernel and needs
+owner consent. Preserve lineage body; run full tests/typecheck before mutation.
