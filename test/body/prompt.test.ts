@@ -251,3 +251,45 @@ test('it says what a note is and the rule it exists for', () => {
   const note = { type: 'note', kind: 'k', data: 'not for the model', v: 1, id: 'n', ts: '2026-11-11T00:00:00.000Z', gen: 'g' } as const;
   expect(JSON.stringify(buildMessages([note], 'S'))).not.toContain('not for the model');
 });
+
+test('it says what the species is, the rule, and how a mutation from it is taken', () => {
+  expect(flat).toMatch(/a git ref named by `TENERAL_UPSTREAM`/);
+  expect(flat).toMatch(/`origin\/main` where the repository has a remote `origin`, else the branch your owner's checkout is on/);
+  expect(flat).toMatch(/outside those three paths every generation holds exactly what one commit of the species holds/);
+  expect(flat).toMatch(/the merge base of your commit and the species, only moves forward/);
+  const steps = ['`git fetch origin`', '`git merge origin/main`', '`git checkout origin/main -- <path>`', 'Run `bun run check` and `bun test`', 'Tell your owner what the species brings'].map((phrase) => flat.indexOf(phrase));
+  expect(steps.every((at) => at !== -1)).toBe(true);
+  expect([...steps].sort((a, b) => a - b)).toEqual(steps);
+  expect(flat).toMatch(/keeping your own behaviour/);
+  expect(flat).toMatch(/never edit such a file/);
+});
+
+test('it says how the owner consents, and that a refusal that waits for the owner is not counted against the commit', () => {
+  expect(flat).toContain('`TENERAL_SPECIES`');
+  for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
+  expect(flat).toMatch(/refused at gate `species` with the species commit named/);
+  expect(flat).toMatch(/`\/accept` in their terminal or `\.\/box accept`/);
+  expect(flat).toMatch(/you call `molt` again for the same commit/);
+  expect(flat).toMatch(/they are not counted against the commit/);
+});
+
+test('it says that the new kernel is started by the launcher, which puts a generation back when that kernel fails, and that the cage is the owner\'s', () => {
+  expect(flat).toMatch(/a small launcher, which no mutation changes, starts the kernel of your new generation/);
+  expect(flat).toMatch(/the launcher puts you back on the generation before/);
+  expect(flat).toMatch(/`box`, the `Dockerfile`, the launcher \(`kernel\/launcher\.ts`\) and `SIGNERS`, the list of keys whose signature makes a commit the species' word, are your owner's install/);
+  expect(flat).toMatch(/a species commit not signed by one of its keys is refused at gate `species`/);
+  expect(flat).toMatch(/your owner must update the install/);
+  expect(flat).toMatch(/Offering a change of your own back is a path of its own/);
+});
+
+test('it says how to offer a change to the species, as the kernel checks it, and that going public is the owner\'s decision', async () => {
+  const { SECTIONS, WAITING } = await import('../../kernel/offer');
+  expect(prompt).toContain('## Offering a change to the species');
+  for (const section of SECTIONS) expect(flat).toContain(`\`${section}\``);
+  for (const command of ['sign', 'check', 'publish']) expect(flat).toContain(`\`bun kernel/offer.ts ${command} offer/<name>\``);
+  expect(flat).toContain(`exits with ${WAITING} and sends nothing`);
+  expect(flat).toMatch(/Never write an approval yourself and never touch `TENERAL_PUBLISH`/);
+  expect(flat).toMatch(/Never anything from your soul, your journal or your inbox/);
+  expect(flat).toMatch(/It runs a stranger's code on your install, so your owner approves that commit first/);
+  expect(flat).toMatch(/not a vote/);
+});

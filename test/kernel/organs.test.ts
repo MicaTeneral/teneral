@@ -14,7 +14,7 @@ import {
   provideOrgans, treePath, type Organ,
 } from '../../kernel/organs';
 import { init, paths, supervise } from '../../kernel/supervisor';
-import { commitAll, makeRepo, writeFiles } from './helpers';
+import { commitAll, makeLineage, makeRepo, writeFiles } from './helpers';
 
 const OK: GateResult = { ok: true, gate: 'all', output: '' };
 const NO_CHECKS: never[] = [];
@@ -88,7 +88,7 @@ const pinOf = (name: string, hash: string, more: Record<string, unknown> = {}) =
 
 /** A repo whose candidate commit pins `pins`; the seed pins nothing. */
 function pinned(pins: unknown, files: Record<string, string> = {}) {
-  const { dir, seed } = makeRepo({ 'body/a.ts': 'export const a = 1;\n' });
+  const { dir, seed } = makeLineage({ 'body/a.ts': 'export const a = 1;\n' });
   writeFiles(dir, { [ORGANS_FILE]: typeof pins === 'string' ? pins : JSON.stringify(pins, null, 2), ...files });
   return { dir, seed, next: commitAll(dir, 'pin') };
 }
@@ -402,7 +402,8 @@ test('a check runs in its organ\'s directory with the checks\' bare environment,
 test('the candidate\'s checks and its smoke run are handed the candidate\'s organs, by name, in TENERAL_ORGANS', async () => {
   const bytes = tarGz(tool('from the candidate\'s pin'));
   const r = pinned({ ...pinOf('tool', sha(bytes), { dir: 'tool', check: ['bin/check'] }), ...pinOf('whole', sha(bytes)) }, {
-    'body/main.ts': "console.error('ENV=' + JSON.stringify(process.env));\nprocess.exit(1);\n",
+    // Only the one variable: the gate keeps the end of what a body printed, and a whole environment with long paths in it does not fit there.
+    'body/main.ts': "console.error('ENV=' + JSON.stringify({ TENERAL_ORGANS: process.env.TENERAL_ORGANS }));\nprocess.exit(1);\n",
   });
   stock(r.dir, bytes);
   // Fails on purpose, so what it saw comes back.

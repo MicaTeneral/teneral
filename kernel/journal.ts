@@ -36,10 +36,18 @@ export type EventBody =
   | { type: 'generation.ready'; commit: string }
   | { type: 'generation.promoted'; commit: string; previous: string }
   | { type: 'generation.rolledback'; commit: string; to: string; reason: string }
+  // The owner accepted a species commit, and every one before it, for this lineage to stand on
+  // (kernel/species.ts). `route` says how: `./box accept`, or `/accept` in a talk client. It came
+  // later, and it is a record: nothing is owed for it, and a reader from before it passes it by.
+  | { type: 'species.accepted'; commit: string; route: 'box' | 'talk' }
   // The body's own record, for whatever it keeps outside the journal and must be able to build again
   // from it. The kernel stores a note and never reads one; `noteProblem` says what it takes. It came
   // later: no older journal holds one, and a reader that does not know the type passes it over.
-  | { type: 'note'; kind: string; data: unknown };
+  | { type: 'note'; kind: string; data: unknown }
+  // What this individual sent out to the species (kernel/offer.ts): a commit offered as a pull request,
+  // and a witness report posted on somebody's. A record for the owner; neither wakes the body nor is a reply.
+  | { type: 'offer.published'; commit: string; branch: string; url: string }
+  | { type: 'offer.witnessed'; commit: string; pr: number; ok: boolean; url: string };
 
 /** What a note's `kind` may be: a short name the body chooses, such as `memory.fact` or `lesson.v2`. */
 const NOTE_KIND = /^[a-z0-9._-]{1,64}$/;
