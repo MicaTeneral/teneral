@@ -316,3 +316,7 @@ Reviewed species kernel/tests and site/workflow changes. Inert species-only
 site/docs/CI/README/LICENSE updates bypass consent/handover, but protected-path
 identity/signature checks remain. This rule itself changes kernel and needs
 owner consent. Preserve lineage body; run full tests/typecheck before mutation.
+
+Owner supersedes pending consent with main c177a0423b3b: memory/Rayforce site
+section and acceptance owner-line notification. Reviewed full diff; merge newest
+species so one acceptance covers both updates. Preserve lineage; rerun all tests.
