@@ -196,3 +196,9 @@ conflicts match expected prompt/tools/tool-list tests; keep lineage behaviors
 and only rename conflict words. Verify grep leaves historical references only,
 type check/full tests, protected paths identical to main, then ask species
 acceptance via existing tool. No other feature changes intended.
+
+## Species95b6ab3 client commands and acceptance
+Owner requested adoption of local main: slash command list/completion/highlight,
+unknown-command refusal and idempotent acceptance journaling. Inspected scope:
+README, kernel and kernel tests only; lineage body untouched. Success: clean
+merge, type check/full tests and owner-accepted species promotion. No extra edits.
