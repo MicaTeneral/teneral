@@ -236,3 +236,10 @@ Live probe correction: original registration record is absent from memoryRecords
 not simply outranked: preceding stimulus was agent:email. Preserve audience gate;
 first-mention ranking fixes paraphrase floods only for eligible evidence. Full
 primary-source outcome remains blocked on safe provenance classification design.
+
+## Explicit curation of excluded assistant sources
+Original registration58a8e89b follows email wake. Allow explicit terminal-created
+memory notes to cite historical assistant events (as recall already can), without
+automatically indexing those events or permitting external stimulus/tool sources.
+Preserve private output/write gates and claim labeling. Validate replay and live
+Russian-query retrieval of original source via deliberate curation.

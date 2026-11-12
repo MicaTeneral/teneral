@@ -27,6 +27,9 @@ export function memoryRecords(events: JournalEvent[]): RecordV1[] {
   let terminal = false;
   for (const e of events) {
     if (e.type === 'stimulus') terminal = e.source === 'terminal';
+    // Explicit private curation may cite assistant claims from any wake, as recall can.
+    // This adds provenance eligibility only, never automatic excerpt ingestion.
+    if (e.type === 'assistant') sources.add(e.id);
     if ((e.type === 'stimulus' && terminal) || (e.type === 'assistant' && terminal)) {
       sources.add(e.id);
       if (typeof e.text !== 'string') continue;

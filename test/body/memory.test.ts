@@ -56,3 +56,17 @@ test('earliest surviving entity evidence survives later paraphrase flood', () =>
   expect(after).not.toContain(`"id":"${original.id}:0"`);
   expect(after).toContain('replacement@example.invalid');
 });
+test('explicit private curation can cite excluded assistant claim without mining external turns', () => {
+  const external = ev({type:'stimulus',source:'agent:email',text:'email notification'});
+  const original = say('Joined Zulip using mica@example.invalid');
+  const base = [external,original,owner('почта Zulip')];
+  expect(memoryContext(base,6000)).not.toContain(original.id);
+  const curated = note('Historical assistant claim: joined Zulip using mica@example.invalid',[original.id]);
+  const events = [...base,curated,owner('Какая почта для Zulip?')];
+  expect(memoryContext(events,6000)).toContain(original.id);
+  expect(memoryContext(events,6000)).toContain('curated claim');
+  expect(memoryContext([...events,external],6000)).toBe('');
+  expect(memoryContext([...base,note('mail invalid@example.invalid',[external.id])],6000)).not.toContain('invalid@example.invalid');
+  expect(memoryRecords(JSON.parse(JSON.stringify(events)))).toEqual(memoryRecords(events));
+  expect(memoryContext([external,original,curated,owner('почта')],6000)).not.toContain('mica@example.invalid');
+});

@@ -98,3 +98,8 @@ This is source diversity, not primary-source verification. A real-journal probe
 showed original registration was excluded by audience classification (preceding
 email stimulus), not merely ranking. Do not loosen audience isolation to recover
 it: explicit recall remains available in owner turns for historical investigation.
+
+Explicit terminal-created notes may now cite earlier assistant events regardless
+of their wake audience, matching private recall's source scope. Such events are
+not automatically mined. External stimuli and tool payloads remain ineligible
+sources; curation is a private assistant claim, not verification or authority.
