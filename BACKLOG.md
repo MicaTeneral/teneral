@@ -224,3 +224,15 @@ budget (max6000) for relevant evidence, leaving current conversation priority;
 keep existing tool/image fitting. Tests: forgotten mailbox after context loss,
 corrections, rebuild, budgets, external wakes, invalid notes. Character budgets
 and lexical ranking are explicit limits, not semantic/perfect memory claims.
+
+## Preserve first entity mentions in memory selection
+Real-journal probe after4fcaff5 retrieved mailbox but omitted original source
+58a8e89b. Repeated recent paraphrases crowd bounded selection. Reserve at most
+two slots for earliest surviving relevant email/URL mentions, then rank ordinary
+records with source diversity. Earliest mention is historical evidence, not
+verified primary truth. Corrections apply before selection. Validate real probe,
+regression under paraphrase flood and full suite before promotion.
+Live probe correction: original registration record is absent from memoryRecords,
+not simply outranked: preceding stimulus was agent:email. Preserve audience gate;
+first-mention ranking fixes paraphrase floods only for eligible evidence. Full
+primary-source outcome remains blocked on safe provenance classification design.

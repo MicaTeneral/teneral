@@ -45,3 +45,14 @@ test('whole rendered records respect budgets and tags; deterministic rebuild', (
   for(const budget of [0,200,400,1000,6000]) expect(memoryContext(events,budget).length).toBeLessThanOrEqual(budget);
   expect(memoryContext(events,2000)).toBe(memoryContext(JSON.parse(JSON.stringify(events)),2000));
 });
+test('earliest surviving entity evidence survives later paraphrase flood', () => {
+  const original = say('Joined Zulip with mica@example.invalid');
+  const events = [owner('Set up email'), original,
+    ...Array.from({length:40},(_,i)=>say(`Почта для Zulip mica@example.invalid: поздний пересказ ${i}`)),owner('Какая почта для Zulip?')];
+  const text = memoryContext(events,6000);
+  expect(text).toContain(original.id); expect(text.length).toBeLessThanOrEqual(6000);
+  const corrected = note('Zulip email replacement@example.invalid',[original.id],`${original.id}:0`);
+  const after = memoryContext([...events,corrected,owner('почта Zulip')],6000);
+  expect(after).not.toContain(`"id":"${original.id}:0"`);
+  expect(after).toContain('replacement@example.invalid');
+});

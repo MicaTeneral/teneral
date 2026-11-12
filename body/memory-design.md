@@ -91,3 +91,10 @@ existing fit policy. Rebuild is linear over journal plus ranking cost, not a
 large-journal indexing solution. No secret filter guarantees arbitrary secret
 detection; tools/notes other than this schema are not mined. Existing transcript
 is not audience-sanitized by this feature.
+
+Selection now reserves up to two records for earliest surviving relevant email
+or URL mentions, then fills ranked records with at most two per source event.
+This is source diversity, not primary-source verification. A real-journal probe
+showed original registration was excluded by audience classification (preceding
+email stimulus), not merely ranking. Do not loosen audience isolation to recover
+it: explicit recall remains available in owner turns for historical investigation.
