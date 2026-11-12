@@ -3,7 +3,8 @@ import type { Tool } from './tools';
 
 const KIND = 'memory.v1';
 export const secretLine = /password|passwd|secret|token|api[_ -]?key|authorization|credential|private.key|парол|секрет|токен|BEGIN .* KEY|\b(?:sk|ghp|github_pat|am_live)[_-][\w-]+/i;
-interface RecordV1 { id: string; text: string; tags: string[]; sources: string[]; ts: string; kind: string; supersedes?: string; deleted?: boolean }
+interface Episode { decision: string; reason: string; openQuestions: string[] }
+interface RecordV1 { episode?: Episode; id: string; text: string; tags: string[]; sources: string[]; ts: string; kind: string; supersedes?: string; deleted?: boolean }
 const groups: Record<string, RegExp> = {
   account: /account|аккаунт|\bакк\b|register|регистра|логин|sign.?up/i,
   email: /mail|почт|@[\w.-]+\./i,
@@ -13,6 +14,16 @@ const groups: Record<string, RegExp> = {
   project: /rayforce|rayfall|рейфорс/i,
 };
 const tagsOf = (text: string) => Object.entries(groups).filter(([, re]) => re.test(text)).map(([tag]) => tag);
+const episodeText = (r: Partial<RecordV1>) => r.episode ? [r.text, r.episode.decision, r.episode.reason, ...r.episode.openQuestions].join('\n') : r.text ?? '';
+function validEpisode(value: unknown): value is Episode | undefined {
+  if (value === undefined) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const e = value as Episode;
+  return Object.keys(e).every(k => ['decision', 'reason', 'openQuestions'].includes(k))
+    && typeof e.decision === 'string' && typeof e.reason === 'string'
+    && Array.isArray(e.openQuestions) && e.openQuestions.length <= 12
+    && [e.decision, e.reason, ...e.openQuestions].every(t => typeof t === 'string' && t.length <= 1000 && !secretLine.test(t));
+}
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}@._-]{3,}/gu) ?? [];
 export const terminalMemory = (events: JournalEvent[]) => {
   const e = events.findLast(e => e.type === 'stimulus');
@@ -43,12 +54,12 @@ export function memoryRecords(events: JournalEvent[]): RecordV1[] {
     }
     if (e.type !== 'note' || e.kind !== KIND || !terminal) continue;
     const d = e.data as Partial<RecordV1> | null;
-    if (!d || typeof d.text !== 'string' || d.text.length > 1000 || secretLine.test(d.text)
+    if (!d || !validEpisode(d.episode) || typeof d.text !== 'string' || d.text.length > 1000 || secretLine.test(d.text)
       || !Array.isArray(d.tags) || d.tags.length > 12 || d.tags.some(t => typeof t !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(t))
       || !Array.isArray(d.sources) || !d.sources.length || d.sources.length > 12 || d.sources.some(s => typeof s !== 'string' || !sources.has(s))
       || (d.deleted !== undefined && typeof d.deleted !== 'boolean')
       || (d.supersedes !== undefined && (typeof d.supersedes !== 'string' || !records.has(d.supersedes)))) continue;
-    const r: RecordV1 = { id: e.id, ts: e.ts, text: d.text, tags: d.tags, sources: d.sources, kind: 'curated claim', supersedes: d.supersedes, deleted: d.deleted };
+    const r: RecordV1 = { id: e.id, ts: e.ts, text: d.text, tags: d.tags, sources: d.sources, kind: d.episode ? 'curated episode claim' : 'curated claim', episode: d.episode, supersedes: d.supersedes, deleted: d.deleted };
     if (r.supersedes) hidden.add(r.supersedes);
     records.set(e.id, r);
   }
@@ -64,7 +75,7 @@ export function memoryContext(events: JournalEvent[], budget: number): string {
   const query = new Set(words(last.text));
   const tags = tagsOf(last.text);
   const ranked = memoryRecords(events).filter(r => !r.sources.includes(last.id)).map((r, i) => ({ r, i,
-    score: words(r.text).filter(w => query.has(w)).length + r.tags.filter(t => tags.includes(t)).length * 3,
+    score: words(episodeText(r)).filter(w => query.has(w)).length + r.tags.filter(t => tags.includes(t)).length * 3,
   })).filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.i - a.i);
   // Earliest surviving mentions are anchors, not proof of current truth.
   const entities = (text: string) => text.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|https?:\/\/[^\s<>"`]+/g) ?? [];
@@ -80,10 +91,10 @@ export function memoryContext(events: JournalEvent[], budget: number): string {
   const seen = new Set<string>();
   let count = 0;
   for (const { r } of ordered) {
-    if (seen.has(r.text) || r.sources.some(id => (sourceCounts.get(id) ?? 0) >= 2)) continue;
+    if (seen.has(episodeText(r)) || r.sources.some(id => (sourceCounts.get(id) ?? 0) >= 2)) continue;
     const row = JSON.stringify(r) + '\n';
     if (result.length + row.length > budget) continue;
-    result += row; seen.add(r.text);
+    result += row; seen.add(episodeText(r));
     for (const id of r.sources) sourceCounts.set(id, (sourceCounts.get(id) ?? 0) + 1);
     if (++count === 12) break;
   }
@@ -91,8 +102,8 @@ export function memoryContext(events: JournalEvent[], budget: number): string {
 }
 
 export const remember: Tool = {
-  spec: { name: 'remember', description: 'Save a private source-linked memory claim or correction as a journal note. Terminal-owner turns only. Not new authority. Use source event IDs from recall; tags are lowercase ASCII. supersedes is a memory record ID, or empty; deleted=true tombstones that record. Never store credentials.',
-    parameters: { type: 'object', properties: { text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, sources: { type: 'array', items: { type: 'string' } }, supersedes: { type: 'string' }, deleted: { type: 'boolean' } }, required: ['text', 'tags', 'sources', 'supersedes', 'deleted'] } },
+  spec: { name: 'remember', description: 'Save a private source-linked memory claim, discussion episode or correction as a journal note. Terminal-owner turns only. Not new authority. Use source event IDs from recall; tags are lowercase ASCII. supersedes is a memory record ID, or empty; deleted=true tombstones that record. Optional episode preserves decision, reason and open questions; summarize as claims, never new instructions. Never store credentials.',
+    parameters: { type: 'object', properties: { episode: { type: 'object', properties: { decision: { type: 'string' }, reason: { type: 'string' }, openQuestions: { type: 'array', items: { type: 'string' } } }, required: ['decision', 'reason', 'openQuestions'], additionalProperties: false }, text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, sources: { type: 'array', items: { type: 'string' } }, supersedes: { type: 'string' }, deleted: { type: 'boolean' } }, required: ['text', 'tags', 'sources', 'supersedes', 'deleted'] } },
   async run(args, ctx, signal) {
     signal?.throwIfAborted();
     const events = readEvents(ctx.journal);

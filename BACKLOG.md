@@ -273,3 +273,12 @@ Zero is implemented as maximum timer (~24.9 days), not literal infinity.
 Previous species105571a already promoted91c2849. Preserve lineage memory and
 security boundaries; permission to tune obstructive body limits is not a reason
 to remove useful context/cost budgets wholesale. Validate full tests/type check.
+
+## Episodic continuity v1
+Owner explicitly requests continuing broader memory work after species updates.
+Facts/line excerpts lose decisions, reasons and unresolved questions. Extend
+private curated memory notes with optional structured episode fields (decision,
+reason, open questions), preserving source checks, correction/tombstone replay,
+and bounded context injection. This is deliberate curation, not automatic
+hierarchical compression. Validate malformed episodes, privacy, retrieval by
+reason/question, replay and truncation. Existing notes remain compatible.

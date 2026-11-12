@@ -118,3 +118,13 @@ is needed for those semantics. First bounded improvement adds `recall` source
 excerpts via `id:<event ID>` and exclusive `before` cursor for older results.
 The same private gate, source exclusions, line caps and secret filter apply.
 This is not full-span extraction: at most three eligible lines per event.
+
+## Deliberately curated episodes
+`remember` accepts an optional episode object with decision, reason and
+openQuestions. Journal notes remain backward-compatible memory.v1 records;
+no derived on-disk store is introduced. Selection searches these fields too,
+returns the whole bounded record with original sources, and labels it a curated
+episode claim. Corrections/tombstones and private audience gates apply unchanged.
+This is not automatic chunk summarization, as-of replay of model requests, or
+Connectome-style hierarchical folding. Episode maintenance currently requires
+explicit curation; no automatic detection that an open question was resolved.

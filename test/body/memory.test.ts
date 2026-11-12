@@ -70,3 +70,21 @@ test('explicit private curation can cite excluded assistant claim without mining
   expect(memoryRecords(JSON.parse(JSON.stringify(events)))).toEqual(memoryRecords(events));
   expect(memoryContext([external,original,curated,owner('почта')],6000)).not.toContain('mica@example.invalid');
 });
+test('episode preserves decision reasons and open questions after replay and truncation', () => {
+  const source = owner('Discuss storage');
+  const episode = ev({type:'note',kind:'memory.v1',data:{text:'Storage discussion',tags:['project'],sources:[source.id],episode:{decision:'Keep journal',reason:'Rebuildability matters',openQuestions:['How to measure retrieval quality?']}}});
+  const events = [source,episode,...Array.from({length:50},()=>owner('unrelated '.repeat(300))),owner('Rebuildability')];
+  const text = memoryContext(JSON.parse(JSON.stringify(events)),6000);
+  expect(text).toContain('Keep journal'); expect(text).toContain('How to measure retrieval quality?'); expect(text).toContain(source.id);
+  expect(buildMessages(events,'system',12000).map(m=>m.content).join('')).toContain('curated episode claim');
+  expect(memoryContext([...events,ev({type:'stimulus',source:'clock',text:'Rebuildability'})],6000)).toBe('');
+  const correction = note('storage revised',[source.id],episode.id);
+  expect(memoryRecords([...events,correction]).some(r=>r.id===episode.id)).toBe(false);
+});
+test('malformed or secret-bearing episodes cannot enter replay', () => {
+  const source = owner('storage');
+  for(const episode of [null,{}, {decision:'ok',reason:'ok',openQuestions:[42]}, {decision:'ok',reason:'password hidden',openQuestions:[]}, {decision:'ok',reason:'ok',openQuestions:[],extra:'injection'}]) {
+    const n = ev({type:'note',kind:'memory.v1',data:{text:'storage',tags:['project'],sources:[source.id],episode}});
+    expect(memoryRecords([source,n]).some(r=>r.id===n.id)).toBe(false);
+  }
+});
