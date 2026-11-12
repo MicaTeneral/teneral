@@ -265,3 +265,11 @@ Merged cleanly; lineage memory code untouched and prompt additions preserved.
 This removes the size blocker for memory work, not the need for bounded design
 or security gates. Validate full suite/type check before mutation; species
 acceptance may be required. No manual protected-path edits.
+
+## Adopt species56bd033: unlimited notes and owner gate deadlines
+Owner requests main merge; full diff reviewed. Removes note JSON size ceiling,
+adds owner CHECK_MINUTES/SMOKE_SECONDS settings with defaults preserved.
+Zero is implemented as maximum timer (~24.9 days), not literal infinity.
+Previous species105571a already promoted91c2849. Preserve lineage memory and
+security boundaries; permission to tune obstructive body limits is not a reason
+to remove useful context/cost budgets wholesale. Validate full tests/type check.
