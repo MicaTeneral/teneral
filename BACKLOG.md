@@ -135,3 +135,6 @@ Owner repeatedly observed that preference notes did not prevent stopping after a
 
 ## Rayforce memory prototype: temporal evidence before integration
 Owner approved tables+journal+Datalog memory design after Chronicle comparison. Current context.ts fits a recent suffix by character estimate; it has no provenance-aware old-memory selection. Build an isolated synthetic reference model and schema contract, not a live journal replacement. Measure correction propagation, historical visibility, audience isolation and whole-render token-cost cap using injected counter. Rayforce execution remains blocked by missing binary/compiler; TypeScript tests validate proposed semantics, not Rayforce persistence or query execution.
+
+## Minimal Bun Rayforce IPC binding
+Owner has no wrapper and authorizes building it. Official v3.0.2 Linux release downloaded to /tmp/mica-ray-bin; SHA256 matches published ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7 and --help runs. Start with TCP wire-v3 synchronous scalar evaluation, one connection per request, bounded bytes and timeout, no automatic retries and no auth/network exposure. Preserve i64 via bigint; reject unsupported payloads instead of guessing. Test with fake server and real local synthetic queries. Persistence and complex values remain explicit limitations.
