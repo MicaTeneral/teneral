@@ -1,6 +1,6 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { join } from 'node:path';
-import { workFooter, workContext } from './work';
+import { workFooter, workContext, readWork } from './work';
 import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './context';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
@@ -38,11 +38,15 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> {
   let shown = 0;
   // Set when the provider refused a request because of its images; holds for the rest of the turn.
   let blind = false;
+  let continuations = 0;
+  let continueReadyWork = false;
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
     const events = readEvents(d.journal);
     shown = events.length;
-    const system = d.system() + workContext(join(d.ctx.workspace, '..', 'work.json'));
+    const system = d.system() + workContext(join(d.ctx.workspace, '..', 'work.json'))
+      + (continueReadyWork ? '\nThe previous text-only reply left queued work. This is bounded continuation, not new authorization. Take the next safe concrete action now, or record a genuine blocker/completion against the saved outcome. Respect newer owner instructions; do not merely announce another step.' : '');
+    continueReadyWork = false;
     let halved = false;
     let reply: Reply;
     for (;;) {
@@ -73,6 +77,11 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> {
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
       if (arrivedSince(d.journal, shown)) continue;
+      if (continuations < 2 && readWork(join(d.ctx.workspace, '..', 'work.json'))?.status === 'queued') {
+        continuations++;
+        continueReadyWork = true;
+        continue;
+      }
       return 'done';
     }
 

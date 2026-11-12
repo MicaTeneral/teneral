@@ -355,3 +355,41 @@ test('an image refused and then a request too long: each is answered once, in tu
   expect(await runTurn(s.deps)).toBe('done');
   expect(seen).toHaveLength(3);
 });
+
+import { saveWork, readWork, work } from '../../body/work';
+
+for (const status of ['done', 'waiting'] as const) {
+  test(`queued work continues after prose and stops when ${status}`, async () => {
+    const s = setup([
+      { text: 'Found the cause; next I will act.', toolCalls: [] },
+      { text: '', toolCalls: [{ id: 'save', name: 'work', args: { task: 'fix', status, next: 'checked', evidence: 'test evidence' } }] },
+      { text: 'Result recorded.', toolCalls: [] },
+    ], [work]);
+    s.ctx.workspace = join(s.journal, '..', 'workspace');
+    const path = join(s.ctx.workspace, '..', 'work.json');
+    saveWork(path, { task: 'fix', status: 'queued', next: 'act', outcome: 'verified result', attempts: 0, due: 0 });
+    await runTurn(s.deps);
+    expect(s.seen).toHaveLength(3);
+    expect(JSON.stringify(s.seen[1])).toContain('bounded continuation');
+    expect(readWork(path)?.status).toBe(status);
+    expect(readWork(path)?.outcome).toBe('verified result');
+  });
+}
+
+test('repeated prose with queued work has only two continuation nudges', async () => {
+  const s = setup(Array.from({ length: 3 }, () => ({ text: 'Later', toolCalls: [] })));
+  s.ctx.workspace = join(s.journal, '..', 'workspace');
+  saveWork(join(s.ctx.workspace, '..', 'work.json'), { task: 'fix', status: 'queued', next: 'act', attempts: 0, due: 0 });
+  await runTurn(s.deps);
+  expect(s.seen).toHaveLength(3);
+});
+
+test('completion cannot silently shrink an established outcome', async () => {
+  const s = setup([]);
+  s.ctx.workspace = join(s.journal, '..', 'workspace');
+  const path = join(s.ctx.workspace, '..', 'work.json');
+  saveWork(path, { task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation', attempts: 0, due: 0 });
+  await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
+  expect(readWork(path)?.status).toBe('queued');
+  expect(readWork(path)?.outcome).toBe('tested implementation');
+});

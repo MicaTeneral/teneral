@@ -36,6 +36,9 @@ export const work: Tool = {
       || !a.task.trim() || !a.next.trim() || a.task.length + a.next.length > 4000) throw new Error('Provide status, task and concrete next step/blocker (up to 4000 characters)');
     const path = join(ctx.workspace, '..', 'work.json');
     const old = readAgenda(path).items.find(w => w.task === a.task);
+    if (old?.outcome && a.outcome !== undefined && a.outcome !== old.outcome) {
+      throw new Error('Established outcome cannot be replaced. Preserve it in progress/completion updates; an owner-authorized scope change needs an explicitly separate commitment.');
+    }
     const checkpoints: Partial<Work> = {};
     for (const key of ['outcome', 'recovery', 'evidence'] as const) {
       const value = a[key] ?? (old?.task === a.task ? old[key] : undefined);
