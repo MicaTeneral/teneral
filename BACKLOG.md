@@ -282,3 +282,14 @@ reason, open questions), preserving source checks, correction/tombstone replay,
 and bounded context injection. This is deliberate curation, not automatic
 hierarchical compression. Validate malformed episodes, privacy, retrieval by
 reason/question, replay and truncation. Existing notes remain compatible.
+
+## Safe episode candidates
+Implement conservative adjacent terminal exchange candidates, not automated
+summaries. Only a terminal stimulus followed by a plain final assistant reply
+without intervening stimuli/tools/lifecycle/interruption is eligible; a fresh
+terminal must follow a settled final reply or journal start. Mixed arrival
+sequences are skipped. Expose one bounded candidate as untrusted historical
+evidence only on terminal requests, for explicit curation via remember.
+Exclude source overlap already curated as an episode (including deleted and
+superseded episodes), do not silently re-offer forgotten material. Test budget,
+privacy, interruptions, replay and source coverage. No provider calls or timers.

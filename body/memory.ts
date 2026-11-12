@@ -31,7 +31,7 @@ export const terminalMemory = (events: JournalEvent[]) => {
 };
 
 /** Rebuild from journal only. Excerpts are claims, not distilled truths. No tool payloads. */
-export function memoryRecords(events: JournalEvent[]): RecordV1[] {
+export function memoryRecords(events: JournalEvent[], includeHidden = false): RecordV1[] {
   const records = new Map<string, RecordV1>();
   const sources = new Set<string>();
   const hidden = new Set<string>();
@@ -64,7 +64,7 @@ export function memoryRecords(events: JournalEvent[]): RecordV1[] {
     records.set(e.id, r);
   }
   // Suppress exact source excerpts as well when a curated record corrects them.
-  return [...records.values()].filter(r => !hidden.has(r.id) && !r.deleted);
+  return [...records.values()].filter(r => includeHidden || (!hidden.has(r.id) && !r.deleted));
 }
 
 /** Private automatic retrieval. Whole records fit; lexical score, tags and recency break ties. */

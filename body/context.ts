@@ -1,3 +1,4 @@
+import { episodeCandidateContext } from './episode-candidates';
 import { memoryContext } from "./memory";
 import { isMutationRejection, type JournalEvent } from '../kernel/journal';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from './images';
@@ -291,8 +292,9 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
   const memory = memoryContext(events, Math.max(0, Math.min(6000, Math.floor(room * 0.1))));
-  const fitted = fit(out, room - memory.length);
-  if (memory && fitted[0]?.role === 'user') fitted[0] = { ...fitted[0], content: memory + fitted[0].content };
+  const candidate = episodeCandidateContext(events, Math.max(0, Math.min(2400, Math.floor(room * 0.04))));
+  const fitted = fit(out, room - memory.length - candidate.length);
+  if ((memory || candidate) && fitted[0]?.role === 'user') fitted[0] = { ...fitted[0], content: memory + candidate + fitted[0].content };
   return [{ role: 'system', content: prompt }, ...fitted];
 }
 

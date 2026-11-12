@@ -128,3 +128,44 @@ episode claim. Corrections/tombstones and private audience gates apply unchanged
 This is not automatic chunk summarization, as-of replay of model requests, or
 Connectome-style hierarchical folding. Episode maintenance currently requires
 explicit curation; no automatic detection that an open question was resolved.
+
+## Automatic formation: boundary review and proposed first mechanism
+Reviewed loop.ts and main.ts after explicit episodes landed (f79b2ce).
+Do NOT attach summarization blindly after assistant append: arrivals can occur
+while provider is answering. The last stimulus may then be external even though
+the reply was generated from terminal context (or the reverse). Current
+memoryRecords uses latest stimulus, so it is insufficient attribution for an
+automatic summarizer. onText is not a completion/ownership signal either.
+Also final replies can trigger agenda continuations; interrupted and mutation
+turns must not initiate another request. A separate provider call after final
+reply complicates usage reporting and crash retries; notes do not owe a turn.
+
+Proposed incremental mechanism (not implemented):
+1. Reconstruct eligible terminal-only completed spans, excluding any span with
+   intervening external stimulus, turn.interrupted, kernel lifecycle boundary,
+   pending tool calls or synthetic fallback. Exclude tool payloads entirely.
+   Prefer false negatives to assigning an external reply to an owner episode.
+2. Snapshot exact event IDs before requesting a summary. Chunk at completed
+   exchanges, with an explicit character budget and minimum batch threshold;
+   never cut mid-message. Source IDs + format version form deterministic key.
+3. Persist candidate coverage as a versioned note, including source IDs and
+   audience, not a fresh owner instruction. Deduplicate by source-set key and
+   explicit episode coverage on journal replay. A pending candidate is evidence
+   of a plan, not evidence that a provider call succeeded.
+4. Initially expose at most one candidate in the next TERMINAL request for
+   deliberate remember curation rather than launching a hidden post-reply call.
+   No candidate injected on clock/external wakes; no new scheduling stimulus.
+   This avoids unreported provider calls but does not guarantee curation.
+5. Reject output whose sources differ from snapshot or whose fields fail
+   episode validation. Do not mechanically label heuristic extraction as a
+   decision/reason. Record dismissal or completion so irrelevant spans are not
+   offered forever. Interrupt leaves candidate pending, not committed summary.
+6. Test races (external arrival between request/reply), restart deduplication,
+   source edits/invalid IDs, explicit curation overlap, corrections/tombstones,
+   mixed audiences, multiple final replies, mutation and truncation.
+
+Next implementation target is pure span selection + replayable candidates,
+then request integration. Automatic formation is NOT solved by the existing
+explicit episode tool. Fully autonomous compression needs a separately bounded
+provider lifecycle with usage accounting and interruption recovery; defer that
+until candidate selection passes attribution tests.
