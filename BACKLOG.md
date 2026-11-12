@@ -132,3 +132,6 @@ Outstanding state:
 
 ## Body-level follow-through after premature finals
 Owner repeatedly observed that preference notes did not prevent stopping after an intermediate finding. loop.ts returns on any text-only reply and work.ts silently replaces outcomes. Add at most two immediate continuation nudges per turn for queued work, keeping existing round/scheduler bounds and waiting/done stopping behavior. Reject replacement of established outcomes rather than silently shrinking success criteria. Verify with scripted providers, completion/blocker tests and unchanged-outcome persistence. This does not prove semantic completion or grant new authority.
+
+## Rayforce memory prototype: temporal evidence before integration
+Owner approved tables+journal+Datalog memory design after Chronicle comparison. Current context.ts fits a recent suffix by character estimate; it has no provenance-aware old-memory selection. Build an isolated synthetic reference model and schema contract, not a live journal replacement. Measure correction propagation, historical visibility, audience isolation and whole-render token-cost cap using injected counter. Rayforce execution remains blocked by missing binary/compiler; TypeScript tests validate proposed semantics, not Rayforce persistence or query execution.

@@ -1,0 +1,71 @@
+# Memory prototype contract (not a deployed backend)
+
+## Storage responsibilities
+- events: parted by ingestion day, columns store_id, event_id, seq, occurred_at,
+  ingested_at, audience, source_kind, source_ref, payload. seq is monotonically
+  assigned by a single writer; event_id is stable across retries. Original time
+  does not determine append partition. Clock regression must not move the active
+  partition backward. Reject mismatched duplicate IDs; identical retries are no-ops.
+- facts: immutable versions with fact_id, seq, audience, text and source links.
+  seq represents when this system learned the version, not when it became true
+  in the outside world. No bitemporal claim yet.
+- edges: from_id, relation, to_id. Relations: supported_by (event), depends_on
+  (fact), supersedes (fact). Edges are part of the fact's logical ingestion batch.
+- context receipts: query/as-of sequence, audience, selected fact IDs, rendered
+  cost and selector version. They explain recall; they are not new authority.
+- Large attachments remain external content-addressed files; table rows contain
+  hashes and metadata. This prototype does not implement a blob store.
+
+Use ordinary tables for payloads and typed columns, Datalog for dependency and
+provenance relations. Do not intern full message bodies as symbols. External IDs
+need a stable mapping if represented as integer Datalog entities. Exact mapping
+and Rayforce serialization must be validated before integration.
+
+## Temporal semantics
+A correction supersedes a prior version without deleting it. At sequence N,
+only records learned through N participate. Superseded facts and every fact
+transitively dependent on them are excluded from current recall. A later
+correction of a correction does not resurrect the original: reassert it as a new
+version. Dependencies must reference earlier same-audience facts (acyclic).
+Supersession is authoritative input to this reference model, not something a
+retrieved web page may declare. The ingestion boundary must authenticate the
+source and resolve conflicts before adding that edge. Evidence may disagree;
+keep competing claims rather than fabricate a correction.
+
+Datalog implementation outline (logical, not claimed executable RFL): derive
+invalid(F) from a visible supersedes edge, then recursively derive invalid(D)
+from depends_on(D,F) and invalid(F). Retrieve visible facts not invalid. Scope
+all base relations by store, audience and as-of sequence BEFORE recursion.
+
+## Ingestion/recovery boundary
+Validate IDs, provenance, audience and backward references before publication.
+Readers see only a committed watermark containing complete event/fact/edge
+batches. A sidecar importer would checkpoint the kernel journal offset only after
+Rayforce persistence acknowledgment. A checkpoint is not proof of durability:
+test crashes around append, partition persistence, snapshot and checkpoint.
+No private journal ingestion is authorized by these synthetic artifacts. The
+kernel journal remains authoritative for runtime events and is not replaced.
+Rayforce idempotency, atomic batch publication and durable watermark mechanism
+are unresolved implementation contracts, not verified engine guarantees.
+
+## Selection and current runtime boundary
+body/context.ts currently retains a recent suffix using a character estimate.
+Do not break tool-call/result pairing, image handling or kernel notifications.
+Future integration reserves space for system/tools/current turn first, then
+passes a memory budget to the selector. Memories are evidence, never system
+instructions. Fetch exact source events on demand with the same audience check.
+
+memory-prototype.ts is an isolated executable semantic reference: whole rendered
+records (including provenance/header) fit an injected token counter. Selection
+is newest-first, not semantic relevance; skip records that do not fit. The tests
+use a synthetic character counter to test accounting, NOT a real token claim.
+Production needs a model-appropriate tokenizer and total-request accounting.
+No tokenizer, relevance model, compression pipeline or Rayforce adapter is wired.
+
+## Acceptance and stopping point
+Run `bun test test/body/memory-prototype.test.ts`: historical visibility,
+correction invalidation, audience isolation, exact render-cost cap, invalid
+references and duplicate IDs. These are executable TypeScript semantics only.
+Next Rayforce experiment must reproduce them and validate restart/rollover
+idempotency with synthetic rows. Missing Rayforce binary/compiler blocks that
+experiment, not this reference design. Full branching is deferred.
