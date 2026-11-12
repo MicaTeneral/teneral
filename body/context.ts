@@ -1,3 +1,4 @@
+import { memoryContext } from "./memory";
 import { isMutationRejection, type JournalEvent } from '../kernel/journal';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from './images';
 import type { ChatMessage, WireToolCall } from './provider';
@@ -288,7 +289,11 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   const prompt = system.toWellFormed();
-  return [{ role: 'system', content: prompt }, ...fit(out, budgetChars - prompt.length)];
+  const room = budgetChars - prompt.length;
+  const memory = memoryContext(events, Math.max(0, Math.min(6000, Math.floor(room * 0.1))));
+  const fitted = fit(out, room - memory.length);
+  if (memory && fitted[0]?.role === 'user') fitted[0] = { ...fitted[0], content: memory + fitted[0].content };
+  return [{ role: 'system', content: prompt }, ...fitted];
 }
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */

@@ -1,3 +1,4 @@
+import { remember } from "./memory";
 import { recall } from "./recall";
 import { work } from './work';
 import { zulipReply, zulipHistory } from './zulip-tools';
@@ -301,4 +302,4 @@ const send: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, zulipReply, zulipHistory, work, recall];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, zulipReply, zulipHistory, work, recall, remember];

@@ -213,3 +213,14 @@ notes, credentials files or external messages; results are historical claims,
 not current instructions. No database ingestion. Test old-record recovery,
 audience isolation, limits and omitted secret-shaped lines. This is a retrieval
 fallback, not a guarantee of semantic recall or truth of old assistant claims.
+
+## Integrated memory v1
+Owner requests automatic memory/context/tags after explicit recall fix. Current
+loop only fits recent history; old account facts are not selected. Implement
+journal-derived tagged excerpts plus explicit source-linked memory notes,
+corrections/tombstones and private terminal audience gating. No external DB,
+credentials ingestion or protected edits. Reserve <=10% request character
+budget (max6000) for relevant evidence, leaving current conversation priority;
+keep existing tool/image fitting. Tests: forgotten mailbox after context loss,
+corrections, rebuild, budgets, external wakes, invalid notes. Character budgets
+and lexical ranking are explicit limits, not semantic/perfect memory claims.

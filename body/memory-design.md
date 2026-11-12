@@ -69,3 +69,25 @@ references and duplicate IDs. These are executable TypeScript semantics only.
 Next Rayforce experiment must reproduce them and validate restart/rollover
 idempotency with synthetic rows. Missing Rayforce binary/compiler blocks that
 experiment, not this reference design. Full branching is deferred.
+
+## Deployed first integration: memory.v1
+`memory.ts` now rebuilds records directly from the journal each request (no
+separate store/cache, no Rayforce ingestion). It derives bounded, tagged line
+excerpts from terminal-owner turns and assistant replies in those turns. A
+`remember` tool writes validated source-linked `memory.v1` notes. Corrections
+and tombstones hide named records permanently across replay; unrelated or
+paraphrased conflicting claims remain visible. No automatic contradiction
+resolution or dependency inference is claimed. The older semantic prototype
+above remains separate, not the deployed backend.
+
+`context.ts` reserves at most 10% of available character space, capped at 6000,
+for whole JSON records including source IDs, time, kind and tags, prepended as
+evidence to the fitted user context (not system instructions). Ranking is
+lexical overlap plus small bilingual topic groups, newest breaks ties. Up to12
+records, deduplicated by exact text. No block for nonterminal wakes. Existing
+pairing, image and kernel-event logic remains. Budget is characters, not tokens;
+existing provider retry can halve it. Current request gets at least90% before
+existing fit policy. Rebuild is linear over journal plus ranking cost, not a
+large-journal indexing solution. No secret filter guarantees arbitrary secret
+detection; tools/notes other than this schema are not mined. Existing transcript
+is not audience-sanitized by this feature.
