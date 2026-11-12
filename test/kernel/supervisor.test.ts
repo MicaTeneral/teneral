@@ -5,7 +5,7 @@ import {
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../kernel/journal';
 import {
-  CRASH_LIMIT, REJECTION_LIMIT, init, paths, supervise, type Options,
+  CRASH_LIMIT, REJECTION_LIMIT, excused, init, paths, supervise, type Options,
 } from '../../kernel/supervisor';
 import { git, runGates, type GateResult } from '../../kernel/gates';
 import { commitAll, makeRepo, writeFiles } from './helpers';
@@ -802,6 +802,87 @@ test('probation is remembered across a restart of the supervisor: a promoted gen
   expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
 });
 
+// --- probation, and a turn the owner interrupted ---
+
+test('a promoted generation whose owner interrupted its first turn is not taken for silent, however long it then waits; it stays on probation', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  // Ready, stopped by the owner before it had replied, then at rest for several times the probation.
+  writeFiles(p.candidate, { 'body/main.ts': READY_THEN(`setTimeout(() => appendEvent(journal, gen, { type: 'turn.interrupted' }), 100);
+setTimeout(() => process.exit(0), 1500);`) });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 300, killGraceMs: 200 })).toBe('stopped');
+  const events = readEvents(p.journal);
+  expect(events.map((e) => e.type)).not.toContain('generation.rolledback');
+  expect(events.filter((e) => e.type === 'generation.started' && e.gen === next)).toHaveLength(1);
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+
+  // The supervisor starts again: the generation has still not replied, and is still at rest because its owner stopped it.
+  writeFiles(p.live, { 'body/main.ts': READY_THEN('setTimeout(() => process.exit(0), 1000);') });
+  const again = commitAll(p.live, 'the same, for a second run');
+  writeFileSync(p.state, JSON.stringify({ current: again, previous: seed }));
+  appendEvent(p.journal, again, { type: 'generation.promoted', commit: again, previous: seed });
+  appendEvent(p.journal, again, { type: 'turn.interrupted' });
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 300, killGraceMs: 200 })).toBe('stopped');
+  expect(readEvents(p.journal).map((e) => e.type)).not.toContain('generation.rolledback');
+});
+
+test('an interruption is not a reply: a promoted generation that is spoken to after it and stays silent is rolled back, with its full time first', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': READY_THEN(`setTimeout(() => appendEvent(journal, gen, { type: 'turn.interrupted' }), 100);
+setTimeout(() => appendEvent(journal, gen, { type: 'stimulus', source: 'terminal', text: 'and now?' }), 600);
+setInterval(() => {}, 1000);`) });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 400, killGraceMs: 200 })).toBe('stopped');
+  const rollbacks = readEvents(p.journal).flatMap((e) => (e.type === 'generation.rolledback' ? [e] : []));
+  expect(rollbacks).toHaveLength(1);
+  expect(rollbacks[0]).toMatchObject({ commit: next, to: seed });
+  expect(rollbacks[0]!.reason).toContain('started but did not reply');
+  // Not at the end of the measure in which it was spoken to again, a moment after that, but at the end of the next: it had its whole time.
+  const spoken = readEvents(p.journal).find((e) => e.type === 'stimulus' && e.gen === next)!;
+  expect(Date.parse(rollbacks[0]!.ts) - Date.parse(spoken.ts)).toBeGreaterThanOrEqual(400);
+});
+
+test('excused: the owner stopped this generation lately, or nothing was said to it since; never for another generation, a reply or a note', () => {
+  let n = 0;
+  const ev = (type: string, gen = 'new', more: object = {}) => ({ type, gen, v: 1, id: `e${n += 1}`, ts: '2027-01-01T00:00:00.000Z', ...more }) as ReturnType<typeof readEvents>[number];
+  const promoted = ev('generation.promoted', 'new', { commit: 'new', previous: 'old' });
+  const stopped = ev('turn.interrupted');
+  const said = ev('stimulus', 'new', { source: 'terminal', text: 'hi' });
+  expect(excused('new', [promoted], [])).toBe(false);
+  expect(excused('new', [promoted, ev('generation.started'), ev('generation.ready')], [])).toBe(false);
+  // Stopped, and nothing since: also when that was long ago, before this run began.
+  expect(excused('new', [promoted, stopped, ev('generation.started'), ev('generation.ready'), ev('tool.result')], [])).toBe(true);
+  // Spoken to since: a reply is owed again. Excused once more only if that was within the time just measured.
+  expect(excused('new', [promoted, stopped, said], [])).toBe(false);
+  expect(excused('new', [promoted, stopped, said], [said])).toBe(true);
+  expect(excused('new', [promoted, stopped, said], [stopped, said])).toBe(true);
+  expect(excused('new', [promoted, stopped, said, ev('stimulus', 'new', { source: 'clock', text: 'tick' })], [ev('stimulus', 'new', { source: 'clock', text: 'tick' })])).toBe(false);
+  expect(excused('new', [promoted, stopped, ev('molt.rejected')], [])).toBe(false);
+  // Another generation's interruption says nothing of this one.
+  expect(excused('new', [ev('turn.interrupted', 'old'), promoted], [ev('turn.interrupted', 'old')])).toBe(false);
+  expect(excused('new', [], [])).toBe(false);
+});
+
+test('an interrupted turn is no crash: a generation that is interrupted and later exits abnormally is counted from one, as any other', async () => {
+  const r = await seedOnly(`${HEAD}
+const mine = readEvents(journal).filter((e) => e.type === 'generation.ready' && e.gen === gen).length;
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'turn.interrupted' });
+process.exit(mine < 1 ? 1 : 0);
+`);
+  expect(r.outcome).toBe('stopped');
+  expect(started(r.events)).toBe(2);
+  expect(r.events.map((e) => e.type)).not.toContain('generation.rolledback');
+});
+
 // --- a rollback says why ---
 
 test('a rollback note and the log carry the end of what the failed generation wrote to stderr, which is still shown live', async () => {
@@ -912,4 +993,51 @@ test('an install moved to another directory starts again there', async () => {
     expect(realpathSync(join(tree, 'node_modules'))).toBe(realpathSync(join(moved, 'node_modules')));
   }
   expect(git(moved, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '))).toHaveLength(3);
+});
+
+// --- notes are the body's own; the kernel decides nothing by them ---
+
+test('a note is not a reply: a promoted generation that only journals notes is still rolled back as silent', async () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': V1 });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': READY_THEN(`
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: { n: 0 } });
+setInterval(() => appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: { at: Date.now() } }), 50);
+`) });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+
+  expect(await supervise({ root: dir, ...QUIET, probationMs: 400, killGraceMs: 200 })).toBe('stopped');
+  const events = readEvents(p.journal);
+  expect(events.some((e) => e.type === 'note' && e.gen === next)).toBe(true);
+  const rollbacks = events.flatMap((e) => (e.type === 'generation.rolledback' ? [e] : []));
+  expect(rollbacks).toHaveLength(1);
+  expect(rollbacks[0]!.reason).toContain('started but did not reply');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: seed, previous: null });
+});
+
+test('notes between crashes do not count as replies, and notes after a molt request do not hide it', async () => {
+  // Ready, a note, a crash, every time: given up on at the crash limit exactly as without the notes.
+  const crashing = await seedOnly(`${HEAD}
+appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 'still here' });
+process.exit(1);
+`);
+  expect(crashing.outcome).toBe('halted');
+  expect(started(crashing.events)).toBe(CRASH_LIMIT);
+
+  // The request is found behind the notes journaled after it, and the generation it asks for is promoted.
+  const { dir, seed } = makeRepo({ 'body/main.ts': `${V1.replace("process.exit(75);", `
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 1 });
+appendEvent(journal, gen, { type: 'note', kind: 'memory.fact', data: 2 });
+process.exit(75);`)}` });
+  init(dir);
+  const p = paths(dir);
+  writeFiles(p.candidate, { 'body/main.ts': `${V1}\n// v2` });
+  const next = commitAll(p.candidate, 'v2');
+  process.env.TEST_NEXT = next;
+  expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
+  expect(JSON.parse(readFileSync(p.state, 'utf8'))).toEqual({ current: next, previous: seed });
+  expect(readEvents(p.journal).filter((e) => e.type === 'note')).toHaveLength(2);
 });

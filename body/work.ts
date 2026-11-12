@@ -73,3 +73,16 @@ export function resumeWork(path: string, busy: () => boolean, now = Date.now): S
     return () => clearInterval(timer);
   };
 }
+
+/**
+ * Whether the owner's interrupt still stands: a turn was interrupted and nothing has arrived since.
+ * Queued work must not wake the body by itself then; the next stimulus, from anyone, lifts it.
+ */
+export function heldByInterrupt(events: { type: string }[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const type = events[i]!.type;
+    if (type === 'turn.interrupted') return true;
+    if (type === 'stimulus') return false;
+  }
+  return false;
+}

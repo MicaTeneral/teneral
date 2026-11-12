@@ -128,6 +128,23 @@ test('events of a shape nobody foresaw change nothing and throw nothing', () => 
   expect(typeof stateWord(s, UP)).toBe('string');
 });
 
+test('a note the body keeps for itself is no entry on the screen and leaves where the agent stands as it was', () => {
+  const note = (at = 0) => ev({ type: 'note', kind: 'memory.fact', data: { text: 'not for the screen', n: 1 } }, at);
+  const plain = built([started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300), result('c1', true, 'ok', 400), reply('Done.', 500)], true);
+  const noted = built([note(), started(), note(1), ready(), said('go', 100), note(150), calling(200), intent('c1', 'bash', {}, 300), note(350),
+    result('c1', true, 'ok', 400), reply('Done.', 500), note(600)], true);
+  expect(kinds(noted.t)).toEqual(kinds(plain.t));
+  expect(noted.s).toEqual(plain.s);
+  expect(stateWord(noted.s, UP)).toBe('resting');
+  // In the middle of a turn the word stays what it was.
+  expect(word(started(), ready(), said('go', 100), note(150))).toBe(word(started(), ready(), said('go', 100)));
+  expect(word(started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300), note(350)))
+    .toBe(word(started(), ready(), said('go', 100), calling(200), intent('c1', 'bash', {}, 300)));
+  // One of a shape the kernel would not have written throws nothing either.
+  const odd = { ...note(), kind: {}, data: undefined } as unknown as JournalEvent;
+  expect(() => built([said('x'), odd], true)).not.toThrow();
+});
+
 // --- the transcript ---
 
 test('a tool call is one entry, completed by its result: outcome, duration, and the output kept for showing', () => {
@@ -351,4 +368,29 @@ test('the owner\'s line names its images apart from its words; the same lines fr
   expect(mine.entries[0]).toMatchObject({ kind: 'owner', text: 'here', images: [one] });
   expect(unfinished(mine.entries[0]!)).toBe(false);
   expect(mine.waiting).toBe(false);
+});
+
+// --- a turn the owner interrupted ---
+
+const stopped = (at = 0) => ev({ type: 'turn.interrupted' }, at);
+
+test('interrupted: the turn is over and no tool is running, whatever was under way; the next thing said starts another', () => {
+  expect(word(birth(), reply('Hello.'), said('go', 10), stopped(20))).toBe('resting');
+  expect(word(birth(), reply('Hello.'), said('go', 10), calling(20), intent('c', 'bash', {}, 30), stopped(40))).toBe('resting');
+  expect(word(birth(), reply('Shall I?'), said('go', 10), stopped(20))).toBe('resting');
+  expect(after(birth(), reply('Hello.'), said('go', 10), stopped(20)).since).toBeNull();
+  expect(word(birth(), reply('Hello.'), said('go', 10), stopped(20), said('and now', 30))).toBe('thinking');
+  // Stopped before it ever spoke: it has still said nothing, and nothing is owed.
+  expect(after(birth(), stopped(20))).toMatchObject({ spoke: false, turn: { busy: false } });
+});
+
+test('an interruption is one quiet entry where it happened; the call it cut carries the result the body gave it', () => {
+  const { t } = built([
+    said('go'), calling(10), intent('c', 'bash', { command: 'sleep 300' }, 20),
+    result('c', false, '[interrupted] Your owner interrupted this turn while this tool was running.', 4020), stopped(4030),
+  ]);
+  expect(kinds(t)).toEqual(['owner', 'tool', 'quiet']);
+  expect(of(t, 'tool')[0]).toMatchObject({ status: 'failed', ms: 4000 });
+  expect(of(t, 'quiet')[0]).toMatchObject({ label: 'interrupted by you', text: '' });
+  expect(t.entries.some(unfinished)).toBe(false);
 });

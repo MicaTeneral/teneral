@@ -120,3 +120,13 @@ test('malformed checkpoints are rejected without overwriting valid saved work', 
  }
  } finally {rmSync(dir,{recursive:true});}
 });
+
+test('an owner interrupt holds queued work until something arrives', async () => {
+ const { heldByInterrupt } = await import('../../body/work');
+ const t = (type: string) => ({ type });
+ expect(heldByInterrupt([])).toBe(false);
+ expect(heldByInterrupt([t('stimulus'), t('assistant')])).toBe(false);
+ expect(heldByInterrupt([t('stimulus'), t('turn.interrupted')])).toBe(true);
+ expect(heldByInterrupt([t('stimulus'), t('turn.interrupted'), t('note')])).toBe(true);
+ expect(heldByInterrupt([t('turn.interrupted'), t('stimulus')])).toBe(false);
+});

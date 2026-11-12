@@ -4,11 +4,12 @@ import {
 import { dirname, join } from 'node:path';
 import { identity } from './envelope';
 import {
-  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, runGates, sh, type GateResult,
+  BODY_CMD, DEFAULT_CHECKS, bodyEnv, dropLeftoverGateTrees, git, linkModules, organsAt, runGates, sh, type GateResult,
 } from './gates';
 import {
   appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent,
 } from './journal';
+import { parseOrgans, provideOrgans } from './organs';
 import { authDir } from './providers';
 
 /** The agent exits with this code to ask for a molt. */
@@ -225,6 +226,20 @@ function onProbation(state: State, events: JournalEvent[]): boolean {
     if (e.type === 'generation.promoted' && e.commit === state.current) return true;
   }
   return true;
+}
+
+/**
+ * Whether a generation on probation that has not replied is excused for now, because its owner
+ * interrupted it (kernel/owner.ts) and either nothing has been said to it since, so that no reply
+ * is owed, or the first thing said since came only within the time just measured (`lately`), so
+ * that it has not had its full time for it yet. Being stopped by the owner is not silence. It is
+ * not a reply either: the generation stays on probation and is measured again.
+ */
+export function excused(gen: string, all: JournalEvent[], lately: JournalEvent[]): boolean {
+  const stopped = all.findLastIndex((e) => e.type === 'turn.interrupted' && e.gen === gen);
+  if (stopped === -1) return false;
+  const owed = all.slice(stopped + 1).find((e) => ['stimulus', 'molt.rejected', 'generation.promoted', 'generation.rolledback'].includes(e.type));
+  return owed === undefined || lately.some((e) => e.id === owed.id);
 }
 
 /** Locks this process holds, so a lock file naming our own pid can be told from one a dead process with the same pid left. */
@@ -535,19 +550,36 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
         return 'halted';
       }
       const gen = state.current;
+      // The organs this generation pins, from its own commit: after a rollback that is the older pin,
+      // whose tree is still in the cache. A tree that is gone is unpacked again from its archive. When
+      // that is gone too, nothing is started: a body without the organ it was gated with would only
+      // crash, and going back a generation would give up a sound one for a file the owner can put back.
+      let organs: string | null;
+      try {
+        const provided = await provideOrgans(p.root, parseOrgans(organsAt(p.root, gen)), { verify: false });
+        if (provided.problem !== undefined) throw new Error(provided.problem);
+        organs = provided.dir;
+      } catch (err) {
+        log(`cannot start generation ${gen}: ${reasonOf(err)}`);
+        log('nothing was changed, and no generation was given up: it starts once that is mended');
+        return 'halted';
+      }
+      if (stopping) return 'stopped';
       const mark = journalSize(p.journal);
       appendEvent(p.journal, gen, { type: 'generation.started', commit: gen });
       const since = () => readEventsFrom(p.journal, mark);
       const isReady = () => since().some((e) => e.type === 'generation.ready' && e.gen === gen);
 
+      // The organs are this generation's or nobody's: never a directory the supervisor's own environment happened to name.
+      const { TENERAL_ORGANS: _inherited, ...inherited } = process.env;
       const running = Bun.spawn(cmd, {
         cwd: p.live,
         env: {
-          ...process.env,
+          ...inherited,
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,
-            provider: process.env.TENERAL_PROVIDER, auth: p.auth,
+            provider: process.env.TENERAL_PROVIDER, auth: p.auth, organs: organs ?? undefined,
           }),
         },
         // stderr is passed on as it comes and its end kept, to say why if this generation has to be given up on.
@@ -574,13 +606,25 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted'> {
       /** This run was ended because a newly promoted generation stayed silent. */
       let silent = false;
       if (probation) {
-        timers.probation = setTimeout(() => {
-          let replied = false;
-          try { replied = since().some((e) => e.type === 'assistant' && e.gen === gen); } catch { /* not replied */ }
-          if (replied) return;
-          silent = true;
-          stop();
-        }, probationMs);
+        // `from`: where the journal ended when this measure of time began.
+        const measure = (from: number): void => {
+          timers.probation = setTimeout(() => {
+            let replied = false;
+            let waived = false;
+            let next = from;
+            try {
+              next = journalSize(p.journal);
+              replied = since().some((e) => e.type === 'assistant' && e.gen === gen);
+              waived = !replied && excused(gen, readEvents(p.journal), readEventsFrom(p.journal, from));
+            } catch { /* not replied */ }
+            if (replied) return;
+            // The owner stopped its turn: that is neither a reply nor silence. The time starts again.
+            if (waived) return measure(next);
+            silent = true;
+            stop();
+          }, probationMs);
+        };
+        measure(mark);
       }
       const code = await running.exited;
       const ranMs = Date.now() - startedAt;
