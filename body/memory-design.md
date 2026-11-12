@@ -169,3 +169,11 @@ then request integration. Automatic formation is NOT solved by the existing
 explicit episode tool. Fully autonomous compression needs a separately bounded
 provider lifecycle with usage accounting and interruption recovery; defer that
 until candidate selection passes attribution tests.
+
+### Candidate dismissal lifecycle
+`dismiss_episode` persists an exact ordered eligible source pair in
+`episode.dismissed.v1`. Rebuild accepts only terminal-audience dismissals of
+already preceding candidates; forged/future pairs are ignored. Repeated calls
+are idempotent. This suppresses the candidate, not its original history or
+fact retrieval. No summary or owner instruction is manufactured. Structured
+curation remains optional; candidates can now be either curated or dismissed.

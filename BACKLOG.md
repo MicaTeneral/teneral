@@ -293,3 +293,11 @@ evidence only on terminal requests, for explicit curation via remember.
 Exclude source overlap already curated as an episode (including deleted and
 superseded episodes), do not silently re-offer forgotten material. Test budget,
 privacy, interruptions, replay and source coverage. No provider calls or timers.
+
+## Persistent episode dismissal
+Owner requests continuation. Candidate selection can repeat irrelevant exchanges
+forever. Add terminal-only dismiss_episode using exact eligible source pair;
+record episode.dismissed.v1 note, validate against preceding candidates during
+replay, suppress only that pair. Idempotent retries write no duplicate note.
+No source deletion, memory claim, extra provider call or wake. Test forged,
+external, future, reversed pairs, restart and repeat handling.

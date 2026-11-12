@@ -1,3 +1,4 @@
+import { dismissEpisode } from './episode-candidates';
 import { remember } from "./memory";
 import { recall } from "./recall";
 import { work } from './work';
@@ -302,4 +303,4 @@ const send: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, zulipReply, zulipHistory, work, recall, remember];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, zulipReply, zulipHistory, work, recall, remember, dismissEpisode];
