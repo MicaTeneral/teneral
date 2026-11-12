@@ -243,3 +243,17 @@ memory notes to cite historical assistant events (as recall already can), withou
 automatically indexing those events or permitting external stimulus/tool sources.
 Preserve private output/write gates and claim labeling. Validate replay and live
 Russian-query retrieval of original source via deliberate curation.
+
+## Memory gap audit / inspectable sources
+Compared deployed code with Connectome memory guide at00d56c540b279e60bdbebfc790cacbf4577def15
+(docs/AGENT-MEMORY-GUIDE.md, documentation only). Gaps: no episodic hierarchical
+summaries, eight-hit recall ceiling without pagination or source lookup,
+no dependent/paraphrase correction propagation, character rather than token
+budget, last-stimulus audience heuristic, repeated full-journal rebuild and
+no retrieval-quality benchmark beyond narrow regressions. Connectome documents
+head/middle/tail resolution, prepared memories, as-of reconstruction and history
+search/extract. Do not blindly adopt first-person summaries as trusted truth.
+First bounded fix: exact source lookup and older-page cursor in private recall.
+Test repeated recent matches no longer make old source unreachable, source
+lookup bypasses keyword filtering but not secret/audience/size restrictions,
+and unknown/invalid cursor errors clearly. No new store or external ingestion.

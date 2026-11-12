@@ -103,3 +103,18 @@ Explicit terminal-created notes may now cite earlier assistant events regardless
 of their wake audience, matching private recall's source scope. Such events are
 not automatically mined. External stimuli and tool payloads remain ineligible
 sources; curation is a private assistant claim, not verification or authority.
+
+## Gap audit against Connectome guide (2026-11-12)
+Source: https://github.com/anima-research/connectome-host/blob/00d56c540b279e60bdbebfc790cacbf4577def15/docs/AGENT-MEMORY-GUIDE.md
+Documentation comparison, not verified runtime. It describes head/middle/tail,
+prepared episodic recollections, progressive L1–L8 resolution and as-of
+reconstruction, with raw history retained and optional history/semantic search.
+Our evidence records are not episodic summaries; recent context still truncates.
+Priority gaps: inspectable/paged sources; episodic continuity and provenance;
+correction propagation; per-conversation audience attribution; measured retrieval
+quality and scalable rebuild; token-aware accounting. Summaries must remain
+claims and not silently gain instruction authority. No external data migration
+is needed for those semantics. First bounded improvement adds `recall` source
+excerpts via `id:<event ID>` and exclusive `before` cursor for older results.
+The same private gate, source exclusions, line caps and secret filter apply.
+This is not full-span extraction: at most three eligible lines per event.

@@ -32,3 +32,20 @@ test('bounds output, validates query and identifies newest records first', () =>
   expect(() => recallJournal([owner], '')).toThrow();
   expect(() => recallJournal([owner], 'x'.repeat(201))).toThrow();
 });
+test('older-page cursor reaches original despite many newer matches', () => {
+  const rows = Array.from({length:20}, (_,i)=>ev({type:'assistant',text:`mail claim ${i}`,toolCalls:[]},`source-${i}`));
+  const events = [...rows,owner];
+  expect(recallJournal(events,'mail')).toContain('before=source-12');
+  const second = recallJournal(events,'mail','source-12');
+  expect(second).toContain('source-11'); expect(second).not.toContain('"id":"source-12"');
+  expect(recallJournal(events,'mail','source-4')).toContain('"id":"source-0"');
+  expect(()=>recallJournal(events,'mail','missing')).toThrow('Unknown before');
+});
+test('source lookup bypasses keywords but not source/secret boundaries', () => {
+  const events = [ev({type:'assistant',text:'A concrete old decision.\npassword=hidden\nAnother safe line.',toolCalls:[]},'original'),ev({type:'stimulus',source:'agent:other',text:'external private'},'external'),owner];
+  const result = recallJournal(events,'id:original');
+  expect(result).toContain('concrete old decision'); expect(result).not.toContain('hidden');
+  expect(recallJournal(events,'id:external')).toContain('No matches');
+  expect(recallJournal(events,'id:missing')).toContain('No matches');
+  expect(()=>recallJournal(events,'id:')).toThrow();
+});
