@@ -170,3 +170,17 @@ Final review: reject sparse JS arrays rather than encode a mismatched list count
 preserve a leading Unicode BOM in decoded data text. Add regressions. Native
 Rayforce peers negotiated shm in a real two-process test and returned 3; Bun
 advertises zero capabilities and remains TCP. No private ingestion.
+
+## Owner-requested organ and cancellation after 860d8fd
+Pin published Rayforce v3.0.2 archive with independently checked release hash;
+prepare using kernel organ cache discovery, not a guessed directory. Propagate
+Tool.run's third AbortSignal through subagent/subagents/research and retrieval.
+Parent interruption must settle local waits even if a provider ignores abort,
+stop fan-out on pre-abort, cancel stream reads, and not report owner cancellation
+as a deadline. Tests cover these boundaries; full tests/check before promotion.
+
+Owner generation35c58b9 fixed smoke ownRepo organ-cache fixture. Reprepared
+Rayforce set d8ba46fed8ed6e39 and reran full tests with TENERAL_ORGANS:
+805 pass,0 fail; bun run check passes. Five cancellation regression cases
+cover pre-abort, uncooperative provider fan-out, stalled fetch, stalled reader,
+and post-retrieval analysis. No protected files edited by this candidate.

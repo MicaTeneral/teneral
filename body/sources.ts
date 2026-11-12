@@ -1,3 +1,4 @@
+import { cancellation } from './cancellation';
 import { createHash } from 'node:crypto';
 
 export interface Source { repository: string; commit: string; path: string }
@@ -16,10 +17,12 @@ export function validateSources(value: unknown): Source[] {
 }
 
 /** Fixed-origin host retrieval. Trusts platform DNS/TLS; no child networking. */
-export async function retrieveSources(input: unknown, send: typeof fetch = fetch, timeoutMs = 15000) {
+export async function retrieveSources(input: unknown, send: typeof fetch = fetch, timeoutMs = 15000, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const sources = validateSources(input);
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 15000) throw new Error('Invalid retrieval deadline');
   const controller = new AbortController();
+  const parent = cancellation(signal, controller);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let total = 0;
   const run = async () => {
@@ -59,8 +62,8 @@ export async function retrieveSources(input: unknown, send: typeof fetch = fetch
     return results;
   };
   try {
-    return await Promise.race([run(), new Promise<never>((_, reject) => {
+    return await Promise.race([parent.cancelled, run(), new Promise<never>((_, reject) => {
       timer = setTimeout(() => {controller.abort(); reject(new Error('Source deadline exceeded'));},timeoutMs);
     })]);
-  } finally { clearTimeout(timer); controller.abort(); }
+  } finally { clearTimeout(timer); parent.dispose(); controller.abort(); }
 }
