@@ -257,3 +257,11 @@ First bounded fix: exact source lookup and older-page cursor in private recall.
 Test repeated recent matches no longer make old source unreachable, source
 lookup bypasses keyword filtering but not secret/audience/size restrictions,
 and unknown/invalid cursor errors clearly. No new store or external ingestion.
+
+## Adopt species105571a: remove body size gate
+Owner requested local main merge. Reviewed105571a and4bb9759: size gate removed
+from kernel and offer checks, tests/docs updated, BIRTH terminology corrected.
+Merged cleanly; lineage memory code untouched and prompt additions preserved.
+This removes the size blocker for memory work, not the need for bounded design
+or security gates. Validate full suite/type check before mutation; species
+acceptance may be required. No manual protected-path edits.
