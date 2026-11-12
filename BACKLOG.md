@@ -138,3 +138,31 @@ Owner approved tables+journal+Datalog memory design after Chronicle comparison. 
 
 ## Minimal Bun Rayforce IPC binding
 Owner has no wrapper and authorizes building it. Official v3.0.2 Linux release downloaded to /tmp/mica-ray-bin; SHA256 matches published ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7 and --help runs. Start with TCP wire-v3 synchronous scalar evaluation, one connection per request, bounded bytes and timeout, no automatic retries and no auth/network exposure. Preserve i64 via bigint; reject unsupported payloads instead of guessing. Test with fake server and real local synthetic queries. Persistence and complex values remain explicit limitations.
+
+## Typed Rayforce values and bounded compound decoding
+Scalar milestone leaves arbitrary text ingestion unsafe (source interpolation) and cannot read table results. Add a closed data encoder (null/bool/i64/f64/text/list), transport data wrapped in builtin list so top-level text is never parsed as code, and bounded list/vector/table decoding. Inspect release v3.0.2 serializer; preserve numeric vector raw null sentinels explicitly rather than claim nullable semantic decoding. Reject unknown flags/types, excessive depth/count/bytes and malformed schemas. Validate hostile strings as inert data on real engine plus fake wire tests. No live ingestion.
+
+## Native feasibility result (evaluation, not selected architecture)
+Owner challenged IPC architecture. Built librayforce.so locally from v3.0.2
+(commit d5a44cdb4ec33772104f466a2ca177a74b528041) using checksum-verified
+portable Zig0.14.1. Initial -march=x86-64-v3 failed (Zig parsed CPU as x86);
+-mcpu=x86_64_v3 succeeded, build2.exit=0, build2.log empty. Source set matches
+make lib (src/*/*.c excluding app/main.c), shared PIC O1, lm/pthread/dl.
+No system packages installed; local xz extracted from Debian package.
+Isolated Bun FFI probe successfully created one runtime, evaluated (+ 1 2)
+=>3n, exact 9007199254740993n, typed 0Nl=>null, undefined name=>name error,
+then freed each result and destroyed runtime. Small compiled adapter uses
+public header to read scalar union/null macros (JS assumes no struct layout).
+IMPORTANT: ray_release is no-op for errors; adapter calls ray_error_free for
+errors, ray_release otherwise. No borrowed pointer survives result release.
+Artifacts /tmp/mica-native-tools/{adapter.c,adapter.so,probe.ts,librayforce.so,
+build2.log,build2.exit}; disposable, not production dependencies. Probe exited 0
+under timeout20, not a live-agent native load. Native embedding is feasible, but the subsequent owner discussion retained
+a separate service for crash containment. Threading, cancellation/crash isolation, packaging, stable
+adapter ABI and persistence remain unvalidated. IPC extension resumed after architecture evaluation; it remains a TCP
+implementation, not a native or shared-memory client.
+
+Final review: reject sparse JS arrays rather than encode a mismatched list count;
+preserve a leading Unicode BOM in decoded data text. Add regressions. Native
+Rayforce peers negotiated shm in a real two-process test and returned 3; Bun
+advertises zero capabilities and remains TCP. No private ingestion.

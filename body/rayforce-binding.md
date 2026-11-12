@@ -40,3 +40,36 @@ parameter/value encoding and bounded compound-value decoding before ingestion.
 Unit tests use a local fake server, so standard gates need neither a download
 nor a Rayforce process. Real-engine results above are manual integration evidence,
 not evidence supplied by the fake server tests.
+
+## Typed-value milestone
+`sendRayData(port, data)` now accepts a closed subset: null, boolean, bigint
+(signed i64), finite number (f64), well-formed UTF-8 text and nested lists.
+It returns a one-element list envelope. A builtin `list` call carries the data;
+there are no user-provided symbols/functions and no source interpolation.
+This is safe data transport, NOT yet a parameterized insertion interface.
+`queryRayforce` evaluates trusted RFL and decodes supported compound results.
+
+Decoder limits: 1MiB, 10000 elements/nodes, depth32; rejects trailing bytes,
+invalid UTF-8, unknown types/flags, duplicate table column names, ragged tables.
+Supports ordinary lists, scalar vectors and tables, not dicts/functions/GUIDs.
+Nonzero vector/compound attrs rejected except schema SYM W64=3 (release serializer
+explicitly emits it). Numeric vectors retain raw null-sentinel payloads; they
+are not claimed to provide normalized nullable cells. Compression still refused.
+Typed scalar nulls retain their type. Large responses may execute then fail to
+decode: do not retry mutations automatically.
+
+Real v3.0.2 synthetic verification: sending `(set mica_injected 99)` as text
+returned that exact text; querying mica_injected afterward returned name error.
+Nested mixed data and Unicode also returned list envelopes. Querying
+`(table [id text] (list [1 2] (list "a" "b")))` returned schema id/text,
+i64 column 1n/2n and string column a/b. Server killed and awaited afterward.
+No private ingestion or persistence validation performed.
+
+## Architecture decision after native evaluation
+An isolated native FFI experiment also succeeded, but the selected baseline
+keeps the engine in a separate process for crash containment (not a security
+sandbox). Real native Rayforce peers negotiated `shm` and returned 3 locally.
+This Bun client advertises zero transport capabilities and remains TCP. Shared
+memory requires negotiation, descriptor passing and rings; no upgrade support
+is claimed here. Reuse the native client transport in a separately evaluated
+helper if needed rather than duplicating that machinery prematurely.

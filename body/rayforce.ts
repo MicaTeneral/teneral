@@ -1,4 +1,5 @@
 import { createConnection } from 'node:net';
+import { decodeRayValue, encodeRayData, type RayData, type RayValue } from './rayforce-values';
 
 export type RayScalar = { type: number; value: bigint | number | string | boolean | null };
 const LIMIT = 1024 * 1024;
@@ -28,17 +29,29 @@ export function decodeRayScalar(b: Buffer): RayScalar {
  * Timeout means outcome unknown, NOT rollback. Persistence is a separate contract.
  */
 export function evalRayforce(port: number, source: string, timeoutMs = 5000): Promise<RayScalar> {
+  return requestRayforce(port, encodeRayData(source), timeoutMs, decodeRayScalar);
+}
+/** Trusted source with compound results; never interpolate message text. */
+export function queryRayforce(port: number, source: string, timeoutMs = 5000): Promise<RayValue> {
+  return requestRayforce(port, encodeRayData(source), timeoutMs, decodeRayValue);
+}
+/** Inert data in a one-item list envelope, not an insertion API. The closed
+ * RayData subset cannot provide executable symbols or function heads. */
+export function sendRayData(port: number, data: RayData, timeoutMs = 5000): Promise<RayValue> {
+  const h = Buffer.alloc(10); h.writeBigInt64LE(2n, 2);
+  const builtin = Buffer.from([103, 108, 105, 115, 116, 0]); // variadic list
+  return requestRayforce(port, Buffer.concat([h, builtin, encodeRayData(data)]), timeoutMs, decodeRayValue);
+}
+function requestRayforce<T>(port: number, payload: Buffer, timeoutMs: number, decode: (b: Buffer) => T): Promise<T> {
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) return Promise.reject(Error('Invalid connection bounds'));
-  const text = Buffer.from(source);
-  if (text.length > LIMIT - 26) return Promise.reject(Error('Rayforce request too large'));
-  const frame = Buffer.alloc(26 + text.length);
+  if (payload.length > LIMIT - 16) return Promise.reject(Error('Rayforce request too large'));
+  const frame = Buffer.alloc(16 + payload.length);
   frame.writeUInt32LE(0xcefadefa, 0); frame[4] = 3; frame[7] = 1;
-  frame.writeBigInt64LE(BigInt(text.length + 10), 8);
-  frame.writeInt8(-13, 16); frame.writeBigInt64LE(BigInt(text.length), 18); text.copy(frame, 26);
+  frame.writeBigInt64LE(BigInt(payload.length), 8); payload.copy(frame, 16);
   return new Promise((resolve, reject) => {
     const socket = createConnection({ host: '127.0.0.1', port });
     let data = Buffer.alloc(0), greeted = false, done = false;
-    const finish = (err?: Error, value?: RayScalar) => {
+    const finish = (err?: Error, value?: T) => {
       if (done) return; done = true; clearTimeout(timer); socket.destroy();
       if (err) reject(err); else resolve(value!);
     };
@@ -61,7 +74,7 @@ export function evalRayforce(port: number, source: string, timeoutMs = 5000): Pr
         if (n < 1n || n > BigInt(LIMIT)) throw Error('Invalid Rayforce frame size');
         if (data.length < 16 + Number(n)) return;
         if (data.length !== 16 + Number(n)) throw Error('Unexpected extra Rayforce bytes');
-        finish(undefined, decodeRayScalar(data.subarray(16)));
+        finish(undefined, decode(data.subarray(16)));
       } catch (e) { finish(e instanceof Error ? e : Error(String(e))); }
     });
   });
