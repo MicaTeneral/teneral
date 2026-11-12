@@ -1,9 +1,9 @@
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { join } from 'node:path';
 import { workFooter, workContext } from './work';
-import { DEFAULT_BUDGET, buildMessages, kernelNote } from './context';
-import type { Provider } from './provider';
-import { saysTooLong } from './retry';
+import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './context';
+import type { Provider, Reply } from './provider';
+import { saysNoImages, saysTooLong } from './retry';
 import type { Tool, ToolContext } from './tools';
 
 export interface TurnDeps {
@@ -20,6 +20,8 @@ export interface TurnDeps {
   maxRounds?: number;
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
+  /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
+  sight?: Sight;
 }
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */
@@ -34,22 +36,39 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'molt'> {
   let budget = d.budgetChars ?? DEFAULT_BUDGET;
   // How much of the journal the model has been shown. The journal only grows, so everything past this is new to it.
   let shown = 0;
+  // Set when the provider refused a request because of its images; holds for the rest of the turn.
+  let blind = false;
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
     const events = readEvents(d.journal);
     shown = events.length;
     const system = d.system() + workContext(join(d.ctx.workspace, '..', 'work.json'));
-    const ask = () => d.provider(buildMessages(events, system, budget - specsSize), specs);
-    const reply = await ask().catch((err: unknown) => {
-      if (!saysTooLong(err)) throw err;
-      // Characters are only an estimate of tokens. Half is tried once and kept for the rest of the turn.
-      budget = Math.floor(budget / 2);
-      return ask();
-    });
+    let halved = false;
+    let reply: Reply;
+    for (;;) {
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind });
+      try {
+        reply = await d.provider(messages, specs);
+        break;
+      } catch (err) {
+        if (!blind && messages.some((m) => m.images !== undefined) && saysNoImages(err)) {
+          // One image the model or the route cannot take must not hold up the conversation: asked again with a note in its place.
+          blind = true;
+        } else if (!halved && saysTooLong(err)) {
+          // Characters are only an estimate of tokens. Half is tried once and kept for the rest of the turn.
+          budget = Math.floor(budget / 2);
+          halved = true;
+        } else throw err;
+      }
+    }
     if (reply.toolCalls.length === 0 && reply.text.trim()) {
       reply.text += workFooter(join(d.ctx.workspace, '..', 'work.json'));
     }
-    appendEvent(d.journal, d.gen, { type: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
+    // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
+    appendEvent(d.journal, d.gen, {
+      type: 'assistant', text: reply.text, toolCalls: reply.toolCalls,
+      ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
+    });
     if (reply.text !== '') d.onText?.(reply.text);
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
