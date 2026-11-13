@@ -506,3 +506,16 @@ Success: distinguish local prefix churn from provider cache misses on live calls
 Merge origin/main ef3f4f9 in one step, retaining prior TUI and cache work.
 Adds /usage journal token totals and one-row cache-coloured footer (also README).
 Validate full tests/typecheck before promotion; cache investigation remains priority.
+
+## Plan-route session affinity
+Owner requested continued cache diagnosis. Existing prompt_cache_key is passed
+on both key and sign-in branches; actual POST probe reports static fields equal,
+including instructions/tools. Official OpenAI Codex source at commit
+69231e119bfca0b14453515e97d99688ce1c47c9, core/src/client.rs explicitly says
+ChatGPT derives affinity from session-id; codex-api/src/requests/headers.rs names
+that header and shared transport options include it. This is official implementation
+evidence, not a public API stability guarantee. Add only session-id using our own
+individual ID on sign-in route; preserve truthful user-agent and existing endpoint.
+No originator spoofing, account header, turn-state protocol or paid route probes.
+Test mock HTTP bodies/headers across repeated requests and API override exclusion.
+Success measured on a bounded live sample after promotion, not inferred from tests.

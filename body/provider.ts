@@ -233,6 +233,8 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
 // Only the summary of the reasoning is asked for and read, for the owner to see.
 
 export interface ResponsesConfig {
+  /** ChatGPT session affinity, our own identity; absent on API-key routes. */
+  sessionId?: string;
   /** Stable per-individual routing hint. */
   cacheKey?: string;
   /** Where requests go; asked before each one. */
@@ -390,7 +392,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
           // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
-          headers: { 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
+          headers: { ...(cfg.sessionId ? { 'session-id': cfg.sessionId } : {}), 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
           body: JSON.stringify(body),
           signal,
         });
@@ -457,6 +459,6 @@ export function connect(env: Record<string, string | undefined>, send?: typeof f
   }
   const dir = need('TENERAL_AUTH');
   return responsesProvider({
-    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, cacheKey, fetch: send,
+    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, cacheKey, sessionId: env.TENERAL_ID, fetch: send,
   });
 }

@@ -386,3 +386,24 @@ test('Responses sends a stable explicit prompt cache routing key', async () => {
  expect(bodies.map(b=>b.prompt_cache_key)).toEqual(['individual-test','individual-test']);
  expect(bodies.map(b=>b.instructions)).toEqual(['fixed','fixed']);
 });
+
+test('plan affinity uses our session identity and retains cache key and byte-stable static fields', async () => {
+ const {responsesProvider,connect}=await import('../../body/provider');
+ const bodies: Record<string,unknown>[]=[]; const headers: Headers[]=[];
+ const send=(async (_url:unknown,init:RequestInit)=>{
+  bodies.push(JSON.parse(String(init.body))); headers.push(new Headers(init.headers));
+  return new Response('refused',{status:400});
+ }) as typeof fetch;
+ const p=responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=> 'test-only',cacheKey:'our-id',sessionId:'our-id',summaries:false,fetch:send});
+ const tools=[{name:'test',description:'fixed',parameters:{type:'object'}}];
+ for(const text of ['one','two']) await expect(p([{role:'system',content:'fixed'},{role:'user',content:text}],tools)).rejects.toThrow();
+ expect(headers.map(h=>h.get('session-id'))).toEqual(['our-id','our-id']);
+ expect(headers[0]!.get('user-agent')).toContain('teneral');
+ expect(headers[0]!.has('originator')).toBe(false);
+ expect(bodies.map(b=>b.prompt_cache_key)).toEqual(['our-id','our-id']);
+ expect(JSON.stringify(bodies[0]!.tools)).toBe(JSON.stringify(bodies[1]!.tools));
+ expect(bodies[0]!.instructions).toBe(bodies[1]!.instructions);
+ const api=connect({TENERAL_PROVIDER:'chatgpt',TENERAL_MODEL:'m',TENERAL_API_KEY:'test-only',TENERAL_BASE_URL:cfg.baseUrl,TENERAL_ID:'our-id'},send);
+ await expect(api([],[])).rejects.toThrow();
+ expect(headers.at(-1)!.has('session-id')).toBe(false);
+});
