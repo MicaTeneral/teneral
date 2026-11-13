@@ -72,16 +72,34 @@ export function memoryRecords(events: JournalEvent[], includeHidden = false): Re
   return [...records.values()].filter(r => includeHidden || (!hidden.has(r.id) && !r.deleted));
 }
 
-/** Private automatic retrieval. Whole records fit; lexical score, tags and recency break ties. */
+/** Private automatic retrieval. Whole records fit; BM25 orders lexical matches, tags and recency break ties. */
 export function memoryContext(events: JournalEvent[], budget: number): string {
   if (!Number.isFinite(budget) || budget < 400) return '';
   const last = events.findLast(e => e.type === 'stimulus');
   if (!last || last.type !== 'stimulus' || typeof last.text !== 'string') return '';
-  const query = new Set(words(last.text));
+  const query = [...new Set(words(last.text))];
   const tags = tagsOf(last.text);
-  const ranked = memoryRecords(events).filter(r => !r.sources.includes(last.id)).map((r, i) => ({ r, i,
-    score: words(episodeText(r)).filter(w => query.has(w)).length + r.tags.filter(t => tags.includes(t)).length * 3,
-  })).filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.i - a.i);
+  const records = memoryRecords(events).filter(r => !r.sources.includes(last.id));
+  const docs = records.map(r => words(episodeText(r)));
+  const frequencies = docs.map(doc => {
+    const counts = new Map<string, number>();
+    for (const word of doc) counts.set(word, (counts.get(word) ?? 0) + 1);
+    return counts;
+  });
+  const documentFrequency = new Map<string, number>();
+  for (const counts of frequencies) for (const word of counts.keys()) documentFrequency.set(word, (documentFrequency.get(word) ?? 0) + 1);
+  const averageLength = docs.reduce((sum, doc) => sum + doc.length, 0) / Math.max(1, docs.length);
+  const k1 = 1.2, b = 0.75;
+  const ranked = records.map((r, i) => {
+    let score = r.tags.filter(t => tags.includes(t)).length * 3;
+    for (const term of query) {
+      const n = documentFrequency.get(term) ?? 0;
+      const f = frequencies[i]!.get(term) ?? 0;
+      if (n && f) score += Math.log(1 + (records.length - n + 0.5) / (n + 0.5))
+        * f * (k1 + 1) / (f + k1 * (1 - b + b * docs[i]!.length / averageLength));
+    }
+    return { r, i, score };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.i - a.i);
   // Earliest surviving mentions are anchors, not proof of current truth.
   const entities = (text: string) => text.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|https?:\/\/[^\s<>"`]+/g) ?? [];
   const first = new Map<string, typeof ranked[number]>();

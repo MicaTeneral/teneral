@@ -38,6 +38,28 @@ isolated rebuild reached 386 excerpts/3 episodes/2043 recall rows in 32ms. Real-
 cover 0/1/2/65 rows, Unicode/metacharacters, exact/paged parity, unchanged reuse, restart and two
 concurrent journals. Sync and read share a per-port queue. Full suite: 1055 pass/0 fail, tsc clean.
 These are candidate results, not production evidence until promotion and a live receipt.
+Promoted as ead24db; live watermark and natural/literal/no-match parity verified. Next bounded
+ranking experiment: compare production memoryContext, positive-match BM25 and their RRF on the
+same canonical records and top-8 budget. Motive: distinguish better ordering from candidate
+coverage; BM25/RRF alone cannot recover zero-token-overlap paraphrases. Measure hit@8, MRR@8,
+unanswerable-query false positives, record characters and local latency, with correction/provenance
+checks. Fixtures are author-selected diagnostics, not held-out evidence; no production ranking change
+unless measurements justify it. Reject or retain the probe explicitly rather than tuning to a desired
+result.
+Measured final run: relevance baseline/BM25/RRF all hit@8 6/10, MRR 0.6, false positives 3/4,
+3044 chars; local ranking+render ~0.069/0.093/0.131ms across all 14 probes. Expanded-query suite:
+all hit@8 4/5, MRR 0.8, false positives 3/3, 2479 chars; ~0.043/0.073/0.112ms across 8 probes.
+A distinct-record, equal-length crowd-out fixture exposed a real ordering defect: raw repeated-term
+count plus recency dropped the two-term target from top 8; BM25 ranked it first and RRF sixth. This
+is not held-out evidence or a general latency benchmark. Retain the probe; test BM25 independently
+with the exact production candidate set, episode fields, correction replay and renderer. Reject RRF
+for this step: no demonstrated advantage over BM25 and extra computation. Do not claim semantic or
+zero-overlap retrieval improvement.
+Candidate now adopts standard BM25 (k1=1.2, b=0.75, numerator k1+1=2.2) only in memoryContext;
+candidate inclusion, episode text, tags, anchors, source caps, corrections and rendering are unchanged.
+Focused checks passed (14 tests), full suite passed 1058/0 fail and tsc is clean. Full-run timings:
+relevance ~0.070/0.095/0.130ms, expanded queries ~0.044/0.074/0.116ms. These are microbenchmarks,
+not end-to-end request latency. Post-promotion verify the live module and a real-journal context sample.
 
 ## Warm-cache cut step: measured 5%, not a blind budget shrink
 Live telemetry after 8c44a85 found first-byte latency around 4.4–5.1s and highly variable
