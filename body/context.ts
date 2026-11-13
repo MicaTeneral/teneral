@@ -228,7 +228,7 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, work = ""): ChatMessage[] {
   const out: ChatMessage[] = [];
   const slots: Slot[] = [];
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
@@ -293,10 +293,13 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
-  const memory = memoryContext(events, Math.max(0, Math.min(6000, Math.floor(room * 0.1))));
-  const candidate = episodeCandidateContext(events, Math.max(0, Math.min(2400, Math.floor(room * 0.04))));
-  const fitted = fit(out, room - memory.length - candidate.length);
-  if ((memory || candidate) && fitted[0]?.role === 'user') fitted[0] = { ...fitted[0], content: memory + candidate + fitted[0].content };
+  // Fixed reservation prevents retrieval changes from shifting history cuts.
+  const reserve = Math.max(0, Math.min(12000, Math.floor(room * 0.2)));
+  const memory = memoryContext(events, Math.floor(reserve * 0.5));
+  const candidate = episodeCandidateContext(events, Math.floor(reserve * 0.2));
+  const dynamic = memory + candidate + work.slice(0, Math.floor(reserve * 0.3));
+  const fitted = fit(out, room - reserve);
+  if (dynamic) fitted.push({ role: 'user', content: dynamic });
   return [{ role: 'system', content: prompt }, ...fitted];
 }
 

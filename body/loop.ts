@@ -81,11 +81,12 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
     const events = readEvents(d.journal);
     shown = events.length;
-    const system = d.system() + workContext(join(d.ctx.workspace, "..", "work.json"));
+    const system = d.system();
+    const work = workContext(join(d.ctx.workspace, "..", "work.json"));
     let halved = false;
     let reply: Reply;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, work);
       try {
         reply = await d.provider(messages, specs, d.signal && { signal: d.signal });
         break;

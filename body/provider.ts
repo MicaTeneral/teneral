@@ -232,6 +232,8 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
 // Only the summary of the reasoning is asked for and read, for the owner to see.
 
 export interface ResponsesConfig {
+  /** Stable per-individual routing hint. */
+  cacheKey?: string;
   /** Where requests go; asked before each one. */
   baseUrl: () => string;
   /** The bearer token. Asked for before each request, and once more, naming the token refused, after a 401. */
@@ -371,6 +373,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
     if (limit !== undefined) body.max_output_tokens = limit;
+    if (cfg.cacheKey) body.prompt_cache_key = cfg.cacheKey;
     if (instructions !== '') body.instructions = instructions;
     if (tools.length > 0) body.tools = toResponsesTools(tools, cfg.namespace);
     // Without this the reasoning comes back with no summary at all. `auto` is the most detailed one the model has.
@@ -442,14 +445,15 @@ export function connect(env: Record<string, string | undefined>, send?: typeof f
   const entry = providerFor(env.TENERAL_PROVIDER);
   const model = need('TENERAL_MODEL');
   if (entry.wire === 'chat') return openAiProvider({ baseUrl: need('TENERAL_BASE_URL'), apiKey: need('TENERAL_API_KEY'), model, fetch: send });
+  const cacheKey = env.TENERAL_ID;
   const namespace = entry.tools === 'namespace' ? 'teneral' : undefined;
   if (entry.auth === 'key' || env.TENERAL_API_KEY) {
     const baseUrl = need('TENERAL_BASE_URL');
     const key = need('TENERAL_API_KEY');
-    return responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, fetch: send });
+    return responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, cacheKey, fetch: send });
   }
   const dir = need('TENERAL_AUTH');
   return responsesProvider({
-    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, fetch: send,
+    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, cacheKey, fetch: send,
   });
 }

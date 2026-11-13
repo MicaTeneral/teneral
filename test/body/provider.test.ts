@@ -372,3 +372,17 @@ test('optional output bounds map to each protocol and invalid values never acqui
   expect(bodies[1]).not.toHaveProperty('max_completion_tokens');
  }
 });
+
+test('Responses sends a stable explicit prompt cache routing key', async () => {
+ const {responsesProvider}=await import('../../body/provider');
+ const bodies: Record<string, unknown>[]=[];
+ const send=(async (_url: unknown, init: RequestInit) => {
+   bodies.push(JSON.parse(String(init.body)));
+   return new Response('refused', {status:400});
+ }) as typeof fetch;
+ const provider=responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=> 'k',cacheKey:'individual-test',summaries:false,fetch:send});
+ await expect(provider([{role:'system',content:'fixed'},{role:'user',content:'one'}],[])).rejects.toThrow();
+ await expect(provider([{role:'system',content:'fixed'},{role:'user',content:'two'}],[])).rejects.toThrow();
+ expect(bodies.map(b=>b.prompt_cache_key)).toEqual(['individual-test','individual-test']);
+ expect(bodies.map(b=>b.instructions)).toEqual(['fixed','fixed']);
+});

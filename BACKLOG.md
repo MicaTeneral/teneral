@@ -481,3 +481,15 @@ Owner requests newest TUI update after queue-display adoption. Inspect and merge
 upstream unchanged, preserving lineage memory. Verify typecheck and full suite;
 then request species acceptance/promotion. Client-held messages can return to
 editing with Up; already sent messages cannot. Closing client flushes queue.
+
+## Cache prefix stability (owner priority over memory work)
+Owner reports 673/743 requests with zero cached tokens; verify independently.
+Confirmed: buildMessages prepends dynamic memory/candidate to first user message;
+runTurn adds mutable workContext to instructions; Responses lacks cache key.
+fit already uses 20% budget steps, but its budget varies with memory length.
+Move mutable context to trailing message with fixed reserved budget; keep history
+prefix stable across ordinary tool rounds. Test common-prefix stability separately
+from dynamic suffix (whole old request cannot be a prefix if suffix changes).
+Add stable Responses cache routing key, reproducible usage analysis, and measure
+live within-turn cached/input >0.8 without guaranteeing provider cache behavior.
+Keep pending unaccepted species TUI candidate separate from deployment planning.

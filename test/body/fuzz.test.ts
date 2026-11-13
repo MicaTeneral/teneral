@@ -261,7 +261,8 @@ function checkIsTail(trimmed: ReturnType<typeof buildMessages>, whole: ReturnTyp
 
 /** How much more than it had to the trimming took away. A step is a fifth of the room, so never the better part of it. */
 function checkNotWasteful(trimmed: ReturnType<typeof buildMessages>, whole: ReturnType<typeof buildMessages>, budget: number): void {
-  if (sizeOf(whole) <= budget && trimmed.length !== whole.length) throw new Error('a request that fitted whole was trimmed');
+  const reserve = Math.max(0, Math.min(12000, Math.floor((budget - SYSTEM.length) * .2)));
+  if (sizeOf(whole) <= budget - reserve && trimmed.length !== whole.length) throw new Error('a request that fitted the history allocation was trimmed');
 }
 
 /**
