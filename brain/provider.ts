@@ -98,7 +98,31 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
   return out;
 }
 
-export interface ProviderCallOptions { signal?: AbortSignal; maxOutputTokens?: number; onCacheProbe?: (data: CacheProbe) => void }
+export interface RequestTiming { durationMs: number; firstByteMs: number | null }
+export interface ProviderCallOptions {
+  signal?: AbortSignal;
+  maxOutputTokens?: number;
+  onCacheProbe?: (data: CacheProbe) => void;
+  onTiming?: (timing: RequestTiming) => void;
+  /** Internal Responses-stream hook installed by timedProvider; called for the first body chunk. */
+  onFirstByte?: () => void;
+}
+/** Time a provider call across protocol retries. Telemetry failures never replace the model's reply or error. */
+function timedProvider(provider: Provider): Provider {
+  return async (messages, tools, options) => {
+    if (options?.onTiming === undefined) return provider(messages, tools, options);
+    const started = performance.now();
+    let firstByteMs: number | null = null;
+    let reported = false;
+    const finish = (): void => {
+      if (reported) return;
+      reported = true;
+      try { options.onTiming?.({ durationMs: Math.round(performance.now() - started), firstByteMs }); } catch { /* telemetry only */ }
+    };
+    const instrumented: ProviderCallOptions = { ...options, onFirstByte: () => { if (firstByteMs === null) firstByteMs = Math.round(performance.now() - started); } };
+    try { return await provider(messages, tools, instrumented); } finally { finish(); }
+  };
+}
 function outputLimit(options?: ProviderCallOptions): number | undefined {
   const value = options?.maxOutputTokens;
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 32768))
@@ -408,6 +432,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         const decoder = new TextDecoder();
         let text = '';
         for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          options?.onFirstByte?.();
           const piece = decoder.decode(chunk, { stream: true });
           text += piece;
           feed(piece);
@@ -466,16 +491,16 @@ export function connect(env: Record<string, string | undefined>, send?: typeof f
   };
   const entry = providerFor(env.TENERAL_PROVIDER);
   const model = need('TENERAL_MODEL');
-  if (entry.wire === 'chat') return openAiProvider({ baseUrl: need('TENERAL_BASE_URL'), apiKey: need('TENERAL_API_KEY'), model, fetch: send });
+  if (entry.wire === 'chat') return timedProvider(openAiProvider({ baseUrl: need('TENERAL_BASE_URL'), apiKey: need('TENERAL_API_KEY'), model, fetch: send }));
   const cacheKey = env.TENERAL_ID;
   const namespace = entry.tools === 'namespace' ? 'teneral' : undefined;
   if (entry.auth === 'key' || env.TENERAL_API_KEY) {
     const baseUrl = need('TENERAL_BASE_URL');
     const key = need('TENERAL_API_KEY');
-    return responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, cacheKey, fetch: send });
+    return timedProvider(responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, cacheKey, fetch: send }));
   }
   const dir = need('TENERAL_AUTH');
-  return responsesProvider({
+  return timedProvider(responsesProvider({
     baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, cacheKey, sessionId: env.TENERAL_ID, fetch: send,
-  });
+  }));
 }

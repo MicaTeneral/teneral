@@ -6,6 +6,7 @@ import { runTurn } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
+import { decideBudget } from '../../body/adaptive-budget';
 import { appendEvent, readEvents } from '../../brain/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
@@ -202,6 +203,19 @@ test('the tool specs count against the budget', async () => {
   expect(await run([])).toHaveLength(4);
   const withSpecs = await run([wordy]);
   expect(withSpecs.map((m) => m.content)).toEqual(['SYS', 'newest']);
+});
+
+test('a successful adaptive-budget request journals provider timing without changing its reply', async () => {
+  const s = setup([]);
+  const provider: Provider = async (_messages, _tools, options) => {
+    options?.onTiming?.({ durationMs: 123, firstByteMs: 45 });
+    return { text: 'timed', toolCalls: [], usage: { input: 10, output: 2, cached: 5 } };
+  };
+  const budget = decideBudget([], null, undefined, 10_000);
+  expect(await runTurn({ ...s.deps, provider, budget })).toBe('done');
+  const note = readEvents(s.journal).find((e) => e.type === 'note' && e.kind === 'budget.sent.v1');
+  expect(note).toMatchObject({ data: { durationMs: 123, firstByteMs: 45, input: 10, cached: 5 } });
+  expect(readEvents(s.journal).filter((e) => e.type === 'assistant').at(-1)).toMatchObject({ text: 'timed' });
 });
 
 test('a request the provider refuses as too long is tried once more at half the budget, which then holds for the turn', async () => {

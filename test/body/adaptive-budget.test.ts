@@ -18,6 +18,25 @@ test('with no measurements and no known window, the historical default stands', 
   expect(d.stepShare).toBe(0.2);
   expect(d.report.samples).toBe(0);
   expect(d.report.cachedRatio).toBeNull();
+  expect(d.report.durationMs).toBeNull();
+  expect(d.report.firstByteMs).toBeNull();
+  expect(d.report.timedSamples).toBe(0);
+});
+
+test('optional request timings are aggregated without changing the budget or excluding legacy notes', () => {
+  const plain = sent(200_000, 50_000, 45_000);
+  const measured = [
+    plain,
+    ev(SENT_KIND, { chars: 200_000, input: 50_000, cached: 45_000, dropped: 0, durationMs: 1000, firstByteMs: 100 }),
+    ev(SENT_KIND, { chars: 200_000, input: 50_000, cached: 45_000, dropped: 0, durationMs: 2000, firstByteMs: 400 }),
+    ev(SENT_KIND, { chars: 200_000, input: 50_000, cached: 45_000, dropped: 0, durationMs: -1, firstByteMs: 'bad' }),
+  ];
+  const report = decideBudget(measured, 262_144, undefined, DEFAULT_BUDGET);
+  expect(report.budgetChars).toBe(decideBudget([plain], 262_144, undefined, DEFAULT_BUDGET).budgetChars);
+  expect(report.report.durationMs).toBe(1500);
+  expect(report.report.firstByteMs).toBe(250);
+  expect(report.report.timedSamples).toBe(2);
+  expect(decideBudget([plain], 262_144, undefined, DEFAULT_BUDGET).report.durationMs).toBeNull();
 });
 
 test('with a known window, the budget scales to it; the owner ceiling caps but never raises', () => {

@@ -20,6 +20,15 @@ No latency field exists yet, so do not claim a measured latency improvement from
 merging pulse or blindly shrinking context. Budget changes need their own commit,
 post-change samples and continuity/quality observation.
 
+## Request latency before budget tuning
+The pulse merge exposed no timing evidence, so a latency win cannot be inferred from cache
+or token counts. Add optional durationMs and firstByteMs to the existing budget.sent.v1
+note (no journal schema change), measured around connect's full protocol call and at the
+first actual Responses body chunk. Aggregate only valid timed samples; legacy notes remain
+valid. This step must not alter budget selection. Tests cover delayed SSE, callback failure,
+loop persistence, aggregation and legacy compatibility. Post-promotion samples will inform
+one separate budget experiment; no improvement is claimed before they exist.
+
 ## Next
 
 0. **Wire Rayforce as memory substrate (2026-11-13, owner-requested).** `body/rayforce-memory.ts` projects the journal into Rayforce as read-only, rebuildable sharded tables (the engine's `table` builtin caps at 2 columns, so the 9 fields split into `id`-keyed pair-tables). `body/rayforce-server.ts` lazily spawns the organ's binary with `-l` so the projection survives a server restart; the teneral journal stays authoritative. `recall` queries the projection first and falls back to the in-process scan. `body/memory.ts` gains a `narrationLine` filter so working commentary ("Memory reconciled…") stops being indexed as facts. Ideal-memory gaps enumerated in the task: self-noise, episodic coverage, semantic retrieval, correction propagation. Verified: projection round-trips live (watermark 2/2); `bun test test/body` 417 pass, `test/kernel` 624 pass, `tsc --noEmit` clean.

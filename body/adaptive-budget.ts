@@ -34,7 +34,7 @@ const FINE_STEP_SHARE = 0.1;
 const FINE_CACHE_BELOW = 0.5;
 
 /** What one sent request reported, under names this file wrote. */
-interface Sent { chars: number; input: number; cached: number; dropped: number }
+interface Sent { chars: number; input: number; cached: number; dropped: number; durationMs?: number; firstByteMs?: number }
 /** What one refused request reported. */
 interface Refused { chars: number }
 
@@ -49,6 +49,12 @@ export interface BudgetReport {
   peakTokens: number | null;
   /** Measured characters per charged input token, or null before any sample. */
   charsPerToken: number | null;
+  /** Mean whole-call latency among samples that carry timing metadata. */
+  durationMs: number | null;
+  /** Mean time to the first Responses body chunk; chat wire currently reports null. */
+  firstByteMs: number | null;
+  /** How many recent samples carried whole-call timing (legacy notes do not). */
+  timedSamples: number;
   /** How many refusals for length the recent window carries. */
   refused: number;
 }
@@ -69,7 +75,9 @@ function readSent(data: unknown): Sent | null {
   const d = data as Record<string, unknown>;
   const chars = num(d.chars), input = num(d.input), cached = num(d.cached), dropped = num(d.dropped);
   if (chars === undefined || input === undefined || cached === undefined || dropped === undefined || input === 0) return null;
-  return { chars, input, cached, dropped };
+  const durationMs = num(d.durationMs), firstByteMs = num(d.firstByteMs);
+  return { chars, input, cached, dropped,
+    ...(durationMs === undefined ? {} : { durationMs }), ...(firstByteMs === undefined ? {} : { firstByteMs }) };
 }
 
 function readRefused(data: unknown): Refused | null {
@@ -114,6 +122,10 @@ export function decideBudget(events: JournalEvent[], windowTokens: number | null
   const cutRate = recent.length > 0 ? totals.cuts / recent.length : null;
   const peakTokens = recent.length > 0 ? Math.max(...recent.map((s) => s.input)) : null;
   const charsPerToken = recent.length > 0 ? totals.chars / totals.input : null;
+  const timed = recent.filter((s): s is Sent & { durationMs: number } => s.durationMs !== undefined);
+  const firstBytes = timed.filter((s): s is Sent & { durationMs: number; firstByteMs: number } => s.firstByteMs !== undefined);
+  const durationMs = timed.length > 0 ? round(timed.reduce((sum, s) => sum + s.durationMs, 0) / timed.length) : null;
+  const firstByteMs = firstBytes.length > 0 ? round(firstBytes.reduce((sum, s) => sum + s.firstByteMs, 0) / firstBytes.length) : null;
 
   // What the measured traffic says the window is worth in characters. With no measurements the
   // fallback ratio carries it; with no known window the historical default stands.
@@ -125,5 +137,5 @@ export function decideBudget(events: JournalEvent[], windowTokens: number | null
   if (ceilingChars !== undefined && ceilingChars > 0) budgetChars = Math.min(budgetChars, Math.floor(ceilingChars));
 
   const stepShare = cachedRatio !== null && cachedRatio < FINE_CACHE_BELOW ? FINE_STEP_SHARE : DEFAULT_STEP_SHARE;
-  return { budgetChars, stepShare, windowTokens, report: { samples: recent.length, cachedRatio, cutRate, peakTokens, charsPerToken, refused } };
+  return { budgetChars, stepShare, windowTokens, report: { samples: recent.length, cachedRatio, cutRate, peakTokens, charsPerToken, durationMs, firstByteMs, timedSamples: timed.length, refused } };
 }

@@ -442,6 +442,25 @@ test('a refusal that is not about the summary, or a second one, is passed on; an
   expect('reasoning' in sent[0]!.body).toBe(false);
 });
 
+test('connect reports actual first-stream-byte and whole-call timing once, and telemetry cannot break a reply', async () => {
+  const sent: Sent[] = [];
+  const encode = new TextEncoder();
+  const delayed = () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encode.encode(sse(CREATED, { type: 'response.output_text.delta', delta: 'hi' })));
+      setTimeout(() => { controller.enqueue(encode.encode(sse(completed([message('hi')])))); controller.close(); }, 15);
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+  const provider = connect({ TENERAL_PROVIDER: 'openai', TENERAL_BASE_URL: 'https://api.test/v1', TENERAL_API_KEY: 'k', TENERAL_MODEL: 'm' }, recorder([delayed], sent));
+  const timings: { durationMs: number; firstByteMs: number | null }[] = [];
+  const reply = await provider([{ role: 'user', content: 'x' }], [], { onTiming: timing => { timings.push(timing); throw new Error('telemetry failed'); } });
+  expect(reply.text).toBe('hi');
+  expect(timings).toHaveLength(1);
+  expect(timings[0]!.firstByteMs).not.toBeNull();
+  expect(timings[0]!.durationMs).toBeGreaterThanOrEqual(timings[0]!.firstByteMs!);
+  expect(timings[0]!.firstByteMs!).toBeLessThan(10_000);
+});
+
 test('the pulse and cache measurements coexist on the Responses events consumed by the official Kimi client', async () => {
   const said: (string | null)[] = [];
   const probes: unknown[] = [];
