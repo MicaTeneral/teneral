@@ -36,8 +36,8 @@ test('typed transport sends builtin list envelope to fake server', async () => {
       pending = pending.subarray(2); greeted = true; socket.write(Buffer.from([3, 0]));
     }
     if (pending.length < 16 || pending.length < 16 + Number(pending.readBigInt64LE(8))) return;
-    expect(pending.subarray(26, 32)).toEqual(Buffer.from([103, 108, 105, 115, 116, 0]));
-    expect(decodeRayValue(pending.subarray(32))).toEqual({ type: -13, value: '(set injected 1)' });
+    expect(pending.subarray(26, 31)).toEqual(Buffer.from([108, 105, 115, 116, 0]));
+    expect(decodeRayValue(pending.subarray(31))).toEqual({ type: -13, value: '(set injected 1)' });
     const payload = encodeRayData(['(set injected 1)']);
     const header = Buffer.alloc(16); header.writeUInt32LE(0xcefadefa); header[4] = 3; header[7] = 2;
     header.writeBigInt64LE(BigInt(payload.length), 8); socket.end(Buffer.concat([header, payload]));

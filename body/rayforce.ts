@@ -38,9 +38,17 @@ export function queryRayforce(port: number, source: string, timeoutMs = 5000): P
 /** Inert data in a one-item list envelope, not an insertion API. The closed
  * RayData subset cannot provide executable symbols or function heads. */
 export function sendRayData(port: number, data: RayData, timeoutMs = 5000): Promise<RayValue> {
+  return callRayData(port, 'list', data, timeoutMs);
+}
+/**
+ * Call a variadic builtin with one closed-data argument. The builtin name is a fixed literal
+ * chosen by the caller, never derived from message text or the data, so no executable symbol can
+ * reach the wire. The data is inert (no symbols/functions).
+ */
+export function callRayData(port: number, builtin: 'list' | 'first' | 'count' | 'table', data: RayData, timeoutMs = 5000): Promise<RayValue> {
   const h = Buffer.alloc(10); h.writeBigInt64LE(2n, 2);
-  const builtin = Buffer.from([103, 108, 105, 115, 116, 0]); // variadic list
-  return requestRayforce(port, Buffer.concat([h, builtin, encodeRayData(data)]), timeoutMs, decodeRayValue);
+  const name = Buffer.from(builtin, 'latin1'); const nul = Buffer.from([0]);
+  return requestRayforce(port, Buffer.concat([h, name, nul, encodeRayData(data)]), timeoutMs, decodeRayValue);
 }
 function requestRayforce<T>(port: number, payload: Buffer, timeoutMs: number, decode: (b: Buffer) => T): Promise<T> {
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) return Promise.reject(Error('Invalid connection bounds'));

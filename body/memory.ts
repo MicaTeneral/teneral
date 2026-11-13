@@ -13,7 +13,12 @@ const groups: Record<string, RegExp> = {
   decision: /decid|agreed|решени|договор|выбра/i,
   project: /rayforce|rayfall|рейфорс/i,
 };
-const tagsOf = (text: string) => Object.entries(groups).filter(([, re]) => re.test(text)).map(([tag]) => tag);
+export const tagsOf = (text: string) => Object.entries(groups).filter(([, re]) => re.test(text)).map(([tag]) => tag);
+
+/** Lines that are the agent's own process narration, not durable facts about the world. Keeping
+ * them out of the auto-derived memory index stops working commentary ("Memory reconciled…") from
+ * polluting recall; curated notes are unaffected. */
+export const narrationLine = /^(Memory reconciled|Продолжаю\.|Понял\.|Назвала себя|Working on it|Let me|Сначала сведу факты)/i;
 const episodeText = (r: Partial<RecordV1>) => r.episode ? [r.text, r.episode.decision, r.episode.reason, ...r.episode.openQuestions].join('\n') : r.text ?? '';
 function validEpisode(value: unknown): value is Episode | undefined {
   if (value === undefined) return true;
@@ -45,7 +50,7 @@ export function memoryRecords(events: JournalEvent[], includeHidden = false): Re
       sources.add(e.id);
       if (typeof e.text !== 'string') continue;
       e.text.split('\n').forEach((text, i) => {
-        if (text.length < 8 || text.length > 1000 || secretLine.test(text)) return;
+        if (text.length < 8 || text.length > 1000 || secretLine.test(text) || narrationLine.test(text)) return;
         const tags = tagsOf(text);
         if (!tags.length) return;
         const id = `${e.id}:${i}`;
