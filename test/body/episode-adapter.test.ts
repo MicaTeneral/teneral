@@ -15,7 +15,7 @@ test('episode view replays curated replacement while retaining original provenan
  expect(journalEpisodeCards(history)[0]?.sources).toEqual(['s1','s2']);
  expect(journalEpisodeCards(history)[0]?.summary).toContain('Wednesday; East');
  expect(journalEpisodeCards(history.slice(0,2))[0]?.id).toBe('m1');
- expect(journalEpisodeCards([...history,{...base,id:'clock',type:'stimulus',source:'clock',text:'tick'}])).toEqual([]);
+ expect(journalEpisodeCards([...history,{...base,id:'clock',type:'stimulus',source:'clock',text:'tick'}])).toHaveLength(1);
 });
 test('invalid provenance cannot create adapter cards',()=>{
  expect(journalEpisodeCards([original,note('m1',['unknown'],'invented')])).toEqual([]);
@@ -56,7 +56,7 @@ test('creation-prefix graph survives replay and withdrawal makes stored summary 
  expect(renderMap(journalBoundEpisodes(later),sources,4000,correctionEdges(later)).stale).toEqual(['m2']);
  const rebuilt=[...later,note('m3',['s1','s2'],'Correction withdrawn; date unresolved; East','m2')];
  expect(renderMap(journalBoundEpisodes(rebuilt),sources,4000,correctionEdges(rebuilt)).cards.map(c=>c.id)).toEqual(['m3']);
- expect(journalBoundEpisodes([...later,{...base,id:'external',type:'stimulus',source:'clock',text:'tick'}])).toEqual([]);
+ expect(journalBoundEpisodes([...later,{...base,id:'external',type:'stimulus',source:'clock',text:'tick'}])).toEqual(journalBoundEpisodes(later));
 });
 
 import {episodeRetrievalBoundary,episodeRetrievalUnchanged} from '../../body/episode-adapter';

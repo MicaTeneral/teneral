@@ -22,11 +22,11 @@ test('bounded call returns original provenance and separate usage',()=>fixture(a
  expect(out.usageScope).toContain('excluded');
  expect(readEvents(ctx.journal).filter(e=>e.type==='assistant')).toHaveLength(0);
 }));
-test('external audience forbids call and changed turn discards result',()=>fixture(async ctx=>{
+test('external audience allows call but changed turn discards result',()=>fixture(async ctx=>{
  let calls=0;
  const tool=semanticRecall(async()=>{calls++;appendEvent(ctx.journal,'g',{type:'stimulus',source:'agent:other',text:'hello'});return{text:'[]',toolCalls:[]};});
  expect(JSON.parse(await tool.run({query:'history'},ctx)).status).toBe('stale');
- await expect(tool.run({query:'history'},ctx)).rejects.toThrow('terminal');expect(calls).toBe(1);
+ expect(JSON.parse(await tool.run({query:'history'},ctx)).status).toBe('stale');expect(calls).toBe(2);
 }));
 test('malformed selection still retains usage receipt; timeout never retries',()=>fixture(async ctx=>{
  const tool=semanticRecall(async()=>({text:'not JSON',toolCalls:[],usage:{input:2,output:1}}));

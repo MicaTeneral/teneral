@@ -18,8 +18,8 @@ test('malformed/invented selections and audience races fail closed',async()=>{
   return {text:'[{"id":"m","relation":"supports"}]',toolCalls:[]};
  })).rejects.toThrow('Stale');
  let called=false;
- await expect(retrieveEpisodes('query',()=>current,async()=>{called=true;return {text:'[]',toolCalls:[]};})).rejects.toThrow();
- expect(called).toBe(false);
+ expect(await retrieveEpisodes('query',()=>current,async()=>{called=true;return {text:'[]',toolCalls:[]};})).toEqual([]);
+ expect(called).toBe(true);
 });
 
 test('deadline and cancellation bound uncooperative providers',async()=>{

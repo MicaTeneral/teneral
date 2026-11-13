@@ -17,7 +17,7 @@ test('withdrawal replays without deleting originals and cannot resurrect withdra
 test('eligibility, ordering, schema, audience and edge budget fail closed',()=>{
  expect(correctionEdges([source('a'),add,source('b')])).toEqual([]);
  expect(correctionEdges([source('a','clock'),source('b'),add])).toEqual([]);
- expect(correctionEdges([...history,source('clock','clock')])).toEqual([]);
+ expect(correctionEdges([...history,source('clock','clock')])).toEqual(correctionEdges(history));
  expect(correctionEdges([...history.slice(0,2),note('bad',{op:'add',source:'a',affects:'b'})])).toEqual([]);
  expect(correctionEdges([...history.slice(0,2),note('bad',{op:'add',source:'b',affects:'a',extra:'x'})])).toEqual([]);
  expect(()=>correctionEdges(history,0)).toThrow();

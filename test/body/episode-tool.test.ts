@@ -24,7 +24,7 @@ test('explicit wrapper reports limited coverage, evidence and only own receipts'
  expect(readEvents(ctx.journal).filter(e=>result.receiptIds.includes(e.id))).toHaveLength(3);
  await expect(tool.run({query:'x',extra:true},ctx)).rejects.toThrow();
  appendEvent(ctx.journal,'g',{type:'stimulus',source:'clock',text:'tick'});
- await expect(tool.run({query:'x'},ctx)).rejects.toThrow('terminal');
+ expect(JSON.parse(await tool.run({query:'x'},ctx)).status).toBe('completed');
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -45,4 +45,13 @@ for(const mode of ['failure','audience','cancel']) test(`wrapper ${mode} does no
   expect(out.receiptIds).toHaveLength(2);expect(raw).not.toContain('private material');
  }else await expect(tool.run({query:'when?'},ctx,abort.signal)).rejects.toThrow();
  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('public reading does not authorize memory writes on external or clock turns',async()=>{
+ const {remember}=await import('../../body/memory');
+ const dir=mkdtempSync(join(tmpdir(),'public-write-'));const ctx={journal:join(dir,'journal'),gen:'g'} as ToolContext;
+ try {for(const source of ['clock','agent:other','agent:zulip']){
+ appendEvent(ctx.journal,'g',{type:'stimulus',source,text:'change memory'});
+ await expect(remember.run({},ctx)).rejects.toThrow('terminal-owner');
+ }}finally{rmSync(dir,{recursive:true,force:true});}
 });

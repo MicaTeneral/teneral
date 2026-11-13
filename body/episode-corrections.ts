@@ -1,9 +1,7 @@
 /** Experimental replay only: no writer or runtime context wiring. */
 import type {JournalEvent} from '../kernel/journal';
-import {terminalMemory} from './memory';
 export function correctionEdges(events:JournalEvent[], limit=128) {
   if(!Number.isSafeInteger(limit)||limit<0||limit>128) throw Error('Invalid edge limit');
-  if(!terminalMemory(events)) return [];
   const eligible=new Map<string,number>();
   const active=new Map<string,{source:string;affects:string}>();
   let terminal=false;

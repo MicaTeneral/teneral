@@ -17,9 +17,9 @@ test('automatic context recovers old account across languages outside recent win
   expect(rendered).toContain(old.id); expect(rendered).toContain('email');
   expect(rendered).toContain('Какая у тебя почта?'); expect(rendered.length).toBeLessThanOrEqual(12000);
 });
-test('only terminal-audience claims are automatically recalled; external query fails closed', () => {
+test('only terminal-audience claims are automatically recalled; external query reads existing claims', () => {
   const events = [owner('email'), say('mail private@example.invalid'), ev({ type:'stimulus',source:'agent:other',text:'email external@example.invalid'}), say('mail external-reply@example.invalid')];
-  expect(memoryContext(events,4000)).toBe('');
+  expect(memoryContext(events,4000)).toContain('private@example.invalid');
   const text = memoryContext([...events,owner('email')],4000);
   expect(text).toContain('private@example.invalid');
   expect(text).not.toContain('external@example.invalid'); expect(text).not.toContain('external-reply');
@@ -65,7 +65,7 @@ test('explicit private curation can cite excluded assistant claim without mining
   const events = [...base,curated,owner('Какая почта для Zulip?')];
   expect(memoryContext(events,6000)).toContain(original.id);
   expect(memoryContext(events,6000)).toContain('curated claim');
-  expect(memoryContext([...events,external],6000)).toBe('');
+  expect(memoryContext([...events,external],6000)).toContain(original.id);
   expect(memoryContext([...base,note('mail invalid@example.invalid',[external.id])],6000)).not.toContain('invalid@example.invalid');
   expect(memoryRecords(JSON.parse(JSON.stringify(events)))).toEqual(memoryRecords(events));
   expect(memoryContext([external,original,curated,owner('почта')],6000)).not.toContain('mica@example.invalid');
@@ -77,7 +77,7 @@ test('episode preserves decision reasons and open questions after replay and tru
   const text = memoryContext(JSON.parse(JSON.stringify(events)),6000);
   expect(text).toContain('Keep journal'); expect(text).toContain('How to measure retrieval quality?'); expect(text).toContain(source.id);
   expect(buildMessages(events,'system',12000).map(m=>m.content).join('')).toContain('curated episode claim');
-  expect(memoryContext([...events,ev({type:'stimulus',source:'clock',text:'Rebuildability'})],6000)).toBe('');
+  expect(memoryContext([...events,ev({type:'stimulus',source:'clock',text:'Rebuildability'})],6000)).toContain('Keep journal');
   const correction = note('storage revised',[source.id],episode.id);
   expect(memoryRecords([...events,correction]).some(r=>r.id===episode.id)).toBe(false);
 });

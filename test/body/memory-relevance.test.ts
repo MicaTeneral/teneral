@@ -35,7 +35,7 @@ function evaluate(genericTags: boolean) {
     const selected=records.map(r=>r.id);
     for(const r of records) expect(r.sources).toEqual([`source-${r.id}`]);
     expect(output.length).toBeLessThanOrEqual(6000);
-    expect(memoryContext([...events,{type:'stimulus',source:'agent:other',text,id:'external',ts:'',gen:'g',v:1}],6000)).toBe('');
+    expect(memoryContext([...events.slice(0,-1),{type:'stimulus',source:'agent:other',text,id:'external',ts:'',gen:'g',v:1}],6000)).toBe(output);
     if(expected && selected.includes(expected)) hits++;
     if(!expected && selected.length) falsePositiveQueries++;
     return {text,expected,selected};

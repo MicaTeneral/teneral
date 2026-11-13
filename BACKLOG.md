@@ -465,3 +465,8 @@ Integration motive: bounded paraphrase lookup now passes projection/privacy test
 but unavailable at runtime. Register explicit episodeRecall only (not semanticRecall),
 no startup call or automatic context change. Verify full suite/typecheck; kernel
 ready/exit75/probation lifecycle remains untouched by single tools-list addition.
+
+Owner all-public policy: remove channel-based READ restrictions after explicit
+«все публично» / «снимай». Retain write authority, credential filters and async
+snapshot checks. Regression: clock/external reads succeed, outsiders cannot write,
+changed turn still invalidates in-flight retrieval. No archive publication.

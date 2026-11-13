@@ -14,11 +14,11 @@ test('does not search external messages, notes or tool payloads', () => {
   const events = [ev({type:'stimulus',source:'agent:other',text:'needle external'}), ev({type:'note',kind:'test',data:'needle note'}), ev({type:'tool.result',callId:'x',ok:true,output:'needle tool'}), owner];
   expect(recallJournal(events,'needle')).toContain('No matches');
 });
-test('private recall fails closed on nonterminal wakes including clocks', () => {
+test('public recall works on nonterminal wakes including clocks', () => {
   for (const source of ['agent:zulip', 'clock', 'agent:other']) {
-    expect(() => recallJournal([owner,ev({type:'stimulus',source,text:'query'})], 'mail')).toThrow('terminal-owner');
+    expect(recallJournal([ev({type:'assistant',text:'mail visible',toolCalls:[]}),owner,ev({type:'stimulus',source,text:'query'})], 'mail')).toContain('mail visible');
   }
-  expect(() => recallJournal([], 'mail')).toThrow();
+  expect(recallJournal([], 'mail')).toContain('No matches');
 });
 test('omits secret-shaped lines and never searches assistant tool arguments', () => {
   const result = recallJournal([ev({type:'assistant',text:'mail password=DO_NOT_PRINT\nmail address test@example.invalid',toolCalls:[{id:'x',name:'bash',args:{command:'mail SECRET_ARGUMENT'}}]}),owner], 'mail');

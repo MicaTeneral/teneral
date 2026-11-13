@@ -1,9 +1,8 @@
 /** Experimental journal-derived view, not a new store or runtime injection. */
 import type {JournalEvent} from '../kernel/journal';
-import {memoryRecords,terminalMemory} from './memory';
+import {memoryRecords} from './memory';
 import type {EpisodeCard} from './episode-map';
 export function journalEpisodeCards(events:JournalEvent[]):EpisodeCard[] {
-  if(!terminalMemory(events)) return [];
   const records=memoryRecords(events).filter(record=>record.episode!==undefined);
   if(records.length>MAX_CARDS) throw Error("Episode card budget exceeded");
   const cards=records.map(record=>({
@@ -41,7 +40,7 @@ function boundedSnapshot(value:unknown) {
 /** Retrieval projection token, not a guard for arbitrary episode creation. Local only;
  * append must follow validation synchronously, without another await. */
 export function episodeRetrievalBoundary(events:JournalEvent[]) {
-  if(!terminalMemory(events)) throw Error('Private episode requires terminal audience');
+  if(!events.some(e=>e.type==='stimulus')) throw Error('Episode requires a query turn');
   const bound=journalBoundEpisodes(events);
   const ids=new Set(bound.flatMap(item=>item.card.sources));
   const sources=events.filter(event=>ids.has(event.id));
@@ -50,5 +49,5 @@ export function episodeRetrievalBoundary(events:JournalEvent[]) {
   return boundedSnapshot({bound,sources,corrections,graph:correctionEdges(events),audience});
 }
 export function episodeRetrievalUnchanged(boundary:string,events:JournalEvent[]):boolean {
-  return terminalMemory(events)&&episodeRetrievalBoundary(events)===boundary;
+  return episodeRetrievalBoundary(events)===boundary;
 }
