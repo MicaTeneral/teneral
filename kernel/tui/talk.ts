@@ -65,7 +65,7 @@ const HELP = [
   '',
   'Leaving ends this client only. Nothing else here stops the agent or changes it.',
   '',
-  'A line you send stands over the input box until the agent has read it. "queued": the agent is in the middle of a step, so this client keeps the line and sends it when the step ends; until then Up in an empty box takes the last queued line back into the box, to change it, or to drop it by clearing the box. Leaving sends what is queued. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "sent, not read yet": the agent has it and reads it with its next step. When the mark is gone and the line has moved up into the conversation, the agent has read it.',
+  'A line you send stands over the input box, faint, until the agent has read it. While the agent is in the middle of a step this client keeps the line and sends it when the step ends: the footer says how many are queued, and Up in an empty box takes the last one back into the box, to change it, or to drop it by clearing the box. Leaving sends what is queued. "on its way": sent, and not taken by the agent yet; when nobody is running, it waits for the next start. "sent, not read yet": the agent has it and reads it with its next step. Once read, the line moves up into the conversation and stands there on a ground of its own.',
   '',
   'While the agent is doing something, the line over the input box says what: waking (its first start, before its first words), thinking, running <tool>, mutating (it proposed a change to its own body and the kernel is checking it), starting (between two runs). At other times it is resting, not running, or waiting for you: its last finished reply ended with a question mark and nothing has arrived since.',
 ];
@@ -945,7 +945,7 @@ export class TalkScreen {
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
+    const stamp = `${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -970,7 +970,13 @@ export class TalkScreen {
       list = { matches: offered.matches, chosen: offered.chosen, keys: ['Tab completes', runs ? 'Enter runs' : 'Enter completes', 'Esc closes', 'Up/Down choose'] };
     }
     const esc = this.interrupting !== null ? `interrupting ${g.ellipsis}` : stoppable && list === null ? 'esc to interrupt' : '';
-    const activity: Line | null = active
+    // The turn is owed and the last try at it failed: that is said, with when the next one is, in place of a spinner that would look like thought.
+    const failed = s.trouble !== null && (word === 'thinking' || word === 'waking') ? s.trouble : null;
+    const wait = failed === null || failed.retryAt === null ? '' : failed.retryAt > now ? `next try in ${Math.max(1, Math.ceil((failed.retryAt - now) / 60_000))} min` : 'trying again';
+    const activity: Line | null = failed !== null
+      ? [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} cannot get an answer from the model`, style: { fg: 'warn', bold: true } },
+        { text: ` ${g.sep} ${failed.failures} in a row${wait === '' ? '' : ` ${g.sep} ${wait}`} ${g.sep} ${failed.message}`, style: { fg: 'dim' } }]
+      : active
       ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: clock === '' ? '' : ` ${g.sep} ${clock}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 

@@ -12,7 +12,7 @@ import { ENTRY_LIMIT } from '../../../kernel/tui/model';
 import { ago, lineage } from '../../../kernel/tui/talk';
 import { commitAll, writeFiles } from '../helpers';
 import { gif, jpeg, png } from './pictures';
-import { A, B, C, expectFrame, stage, type Stage } from './stage';
+import { A, B, C, T0, expectFrame, stage, type Stage } from './stage';
 import { sequences } from './vt';
 
 const PASTE = (text: string): string => `\x1b[200~${text}\x1b[201~`;
@@ -248,15 +248,17 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   // Something said meanwhile waits under the call that is still running. The owner's line is kept by this client: nothing is sent yet.
   s.type('and thn?\r');
   s.journal({ type: 'stimulus', source: 'clock', text: 'tick' }, 4500);
-  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\? {2}queued\n\n/);
+  expect(s.live()).toMatch(/running\n\n {2}◦ clock {2}tick\n\n› and thn\?\n\n/);
   expect(s.live()).toContain('1 queued · Up takes the last back');
   expect(sentFiles(s)).toEqual(['look around']);
   // Up in the empty box takes it back to be put right; Enter queues it again.
   s.type('\x1b[A');
   expect(s.live()).not.toContain('queued');
+  expect(s.live()).not.toMatch(/^› and thn\?$/m);
   expect(s.live()).toContain('│ › and thn?');
   s.type('\x7f\x7fen?\r');
-  expect(s.live()).toMatch(/› and then\? {2}queued\n\n/);
+  expect(s.live()).toMatch(/^› and then\?\n\n/m);
+  expect(s.live()).toContain('1 queued');
   expect(sentFiles(s)).toEqual(['look around']);
   // The result arrives: the call is printed with its outcome, and the step being over, the line goes out.
   s.journal({ type: 'tool.result', callId: 'c1', ok: true, output: 'a\nb' }, 5300);
@@ -1402,4 +1404,21 @@ test('when the species has other cage files than the install, the owner is told 
   settled(s);
   expect(flowed(s)).toContain('The species has other versions of box, Dockerfile than this install.');
   expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('The species has other versions');
+});
+
+test('a turn that failed and waits to be tried again is said so over the box, with why and when, and is gone once an answer comes', () => {
+  const s = stage(120, 30, { name: 'Mica' });
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'hello?' }, 1000);
+  s.clock.at = 5000;
+  expect(s.live()).toContain('Mica is thinking');
+  s.journal({ type: 'note', kind: 'turn.failed', data: { kind: 'passing', failures: 4, message: 'the usage limit is reached', retryAt: new Date(T0 + s.clock.at + 14 * 60_000 + 5000).toISOString() } }, 5000);
+  expect(s.live()).toContain('! Mica cannot get an answer from the model · 4 in a row · next try in 15 min · the usage limit is reached');
+  expect(s.live()).not.toContain('is thinking');
+  s.clock.at += 10 * 60_000;
+  expect(s.live()).toContain('next try in 5 min');
+  s.clock.at += 6 * 60_000;
+  expect(s.live()).toContain('4 in a row · trying again · the usage limit');
+  s.journal({ type: 'assistant', text: 'Here now.', toolCalls: [] }, s.clock.at);
+  expect(s.live()).not.toMatch(/cannot get an answer|thinking/);
 });
