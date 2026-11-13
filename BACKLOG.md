@@ -501,3 +501,8 @@ fingerprints immediately before Responses POST; journal only aggregate lengths,
 prefix reuse and static-field equality for main-turn calls. Never headers, tokens,
 request content or hashes in journal. Auxiliary calls excluded via callback scope.
 Success: distinguish local prefix churn from provider cache misses on live calls.
+
+## Adopt species usage/footer (owner request)
+Merge origin/main ef3f4f9 in one step, retaining prior TUI and cache work.
+Adds /usage journal token totals and one-row cache-coloured footer (also README).
+Validate full tests/typecheck before promotion; cache investigation remains priority.
