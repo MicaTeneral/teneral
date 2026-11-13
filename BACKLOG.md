@@ -475,3 +475,9 @@ Species queue display adoption (owner request): merge origin/main 97b629b;
 owner messages pending delivery/read remain over input with on its way/queued.
 Includes accumulated upstream documentation/site/package metadata changes.
 No lineage body changes; verify full suite and typecheck, then species acceptance.
+
+## Species e58cd11: editable client queue and owner colour
+Owner requests newest TUI update after queue-display adoption. Inspect and merge
+upstream unchanged, preserving lineage memory. Verify typecheck and full suite;
+then request species acceptance/promotion. Client-held messages can return to
+editing with Up; already sent messages cannot. Closing client flushes queue.
