@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { dirname, join } from 'node:path';
 import { formatList, generations } from '../back';
 import { helpRows, takes, type Command } from '../commands';
+import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
 import { ownerCommand } from '../offer';
 import { accept, acceptedLine, interrupt, tell } from '../owner';
@@ -20,7 +21,7 @@ import { Inline, Lifeline, terminal, type Term } from './screen';
 import { complete, entered, offer, type Typed } from './slash';
 import { clean, type Line, type Span } from './text';
 import { SPIN_MS, glyphs, type Glyphs } from './theme';
-import { contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look, type Offered } from './view';
+import { cacheUse, contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look, type Offered } from './view';
 
 // The talk client: `./box talk` at a terminal. The owner's lines go out through the owner channel
 // (kernel/owner.ts) and everything shown is read back from the journal, exactly as the plain
@@ -248,7 +249,7 @@ export class TalkScreen {
 
   constructor(private readonly o: TalkScreenOptions) {
     this.inline = new Inline(o.term);
-    this.g = glyphs(o.term.caps.utf8);
+    this.g = glyphs(o.term.caps.utf8, /^(1|true|yes|on)$/i.test(o.env.TENERAL_POWERLINE ?? ''));
     // A terminal that went away without a word: the client ends, as if the owner had left.
     this.lifeline = new Lifeline(o.term, () => this.close(0), o.lifelineMs);
     this.now = o.now ?? Date.now;
@@ -780,6 +781,15 @@ export class TalkScreen {
         }
         return this.page('generations, oldest first', clean(list).split('\n'));
       }
+      case '/usage': {
+        let lines: string[];
+        try {
+          lines = formatUsage(usageReport(readEvents(this.o.paths.journal), this.now(), this.standing.current));
+        } catch (err) {
+          lines = [`It could not be read: ${err instanceof Error ? err.message : String(err)}`];
+        }
+        return this.page('what the model was asked for', lines);
+      }
       case '/offers':
       case '/approve':
         return this.page(name === '/offers' ? 'waiting for your approval' : 'approval', clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n'));
@@ -973,7 +983,7 @@ export class TalkScreen {
     const chips = this.edit.chips.length;
     const hint = waiting !== '' ? `${waiting} ${g.ellipsis}`
       : chips > 0 ? `attached: ${this.edit.chips.map((_, i) => `image ${i + 1}`).join(', ')} ${g.sep} Backspace at the start removes the last`
-      : this.queue.length > 0 ? `${this.queue.length} queued ${g.sep} Up in an empty box takes the last one back` : '';
+      : this.queue.length > 0 ? `${this.queue.length} queued ${g.sep} Up takes the last back` : '';
     let context = '';
     if (s.usage !== null) {
       const window = (providers as { contextWindow?: unknown }).contextWindow;
@@ -982,7 +992,7 @@ export class TalkScreen {
         const said: unknown = typeof window === 'function' ? window(this.o.env.TENERAL_PROVIDER ?? providers.DEFAULT_PROVIDER, this.o.env.TENERAL_MODEL ?? '') : null;
         known = typeof said === 'number' && said > 0 ? said : null;
       } catch { /* not known */ }
-      context = contextUse(s.usage.input + s.usage.output, known);
+      context = [cacheUse(s.usage.input, s.usage.cached), contextUse(s.usage.input + s.usage.output, known)].filter((part) => part !== '').join(` ${g.sep} `);
     }
     this.inline.paint(liveRows({
       cols, rows, g,
