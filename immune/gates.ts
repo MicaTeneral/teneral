@@ -26,7 +26,7 @@ export interface Check {
 
 export const DEFAULT_CHECKS: readonly Check[] = [
   { gate: 'types', cmd: ['bun', 'x', 'tsc', '--noEmit'] },
-  // Two runs, so the stem's tests and the agent's own, of its body and its brain, each have to show up and pass on their own.
+  // Two runs, so the tests of what supervises and judges the agent, and the agent's own, of its body and its brain, each have to show up and pass on their own.
   // A lineage from before there was a brain has no test/brain, and bun then runs what test/body holds.
   { gate: 'tests-stem', cmd: ['bun', 'test', 'test/stem', 'test/immune', 'test/species', 'test/keeper'], bunSummary: true },
   { gate: 'tests-body', cmd: ['bun', 'test', 'test/body', 'test/brain'], bunSummary: true },
@@ -51,6 +51,8 @@ export interface BodyPlaces {
   auth?: string;
   /** The directory that holds this generation's pinned organs, one entry per name (immune/organs.ts). Left out when it pins none. */
   organs?: string;
+  /** The file the brain says in what it is doing with the model right now (brain/pulse.ts). Left out where nobody would read it. */
+  pulse?: string;
 }
 
 /** Everything the stem itself sets for a body. The supervisor and the smoke gate both start one with exactly this. */
@@ -62,6 +64,7 @@ export function bodyEnv(at: BodyPlaces): Record<string, string> {
     ...(at.provider ? { TENERAL_PROVIDER: at.provider } : {}),
     ...(at.auth ? { TENERAL_AUTH: at.auth } : {}),
     ...(at.organs ? { TENERAL_ORGANS: at.organs } : {}),
+    ...(at.pulse ? { TENERAL_PULSE: at.pulse } : {}),
   };
 }
 

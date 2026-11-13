@@ -1,4 +1,5 @@
 import { cacheProbe, type CacheProbe } from "../body/cache-probe";
+import { beat, follower, rest, type Pulse } from './pulse';
 import type { ToolCall, Usage } from './journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from './providers';
 import { accessToken, apiBase } from './signin';
@@ -248,6 +249,8 @@ export interface ResponsesConfig {
   summaries?: boolean;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** Told where each request stands as its answer arrives (brain/pulse.ts). Default: the pulse file the stem named. */
+  pulse?: (pulse: Omit<Pulse, 'at'> | null) => void;
 }
 
 type Item = Record<string, unknown>;
@@ -370,6 +373,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     }
   };
   let summaries = cfg.summaries !== false;
+  const say = cfg.pulse ?? ((pulse: Omit<Pulse, 'at'> | null): void => (pulse === null ? rest() : beat(pulse)));
   const once = async (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions): Promise<Reply> => {
     // Cancelled before it began, or between the two tries below: no token is asked for and nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
@@ -385,24 +389,37 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     const post = async (bearer: string): Promise<{ res: Response; text: string }> => {
+      const asked = new Date().toISOString();
       try {
         // Cancelled while the token was fetched or renewed: the request is not made.
         if (options?.signal?.aborted) throw cancelled();
         if (options?.onCacheProbe) options.onCacheProbe(probe(body));
+        say({ asked, step: 'asked', received: 0 });
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
-          // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
+          // The user agent is teneral's own name and version (brain/providers.ts): the truth about who is asking.
           headers: { ...(cfg.sessionId ? { 'session-id': cfg.sessionId } : {}), 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
           body: JSON.stringify(body),
           signal,
         });
-        // The stream is read to its end; the reply is put together afterwards.
-        return { res, text: await res.text() };
+        // The stream is read to its end; the reply is put together afterwards. On the way, the owner's terminal is told where it stands.
+        if (!res.ok || res.body === null) return { res, text: await res.text() };
+        const feed = follower(asked, say);
+        const decoder = new TextDecoder();
+        let text = '';
+        for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          const piece = decoder.decode(chunk, { stream: true });
+          text += piece;
+          feed(piece);
+        }
+        return { res, text: text + decoder.decode() };
       } catch (err) {
         if (err instanceof ProviderError) throw err;
         if (options?.signal?.aborted) throw cancelled();
         if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
         throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
+      } finally {
+        say(null);
       }
     };
     let bearer = await token();

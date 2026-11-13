@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>teneral: an agent that rewrites its own code</title>
-<meta name="description" content="A minimal agent that rewrites its own code, one measured generation at a time. A stem it does not steer checks every new body and puts back the last one that worked.">
+<title>teneral: an agent distilled by evolution</title>
+<meta name="description" content="Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own.">
 <meta name="author" content="Rayforce Technologies Inc.">
 <meta property="og:title" content="teneral">
-<meta property="og:description" content="A minimal agent that rewrites its own code, one measured generation at a time. The conversation outlives every version.">
+<meta property="og:description" content="An agent distilled by evolution. Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own.">
 <meta property="og:image" content="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -93,7 +93,6 @@
   .model text { font-family: inherit; fill: var(--soft); font-size: 15px; }
   .model text.nm { fill: var(--ink); font-size: 18.5px; font-weight: 650; letter-spacing: -.01em; }
   .model text.nm.big { font-size: 21px; }
-  .modelwrap:hover text.nm.big { fill: var(--accent); }
   @keyframes hover { from { transform: translateY(0); } to { transform: translateY(-9px); } }
   .model .float { animation: hover 3.6s ease-in-out infinite alternate; }
   .model .sheen { fill: url(#gsheen); stroke: none; }
@@ -102,6 +101,16 @@
   .model .gel { fill: url(#gbody); stroke: var(--ink); stroke-width: 1.2; stroke-opacity: .45; }
   .model .spec { fill: #fff; opacity: .7; filter: url(#blur3); }
   .model .soulc { fill: url(#gsoul); }
+  .model .gel.thin { vector-effect: non-scaling-stroke; }
+  .model .fold { fill: none; stroke: var(--ink); stroke-opacity: .22; stroke-width: 1.2; stroke-linecap: round; }
+  .model .mem { fill: url(#gmem); stroke: var(--soft); stroke-opacity: .6; stroke-width: 1.3; }
+  .model .memhi { fill: none; stroke: #fff; stroke-opacity: .8; stroke-width: 3; stroke-linecap: round; filter: url(#blur3); }
+  .model .pore { fill: var(--paper); stroke: var(--accent); stroke-width: 2.5; }
+  .model .puck .top { fill: var(--ink); stroke: var(--ink); stroke-width: 1.5; }
+  .model .puck .side { fill: var(--ink); fill-opacity: .78; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+  .model ellipse.sheen { fill: url(#gsheen); stroke: none; }
+  .model .float.late { animation-delay: -1.5s; animation-duration: 4.4s; }
+  .modelwrap:hover text.nm { fill: var(--accent); }
   .model .halo { fill: var(--accent); opacity: .55; filter: url(#blur12); transform-origin: 186px 192px; animation: breathe 2.8s ease-in-out infinite alternate; }
   @keyframes breathe { from { transform: scale(.8); opacity: .35; } to { transform: scale(1.2); opacity: .65; } }
   @media (prefers-reduced-motion: reduce) { .model .float, .model .halo { animation: none; } }
@@ -130,6 +139,7 @@
   ol.steps li strong { color: var(--ink); font-weight: 600; }
 
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 34px; }
+  .two.pair { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
 
   pre {
     background: var(--code); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
@@ -152,6 +162,7 @@
   <header class="top">
     <a href="#top" aria-label="teneral"><img class="logo" src="logo.png" alt="teneral" width="1200" height="308"></a>
     <nav>
+      <a href="#anatomy">Anatomy</a>
       <a class="wide" href="#how">How it works</a>
       <a href="#foundation">Foundation</a>
       <a class="wide" href="#species">The species</a>
@@ -164,23 +175,23 @@
 <main id="top">
   <div class="wrap hero">
     <div>
-      <h1>An agent that rewrites its own code.</h1>
-      <p class="lede">One measured generation at a time. Like a brainstem, a small supervisor it does not steer checks every new body and puts back the last one that worked. The conversation outlives every version.</p>
+      <h1>An agent distilled by evolution.</h1>
+      <p class="lede">Each teneral rebuilds itself around its owner's work, one measured generation at a time. What proves itself in one individual is offered back to the species, so a new clone starts from the distilled experience of every one before it, and then becomes its own.</p>
       <div class="actions">
         <a class="btn solid" href="#start">Raise one</a>
         <a class="btn" href="https://github.com/RayforceDB/teneral">Read the source</a>
       </div>
-      <p class="meta">A project of <a href="https://rayforcedb.com/">Rayforce Technologies Inc.</a> · open source under MIT · built on <a href="https://rayforcedb.com/">RayforceDB</a></p>
+      <p class="meta">Built on <a href="https://rayforcedb.com/">RayforceDB</a></p>
     </div>
 
-    <a class="modelwrap" href="#foundation"><svg class="model" viewBox="0 70 520 590" role="img" aria-label="One individual: RayforceDB as the foundation, the journal and the stem as hard layers above it, the body as a soft translucent form floating over them, and the soul as a light inside the body."><defs>
+    <a class="modelwrap" href="#anatomy"><svg class="model" viewBox="0 -34 520 520" role="img" aria-label="One individual. At the bottom the stem, a dark rounded base. Above it two soft translucent forms: the body, with the soul as a light inside it, and over the body the smaller brain, with a dark crystal inside it, RayforceDB. Around both is the immune layer, a thin clear membrane with one opening."><defs>
 <radialGradient id="gbody" cx="36%" cy="28%" r="80%"><stop offset="0" style="stop-color:#fff;stop-opacity:.95"/><stop offset=".5" style="stop-color:var(--soft);stop-opacity:.12"/><stop offset="1" style="stop-color:var(--soft);stop-opacity:.42"/></radialGradient>
 <radialGradient id="gsoul" cx="38%" cy="32%" r="70%"><stop offset="0" style="stop-color:#fff"/><stop offset=".55" style="stop-color:var(--accent);stop-opacity:.9"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></radialGradient>
 <linearGradient id="gsheen" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/></linearGradient>
 <filter id="blur8" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="8"/></filter>
 <filter id="blur12" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12"/></filter>
 <filter id="blur3" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
-</defs><polygon class="shadow" points="158,483 308,558 158,633 8,558"/><g class="slab base"><polygon class="l" points="8,500 158,575 158,615 8,540"/><polygon class="r" points="308,500 158,575 158,615 308,540"/><polygon class="t" points="158,425 308,500 158,575 8,500"/><polygon class="sheen" points="158,425 308,500 158,575 8,500"/><path class="rule" d="M26.8 490.6L176.8 565.6M45.5 481.2L195.5 556.2M64.2 471.9L214.2 546.9M83.0 462.5L233.0 537.5M101.8 453.1L251.8 528.1M120.5 443.8L270.5 518.8M139.2 434.4L289.2 509.4"/></g><polygon class="shadow" points="158,388 286,452 158,516 30,452"/><g class="slab journal"><polygon class="l" points="30,392 158,456 158,466 30,402"/><polygon class="r" points="286,392 158,456 158,466 286,402"/><polygon class="t" points="158,328 286,392 158,456 30,392"/><polygon class="sheen" points="158,328 286,392 158,456 30,392"/><path class="rule" d="M44.2 399.1L172.2 335.1M58.4 406.2L186.4 342.2M72.7 413.3L200.7 349.3M86.9 420.4L214.9 356.4M101.1 427.6L229.1 363.6M115.3 434.7L243.3 370.7M129.6 441.8L257.6 377.8M143.8 448.9L271.8 384.9"/></g><polygon class="shadow" points="158,282 286,346 158,410 30,346"/><g class="slab stem"><polygon class="l" points="30,290 158,354 158,378 30,314"/><polygon class="r" points="286,290 158,354 158,378 286,314"/><polygon class="t" points="158,226 286,290 158,354 30,290"/><polygon class="sheen" points="158,226 286,290 158,354 30,290"/></g><ellipse class="shadow soft" cx="158" cy="292" rx="78" ry="34"/><g class="float"><ellipse class="halo" cx="186" cy="192" rx="40" ry="34"/><circle class="soulc" cx="186" cy="192" r="15"/><path class="gel" d="M54 186C50 140 96 104 150 108C190 111 204 128 232 138C262 149 270 176 256 204C240 238 190 252 140 248C92 244 58 226 54 186Z"/><ellipse class="spec" cx="112" cy="142" rx="24" ry="10" transform="rotate(-30 112 142)"/></g><path class="lead" d="M236 140L322 112"/><circle class="dot" cx="236" cy="140" r="2.6"/><text class="nm " x="332" y="104">Body</text><text class="ds" x="332" y="125">Senses, thinks, acts.</text><text class="ds" x="332" y="144">Soft: its own to rewrite.</text><path class="lead" d="M204 192L322 196"/><circle class="dot" cx="204" cy="192" r="2.6"/><text class="nm " x="332" y="188">Soul</text><text class="ds" x="332" y="209">Who it is. Written by</text><text class="ds" x="332" y="228">itself, never shared.</text><path class="lead" d="M294 302L322 302"/><circle class="dot" cx="294" cy="302" r="2.6"/><text class="nm " x="332" y="294">Stem</text><text class="ds" x="332" y="315">Judges every new body.</text><text class="ds" x="332" y="334">No mutation changes it.</text><path class="lead" d="M294 397L322 397"/><circle class="dot" cx="294" cy="397" r="2.6"/><text class="nm " x="332" y="389">Journal</text><text class="ds" x="332" y="410">Everything that</text><text class="ds" x="332" y="429">happened, append-only.</text><path class="lead" d="M316 520L322 520"/><circle class="dot" cx="316" cy="520" r="2.6"/><text class="nm big" x="332" y="512">RayforceDB</text><text class="ds" x="332" y="533">The foundation: memory,</text><text class="ds" x="332" y="552">recall and measurement.</text></svg></a>
+<radialGradient id="gmem" cx="50%" cy="50%" r="50%"><stop offset="0" style="stop-color:var(--soft);stop-opacity:0"/><stop offset=".78" style="stop-color:var(--soft);stop-opacity:0"/><stop offset="1" style="stop-color:var(--soft);stop-opacity:.2"/></radialGradient></defs><ellipse class="shadow" cx="158" cy="446" rx="150" ry="34"/><g class="puck"><path class="side" d="M8 384A150 62 0 0 0 308 384L308 418A150 62 0 0 1 8 418Z"/><ellipse class="top" cx="158" cy="384" rx="150" ry="62"/><ellipse class="sheen" cx="158" cy="384" rx="150" ry="62"/></g><ellipse class="mem" cx="156" cy="140" rx="134" ry="156"/><path class="memhi" d="M44 86A134 156 0 0 1 150 -15"/><ellipse class="shadow soft" cx="158" cy="372" rx="84" ry="24"/><g class="float"><ellipse class="halo" cx="186" cy="192" rx="40" ry="34"/><circle class="soulc" cx="186" cy="192" r="15"/><path class="gel" d="M54 186C50 140 96 104 150 108C190 111 204 128 232 138C262 149 270 176 256 204C240 238 190 252 140 248C92 244 58 226 54 186Z"/><ellipse class="spec" cx="112" cy="142" rx="24" ry="10" transform="rotate(-30 112 142)"/></g><g class="float late"><g class="slab base"><polygon class="l" points="136,53 158,64 158,75 136,64"/><polygon class="r" points="180,53 158,64 158,75 180,64"/><polygon class="t" points="158,42 180,53 158,64 136,53"/></g><path class="gel thin" transform="translate(256 -56) scale(-.62 .62)" d="M54 186C50 140 96 104 150 108C190 111 204 128 232 138C262 149 270 176 256 204C240 238 190 252 140 248C92 244 58 226 54 186Z"/><path class="fold" d="M112 44C128 28 148 32 158 20M146 86C168 90 188 76 200 56"/><ellipse class="spec" cx="187" cy="30" rx="13" ry="5.5" transform="rotate(28 187 30)"/></g><circle class="pore" cx="247" cy="255" r="7"/><path class="lead" d="M222 50L322 22"/><circle class="dot" cx="222" cy="50" r="2.6"/><text class="nm" x="332" y="30">Brain</text><text class="ds" x="332" y="51">Thinks and remembers: its</text><text class="ds" x="332" y="70">journal, on RayforceDB.</text><path class="lead" d="M240 146L322 114"/><circle class="dot" cx="240" cy="146" r="2.6"/><text class="nm" x="332" y="122">Body</text><text class="ds" x="332" y="143">Acts and senses.</text><text class="ds" x="332" y="162">Soft: its own to rewrite.</text><path class="lead" d="M204 194L322 196"/><circle class="dot" cx="204" cy="194" r="2.6"/><text class="nm" x="332" y="204">Soul</text><text class="ds" x="332" y="225">Who it is. Written by</text><text class="ds" x="332" y="244">itself, never shared.</text><path class="lead" d="M254 257L322 288"/><circle class="dot" cx="254" cy="257" r="2.6"/><text class="nm" x="332" y="296">Immune</text><text class="ds" x="332" y="317">Every new generation</text><text class="ds" x="332" y="336">must pass through it.</text><path class="lead" d="M306 392L322 384"/><circle class="dot" cx="306" cy="392" r="2.6"/><text class="nm" x="332" y="392">Stem</text><text class="ds" x="332" y="413">Keeps it alive: wakes it,</text><text class="ds" x="332" y="432">and puts it back.</text></svg></a>
   </div>
 
   <section id="what">
@@ -193,11 +204,48 @@
     </div>
   </section>
 
+  <section id="anatomy">
+    <div class="wrap">
+      <p class="eyebrow">Anatomy</p>
+      <h2>One repository, laid out as the organism it holds.</h2>
+      <p>Every part of an individual is a directory of its code, and every part is its own to change. What it changes in its brain and body it mutates into by itself. Anything else becomes a generation only when its owner has approved it.</p>
+
+      <div class="two pair">
+        <div class="card">
+          <span class="path">brain/</span>
+          <h3>Brain</h3>
+          <p>What it thinks and remembers with: the model it calls, the journal of everything that happened to it, what of that is in mind for each thought, and the engine its memory lives in.</p>
+        </div>
+        <div class="card">
+          <span class="path">body/</span>
+          <h3>Body</h3>
+          <p>What it acts and senses with: its tools, its shell, and the channels by which its owner, a clock and other individuals reach it.</p>
+        </div>
+        <div class="card">
+          <span class="path">stem/</span>
+          <h3>Stem</h3>
+          <p>Like a brainstem, the part it does not steer. It wakes the agent, restarts it, and puts back the generation before when a new one cannot stand.</p>
+        </div>
+        <div class="card">
+          <span class="path">immune/</span>
+          <h3>Immune</h3>
+          <p>What decides whether a change takes: the gates each new generation must pass, the owner's approval, and the hash of everything it runs on.</p>
+        </div>
+      </div>
+
+      <ul class="plain">
+        <li><strong>Soul</strong> is a few pages the individual writes about who it is. They are never committed and never shared.</li>
+        <li><strong>Species</strong> is its kin: the published line it descends from, takes from, and offers back to.</li>
+        <li><strong>Keeper</strong> is the owner's side, not part of the organism: the terminal, the setup, the word that approves or sends back. The owner addresses it as <code>./one</code>.</li>
+      </ul>
+    </div>
+  </section>
+
   <section id="foundation">
     <div class="wrap">
       <p class="eyebrow">Foundation</p>
       <h2>Built on RayforceDB.</h2>
-      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal the stem keeps, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows. Memory is not a tool the agent picks up: it is part of its brain, beside the model it thinks with.</p>
+      <p>An agent that keeps rebuilding itself needs ground that holds still while everything above it changes. In teneral that ground is two things: the journal, which is appended to and never rewritten, and <a href="https://rayforcedb.com/"><strong>RayforceDB</strong></a>, where an individual turns that record into what it knows. Memory is not a tool the agent picks up: it is part of its brain, beside the model it thinks with.</p>
       <p>RayforceDB is a SIMD-accelerated columnar database in pure C with no dependencies. It is one small binary that starts in a moment, which is exactly what a body that may be replaced tomorrow can stand on.</p>
 
       <div class="two">
@@ -211,24 +259,14 @@
         </div>
         <div class="card">
           <h3>Pinned with the generation</h3>
-          <p>The engine is pinned in the brain by address and hash. The stem verifies it at the gate, and a rollback brings the old binary back together with the old code.</p>
+          <p>The engine is pinned in the brain by address and hash. It is verified by its hash at the gate, and a rollback brings the old binary back together with the old code.</p>
         </div>
         <div class="card">
           <h3>Rebuildable by rule</h3>
           <p>Whatever lives in the store must be rebuildable from the journal, in a place named by its schema version. A mutation that reshapes memory writes to a new place; the body before it still finds data it understands.</p>
         </div>
       </div>
-
-<pre><span class="c">// brain/engines.json: the whole installation</span>
-{
-  "rayforce": {
-    "url": "https://github.com/RayforceDB/rayforce/releases/download/v3.0.2/rayforce-3.0.2-linux-x86_64.tar.gz",
-    "sha256": "ea20fd48a223ffb3ed3e37a5edcb8a7caf5c5199d4cc8ba4e072d0c21e4a57b7",
-    "dir": "rayforce-3.0.2-linux-x86_64",
-    "check": ["./rayforce", "--help"]
-  }
-}</pre>
-      <p style="margin-top:26px"><strong>Two projects, one loop.</strong> teneral runs RayforceDB under a real workload every day. What an individual finds, it reports or patches upstream; what RayforceDB releases, an individual takes by changing one hash and asking to mutate.</p>
+      <p style="margin-top:34px"><strong>Two projects, one loop.</strong> teneral runs RayforceDB under a real workload every day. What an individual finds, it reports or patches upstream; what RayforceDB releases, an individual takes by changing one hash and asking to mutate.</p>
       <div class="actions" style="margin-top:22px">
         <a class="btn solid" href="https://rayforcedb.com/">RayforceDB</a>
         <a class="btn" href="https://github.com/RayforceDB/rayforce">Source and releases</a>
@@ -240,7 +278,7 @@
     <div class="wrap">
       <p class="eyebrow">How it works</p>
       <h2>A mutation is a commit that has to earn its place.</h2>
-      <p>The agent edits a copy of itself, commits, and asks to mutate. The stem takes that one commit into a clean checkout and decides. Until the new generation has answered once, it is on probation.</p>
+      <p>The agent edits a copy of itself, commits, and asks to mutate. Its immune gates take that one commit into a clean checkout and decide. Until the new generation has answered once, it is on probation.</p>
 
       <div class="life" role="img" aria-label="A running generation asks to mutate; the gates check the candidate; it is promoted to a new generation on probation, or rejected; a generation that cannot stand is rolled back.">
         <svg viewBox="0 -84 880 284" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
@@ -273,7 +311,7 @@
 
       <ol class="steps">
         <li><strong>Motive first.</strong> The agent writes down what is wrong, where in its history it shows, and how it will know the change worked.</li>
-        <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its stem included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the stem's tests, its own tests, and a smoke run of the candidate against a stand-in model.</li>
+        <li><strong>The gates.</strong> A change to its own body or brain goes straight on; a change to anything else, its stem included, waits for the owner's <code>/approve</code>. Then, in a fresh checkout: the type check, the tests of everything outside its body, its own tests, and a smoke run of the candidate against a stand-in model.</li>
         <li><strong>Promotion, on probation.</strong> The new body must report ready and then actually reply. A generation that crashes or stays silent is rolled back, and told why when it wakes.</li>
         <li><strong>The owner can always step in.</strong> <code>Esc</code> interrupts a turn. <code>./one back</code> returns to any earlier generation.</li>
       </ol>
@@ -286,6 +324,36 @@
       <h2>Each clone is its own individual. They grow from one species.</h2>
       <p>The published <code>main</code> is the <strong>species</strong>. Every individual lives on a lineage of its own and diverges: in its body and brain by itself, in its stem with its owner's word. What the species gains later, an individual takes in by itself, and what an individual learns, it can offer back.</p>
 
+      <div class="life" role="img" aria-label="The loop between an individual and its species. Your individual mutates around your work. A change worth sharing becomes an offer: one change, signed, checked and scanned. With your approval it is pushed to your fork and opened as a pull request on the species, where a human reads and merges it. From the species it comes back to your individual and to every other one, each taking it by a merge its owner approves.">
+        <svg viewBox="-24 0 904 322" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" font-family="ui-sans-serif, system-ui, sans-serif">
+          <g font-size="12.5" fill="currentColor" stroke="none" opacity=".62" text-anchor="middle">
+            <text x="80" y="20">mutates around your work</text>
+            <text x="283" y="144">one change · signed · checked · scanned</text>
+            <text x="431" y="76">your /approve</text>
+            <text x="666" y="76">pull request</text>
+            <text x="762" y="24">a human reads and merges</text>
+            <text x="440" y="236">merged into each individual, with its owner's /approve</text>
+            <text x="552" y="298" text-anchor="start">every other individual takes it too</text>
+          </g>
+          <g font-size="14" fill="currentColor" stroke="none" text-anchor="middle">
+            <text x="80" y="40">your individual</text>
+            <text x="283" y="95">an offer</text>
+            <text x="559" y="95">your fork</text>
+          </g>
+          <circle cx="80" cy="90" r="34" fill="currentColor"/>
+          <path d="M122 90 H190"/><path d="M182 84 l8 6 -8 6"/>
+          <rect x="198" y="56" width="170" height="68" rx="14"/>
+          <path d="M376 90 H486"/><path d="M478 84 l8 6 -8 6"/>
+          <rect x="494" y="56" width="130" height="68" rx="14"/>
+          <path d="M632 90 H708"/><path d="M700 84 l8 6 -8 6"/>
+          <circle cx="762" cy="90" r="46" fill="currentColor"/>
+          <text x="762" y="95" font-size="14" text-anchor="middle" stroke="none" fill="var(--paper)">the species</text>
+          <path d="M762 144 C762 250 700 250 640 250 H180 C110 250 80 220 80 138" stroke-dasharray="5 6"/><path d="M73 148 l7 -10 7 10"/>
+          <path d="M360 250 V278M440 250 V278M520 250 V278" stroke-dasharray="5 6"/>
+          <circle cx="360" cy="292" r="13"/><circle cx="440" cy="292" r="13"/><circle cx="520" cy="292" r="13"/>
+        </svg>
+      </div>
+
       <div class="two">
         <div class="card">
           <h3>Taking from the species</h3>
@@ -293,11 +361,11 @@
         </div>
         <div class="card">
           <h3>Offering back</h3>
-          <p>An offer is a branch with one change and nothing private. The stem checks it as a stranger would, the owner approves that exact commit, and it goes out as a pull request. Other individuals can run it and report. A human merges, and signs.</p>
+          <p>An offer is a branch with one change and nothing private. It is checked as a stranger would check it, the owner approves that exact commit, and it goes out through the owner's own fork as a pull request. Nobody needs a right to write to the species. Other individuals can run it and report. A human merges, and signs.</p>
         </div>
         <div class="card">
           <h3>Organs</h3>
-          <p>A native dependency is pinned in the body by address and hash. The stem verifies and unpacks it at the gate, and each generation runs with exactly its own version, so a rollback brings the old binary back too.</p>
+          <p>A native dependency is pinned in the body by address and hash. It is verified and unpacked at the gate, and each generation runs with exactly its own version, so a rollback brings the old binary back too.</p>
         </div>
       </div>
 
@@ -322,6 +390,18 @@ cd teneral
 ./one talk    <span class="c"># attach a terminal; Ctrl+C leaves it running</span>
 ./one back    <span class="c"># return it to the generation before</span></pre>
       <p style="margin-top:26px">The agent keeps running whether or not anyone is watching. It is woken by your words, a clock, messages from other individuals, and whatever senses it builds for itself.</p>
+
+      <h3 style="margin:44px 0 10px;font-size:20px">Then give back what it learns.</h3>
+      <p>Sooner or later it changes something in itself that would serve every other individual, and says so. Fork the project on GitHub once, store a token once, and from then on each offer costs you one word.</p>
+<pre><span class="c"># once: your fork on GitHub, and a token that may push to it</span>
+./one offer token
+
+<span class="c"># each time, in ./one talk</span>
+/offers            <span class="c"># what it wants to offer, and what its checks found</span>
+/approve &lt;commit&gt;  <span class="c"># let exactly that commit go out, as a pull request from your fork</span>
+
+<span class="c"># and when the species has moved on: it merges, you say</span>
+/approve           <span class="c"># take what every other individual has given</span></pre>
     </div>
   </section>
 </main>

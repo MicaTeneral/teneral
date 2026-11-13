@@ -441,3 +441,45 @@ test('a refusal that is not about the summary, or a second one, is passed on; an
   await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', summaries: false, fetch: recorder([okStream], sent) })([{ role: 'user', content: 'x' }], []);
   expect('reasoning' in sent[0]!.body).toBe(false);
 });
+
+test('the pulse and cache measurements coexist on the Responses events consumed by the official Kimi client', async () => {
+  const said: (string | null)[] = [];
+  const probes: unknown[] = [];
+  // MoonshotAI/kimi-cli 9ab1286b consumes exactly these three delta types in
+  // its Responses adapter. This is a compatibility fixture, not a captured reply.
+  const stream = () => new Response(sse(
+    CREATED,
+    { type: 'response.reasoning_summary_part.added', part: { type: 'summary_text', text: '' } },
+    { type: 'response.reasoning_summary_text.delta', delta: 'Compare the evidence.' },
+    { type: 'response.output_text.delta', delta: 'Working' },
+    { type: 'response.function_call_arguments.delta', delta: '{"path":"a.ts"}' },
+    completed([call(1, 'read', '{"path":"a.ts"}')]),
+  ), { headers: { 'content-type': 'text/event-stream' } });
+  const provider = responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'k3.1-pro', fetch: recorder([stream, stream], []), pulse: p => said.push(p === null ? null : p.step) });
+  await provider([{ role: 'user', content: 'read it' }], [], { onCacheProbe: data => probes.push(data) });
+  await provider([{ role: 'user', content: 'read it again' }], [], { onCacheProbe: data => probes.push(data) });
+  expect(said).toContain('reasoning');
+  expect(said).toContain('writing');
+  expect(said).toContain('calling');
+  expect(said.at(-1)).toBeNull();
+  expect(probes).toHaveLength(2);
+  expect(JSON.stringify(probes)).not.toContain('read it');
+  expect((probes[1] as { staticEqual: boolean }).staticEqual).toBe(true);
+});
+
+test('while the answer arrives the pulse says where the request stands, and that it is over when it is, also when it failed', async () => {
+  const said: (string | null)[] = [];
+  const pulse = (p: { step: string } | null): void => { said.push(p === null ? null : p.step); };
+  const stream = () => new Response(sse(
+    CREATED, { type: 'response.reasoning_summary_text.delta', delta: 'Thinking it over.' }, { type: 'response.output_text.delta', delta: 'hi' }, completed([message('hi')]),
+  ), { headers: { 'content-type': 'text/event-stream' } });
+  const reply = await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([stream], []), pulse })([{ role: 'user', content: 'x' }], []);
+  expect(reply.text).toBe('hi');
+  expect(said[0]).toBe('asked');
+  expect(said.at(-1)).toBeNull();
+  expect(said).toContain('writing');
+  said.length = 0;
+  const refused = () => new Response('{"error":"no"}', { status: 500 });
+  await expect(responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', fetch: recorder([refused], []), pulse })([{ role: 'user', content: 'x' }], [])).rejects.toThrow();
+  expect(said).toEqual(['asked', null]);
+});
