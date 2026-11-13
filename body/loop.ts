@@ -88,7 +88,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     for (;;) {
       const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, work);
       try {
-        reply = await d.provider(messages, specs, d.signal && { signal: d.signal });
+        reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); } });
         break;
       } catch (err) {
         // Whatever the provider threw once the owner had interrupted, it is not a failure, and is not answered by asking again.

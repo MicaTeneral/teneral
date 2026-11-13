@@ -493,3 +493,11 @@ from dynamic suffix (whole old request cannot be a prefix if suffix changes).
 Add stable Responses cache routing key, reproducible usage analysis, and measure
 live within-turn cached/input >0.8 without guaranteeing provider cache behavior.
 Keep pending unaccepted species TUI candidate separate from deployment planning.
+
+## Actual-wire cache diagnostics
+After promotion first five requests still have four zero cache hits and one8832.
+Approximate offline prefix audit is insufficient. Add bounded in-memory block
+fingerprints immediately before Responses POST; journal only aggregate lengths,
+prefix reuse and static-field equality for main-turn calls. Never headers, tokens,
+request content or hashes in journal. Auxiliary calls excluded via callback scope.
+Success: distinguish local prefix churn from provider cache misses on live calls.

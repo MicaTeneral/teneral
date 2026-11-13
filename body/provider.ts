@@ -1,3 +1,4 @@
+import { cacheProbe, type CacheProbe } from "./cache-probe";
 import type { ToolCall, Usage } from '../kernel/journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from '../kernel/providers';
 import { accessToken, apiBase } from '../kernel/signin';
@@ -96,7 +97,7 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
   return out;
 }
 
-export interface ProviderCallOptions { signal?: AbortSignal; maxOutputTokens?: number }
+export interface ProviderCallOptions { signal?: AbortSignal; maxOutputTokens?: number; onCacheProbe?: (data: CacheProbe) => void }
 function outputLimit(options?: ProviderCallOptions): number | undefined {
   const value = options?.maxOutputTokens;
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 32768))
@@ -355,6 +356,7 @@ function saysNoSummary(err: unknown): boolean {
 }
 
 export function responsesProvider(cfg: ResponsesConfig): Provider {
+  const probe = cacheProbe();
   const send = cfg.fetch ?? fetch;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const token = async (rejected?: string): Promise<string> => {
@@ -384,6 +386,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       try {
         // Cancelled while the token was fetched or renewed: the request is not made.
         if (options?.signal?.aborted) throw cancelled();
+        if (options?.onCacheProbe) options.onCacheProbe(probe(body));
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
           // The user agent is teneral's own name and version (kernel/providers.ts): the truth about who is asking.
