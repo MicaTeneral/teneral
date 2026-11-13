@@ -1,23 +1,11 @@
-// A read-only projection of the journal into Rayforce, so recall and episode lookup
-// can query the database instead of re-deriving arrays from the whole journal each time.
-// The journal stays the source of truth: this is a derived, rebuildable index, never the record.
-//
-// What is projected mirrors body/memory.ts memoryRecords exactly:
-//   - lines of terminal/owner stimuli, and assistant replies in those turns, that pass the
-//     tag/secret filter (the auto-derived "excerpts");
-//   - curated memory.v1 notes (facts and episodes).
-// Eligibility and corrections stay in TypeScript so a rollback or rebuild reads the journal and
-// finds the same data an older body understands. Rayforce is only the query engine.
-//
-// Rows load as RFL source produced by a small RFL-encoder (toRfl), so no executable symbol reaches
-// the wire from message text and the data survives the wire's UTF-8 round-trip as plain literals.
+// Read-only, rebuildable Rayforce projections. The journal is the only source of truth:
+// Rayforce supplies candidate ids and TypeScript renders evidence from the original events.
 
+import { createHash } from 'node:crypto';
 import type { JournalEvent } from '../brain/journal';
 import { narrationLine, secretLine, tagsOf } from './memory';
-import type { RayData } from './rayforce-values';
 import { queryRayforce } from './rayforce';
 
-/** One projected row, matching what memoryRecords yields for a note/excerpt. */
 export interface MemoryRow {
   id: string;
   text: string;
@@ -30,10 +18,7 @@ export interface MemoryRow {
   deleted?: boolean;
 }
 
-const EXCERPT_MIN = 8;
-const EXCERPT_MAX = 1000;
-
-/** Which journal events produce projected rows: same rule as memoryRecords, so the two never disagree. */
+/** Keep automatic-memory ingestion eligibility identical to memoryRecords. */
 export function projectable(events: JournalEvent[]): { rows: MemoryRow[]; sources: Set<string> } {
   const rows: MemoryRow[] = [];
   const sources = new Set<string>();
@@ -45,7 +30,7 @@ export function projectable(events: JournalEvent[]): { rows: MemoryRow[]; source
       sources.add(e.id);
       if (typeof e.text !== 'string') continue;
       e.text.split('\n').forEach((text, i) => {
-        if (text.length < EXCERPT_MIN || text.length > EXCERPT_MAX || secretLine.test(text) || narrationLine.test(text)) return;
+        if (text.length < 8 || text.length > 1000 || secretLine.test(text) || narrationLine.test(text)) return;
         const tags = tagsOf(text);
         if (!tags.length) return;
         rows.push({ id: `${e.id}:${i}`, text, tags, sources: [e.id], ts: e.ts, kind: e.type === 'assistant' ? 'assistant claim' : 'owner statement' });
@@ -53,7 +38,7 @@ export function projectable(events: JournalEvent[]): { rows: MemoryRow[]; source
     }
     if (e.type !== 'note' || e.kind !== 'memory.v1' || !terminal) continue;
     const d = e.data as Partial<MemoryRow> | null;
-    if (!d || typeof d.text !== 'string' || d.text.length > EXCERPT_MAX || secretLine.test(d.text)
+    if (!d || typeof d.text !== 'string' || d.text.length > 1000 || secretLine.test(d.text)
       || !Array.isArray(d.tags) || d.tags.length > 12 || d.tags.some((t) => typeof t !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(t))
       || !Array.isArray(d.sources) || !d.sources.length || d.sources.length > 12 || d.sources.some((s) => typeof s !== 'string' || !sources.has(s))) continue;
     rows.push({ id: e.id, text: d.text, tags: d.tags, sources: d.sources, ts: e.ts, kind: d.episode ? 'curated episode claim' : 'curated claim', episode: d.episode as MemoryRow['episode'], supersedes: d.supersedes, deleted: d.deleted });
@@ -61,68 +46,66 @@ export function projectable(events: JournalEvent[]): { rows: MemoryRow[]; source
   return { rows, sources };
 }
 
-/** Serialize closed data to RFL source. Only the encodeRayData subset is produced. */
-function toRfl(v: RayData): string {
-  if (v === null) return '0N';
-  if (typeof v === 'boolean') return v ? '1b' : '0b';
-  if (typeof v === 'bigint') return v.toString() + 'l';
-  if (typeof v === 'number') return Number.isInteger(v) ? v.toString() : v.toString(); // RFL prints floats plainly
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return '(list ' + v.map(toRfl).join(' ') + ')';
-  throw new Error('Unsupported RFL value');
+/** Every source recall may search, not only tag-bearing automatic-memory lines. */
+export function recallProjection(events: JournalEvent[]): { id: string; search: string }[] {
+  const rows: { id: string; search: string }[] = [];
+  for (const e of events) {
+    if (e.type !== 'assistant' && !(e.type === 'stimulus' && e.source === 'terminal')) continue;
+    if (typeof e.text !== 'string') continue;
+    const lines = e.text.split('\n').filter(line => line.length <= 1000 && !secretLine.test(line));
+    rows.push({ id: e.id, search: lines.join('\n').toLocaleLowerCase() });
+  }
+  return rows;
 }
 
-/** A row as a flat vector of scalar columns (RFL table rows are vectors, not nested lists).
- * All columns are strings so the table is homogeneous and Rayforce's strict table builtin accepts it. */
-function rowData(r: MemoryRow): RayData[] {
-  return [r.id, r.text, r.tags.join(' '), r.sources.join(' '), r.ts, r.kind, r.episode ? [r.episode.decision, r.episode.reason, ...r.episode.openQuestions].join(' ') : '', r.supersedes ?? '', r.deleted ? '1' : '0'];
+/** A correction can replace text without changing counts, so counts alone are not freshness. */
+export function projectionFingerprint(events: JournalEvent[]): string {
+  return createHash('sha256').update(JSON.stringify({ memory: projectable(events).rows, recall: recallProjection(events) })).digest('hex');
 }
 
-const COLUMNS = ['id', 'text', 'tags', 'sources', 'ts', 'kind', 'episode', 'supersedes', 'deleted'];
-
-/** The RFL that re-creates the projection whole. Idempotent: re-running replaces the tables.
- * Rayforce's table builtin accepts at most 2 columns, so the 9 fields are sharded into 2-column
- * pair-tables keyed by row id, joined on id at query time. Columns are bare symbols; at least two
- * rows are required, so single-row tables are padded. */
-const FIELD_TABLES: [string, keyof MemoryRow | 'deletedStr'][] = [
-  ['text', 'text'], ['tags', 'tags'], ['sources', 'sources'], ['ts', 'ts'],
-  ['kind', 'kind'], ['episode', 'episode'], ['supersedes', 'supersedes'], ['deleted', 'deletedStr'],
-];
-function buildRfl(excerpts: MemoryRow[], episodes: MemoryRow[]): string {
-  const val = (r: MemoryRow, f: keyof MemoryRow | 'deletedStr'): string => {
-    if (f === 'deletedStr') return JSON.stringify(r.deleted ? '1' : '0');
-    const v = r[f];
-    if (Array.isArray(v)) return JSON.stringify(v.join(' '));
-    if (v === undefined || v === null) return JSON.stringify('');
-    if (typeof v === 'object') return JSON.stringify([v.decision, v.reason, ...v.openQuestions].join(' '));
-    return JSON.stringify(String(v));
-  };
-  const mk = (prefix: string, rs: MemoryRow[]): string =>
-    FIELD_TABLES.map(([suffix, field]) => {
-      const name = `${prefix}_${suffix}`;
-      const body = rs.map((r) => '[' + JSON.stringify(r.id) + ' ' + val(r, field) + ']').join(' ');
-      const padded = rs.length >= 2 ? body : body + (rs.length === 1 ? ' ["_" "_"]' : ' ["_" "_"] ["_" "_"]');
-      return `(set ${name} (table [id ${suffix}] (list ${padded})))`;
-    }).join(' ');
-  const groups: [string, MemoryRow[]][] = [
-    ['ex', excerpts], ['ep', episodes],
-  ];
-  return `(do ${groups.map(([p, rs]) => mk(p, rs)).join(' ')} 1)`;
+const FIELDS = ['text', 'tags', 'sources', 'ts', 'kind', 'episode', 'supersedes', 'deleted'] as const;
+type Field = (typeof FIELDS)[number];
+function value(row: MemoryRow, field: Field): string {
+  if (field === 'deleted') return row.deleted ? '1' : '0';
+  const v = row[field];
+  if (Array.isArray(v)) return v.join(' ');
+  if (typeof v === 'object' && v !== null) return [v.decision, v.reason, ...v.openQuestions].join(' ');
+  return v === undefined ? '' : String(v);
+}
+/** ray_table_fn takes one vector per column. Use typed STR vectors: a generic
+ * `list` call is limited to 64 arguments by the evaluator. */
+function table(name: string, field: string, rows: { id: string }[], text: (row: any) => string): string {
+  const column = (values: string[]) => `[${values.map(v => JSON.stringify(v)).join(' ')}]`;
+  return `(set ${name} (table [id ${field}] (list ${column(rows.map(r => r.id))} ${column(rows.map(text))})))`;
+}
+function buildRfl(events: JournalEvent[]): string {
+  const rows = projectable(events).rows;
+  const statements: string[] = [];
+  for (const [prefix, group] of [['ex', rows.filter(r => r.kind !== 'curated episode claim')], ['ep', rows.filter(r => r.kind === 'curated episode claim')]] as const) {
+    for (const field of FIELDS) statements.push(table(`${prefix}_${field}`, field, group, r => value(r, field)));
+  }
+  // Case-fold in JavaScript with the same operation as the journal renderer.
+  statements.push(table('rc_search', 'search', recallProjection(events), r => r.search));
+  return `(do ${statements.join(' ')} 1)`;
 }
 
-/** How a caller learns the projection is up to date: the row count in the id spine of each shard group. */
-export async function projectionWatermark(port: number): Promise<{ excerpts: number; episodes: number }> {
-  const r = await queryRayforce(port, '(list (count ex_text) (count ep_text))');
-  const counts = ('items' in r ? r.items : []).map((c) => ('value' in c ? Number(c.value) : 0));
-  return { excerpts: counts[0] ?? 0, episodes: counts[1] ?? 0 };
+export interface ProjectionWatermark { excerpts: number; episodes: number; recall: number }
+export async function projectionWatermark(port: number): Promise<ProjectionWatermark> {
+  const r = await queryRayforce(port, '(list (count ex_text) (count ep_text) (count rc_search))');
+  if (!('items' in r) || r.items.length !== 3) throw Error('Invalid Rayforce memory watermark');
+  const counts = r.items.map(c => 'value' in c ? Number(c.value) : NaN);
+  if (!counts.every(n => Number.isSafeInteger(n) && n >= 0)) throw Error('Invalid Rayforce memory counts');
+  return { excerpts: counts[0]!, episodes: counts[1]!, recall: counts[2]! };
 }
 
-/**
- * Rebuild the projection from the journal. Idempotent: the tables are re-set whole, so the
- * projection always equals what the journal yields right now. Returns the row counts.
- */
-export async function rebuildProjection(port: number, events: JournalEvent[]): Promise<{ excerpts: number; episodes: number }> {
-  const { rows } = projectable(events);
-  await queryRayforce(port, buildRfl(rows.filter((r) => r.kind !== 'curated episode claim'), rows.filter((r) => r.kind === 'curated episode claim')));
-  return projectionWatermark(port);
+/** Replace the whole derived snapshot and verify exact cardinalities before exposing the port. */
+export async function rebuildProjection(port: number, events: JournalEvent[]): Promise<ProjectionWatermark> {
+  const rows = projectable(events).rows;
+  const expected = { excerpts: rows.filter(r => r.kind !== 'curated episode claim').length, episodes: rows.filter(r => r.kind === 'curated episode claim').length, recall: recallProjection(events).length };
+  await queryRayforce(port, buildRfl(events));
+  const actual = await projectionWatermark(port);
+  if (actual.excerpts !== expected.excerpts || actual.episodes !== expected.episodes || actual.recall !== expected.recall) {
+    throw Error(`Rayforce memory watermark mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+  return actual;
 }

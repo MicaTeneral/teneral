@@ -1,65 +1,94 @@
-// Lifecycle for the Rayforce memory server: a lazily-started, journal-enabled instance of the
-// organ's binary whose only job is to hold the read-only memory projection (body/rayforce-memory.ts).
-// The teneral journal stays the source of truth; this is a derived, rebuildable index.
-//
-// The server is started on first use, not at boot, so a body that never recalls pays nothing.
-// Its journal (-l) lets the projection survive a restart of the server process itself; the body
-// rebuilds the projection from the teneral journal on start anyway, so the Rayforce journal is a
-// second layer, never the record.
+// Lazy lifecycle for the derived Rayforce memory projection. The teneral journal is
+// authoritative; a running server is reused only after its snapshot is synchronized.
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { rebuildProjection, projectionWatermark } from './rayforce-memory';
+import { appendEvent, type JournalEvent } from '../brain/journal';
+import { projectionFingerprint, rebuildProjection } from './rayforce-memory';
 import { evalRayforce } from './rayforce';
-import type { JournalEvent } from '../brain/journal';
 
 const PORT = 19796;
-let starting: Promise<number> | null = null;
-let server: ChildProcess | null = null;
+interface ServerState { key: string; fingerprint: string; child: ChildProcess | null }
+const states = new Map<number, ServerState>();
+const queues = new Map<number, Promise<void>>();
 
-function organsDir(): string | undefined {
-  return process.env.TENERAL_ORGANS;
+export interface MemoryServerOptions {
+  /** Test isolation; production uses the fixed loopback port and pinned organ. */
+  port?: number;
+  organs?: string;
 }
 
-/** Start the server if not running; returns the port, or null when the organ is absent. */
-export function ensureRayforceMemory(journal: string, events: JournalEvent[]): Promise<number | null> {
-  if (starting !== null) return starting.then((p) => (p === 0 ? null : p));
-  const organs = organsDir();
-  if (!organs) return Promise.resolve(null);
-  starting = (async (): Promise<number> => {
-    try {
-      // If a server is already answering on the port, reuse it.
-      await evalRayforce(PORT, '(+ 1 1)', 1500);
-      return PORT;
-    } catch { /* not running: start one */ }
-    const dir = join(journal, '..', 'rayforce-mem');
-    mkdirSync(dir, { recursive: true });
-    const base = join(dir, 'mem');
-    const bin = join(organs, 'rayforce', 'rayforce');
-    server = spawn(bin, ['-l', base, '-p', `127.0.0.1:${PORT}`, '-c', '1'], {
-      stdio: 'ignore', detached: false,
+async function answers(port: number): Promise<boolean> {
+  try { await evalRayforce(port, '(+ 1 1)', 1500); return true; }
+  catch { return false; }
+}
+
+async function synchronize(journal: string, events: JournalEvent[], organs: string, port: number, fingerprint: string): Promise<void> {
+  const key = `${organs}:${journal}`;
+  const state = states.get(port);
+  if (state?.key === key && state.fingerprint === fingerprint && await answers(port)) return;
+  if (!await answers(port)) {
+    const child = spawn(join(organs, 'rayforce', 'rayforce'), ['-p', `127.0.0.1:${port}`, '-c', '1'], { stdio: 'ignore', detached: false });
+    states.set(port, { key, fingerprint: '', child });
+    // The projection is rebuilt from the journal; a second Rayforce journal would only
+    // duplicate every replacement snapshot. No -l here.
+    child.on('exit', () => {
+      const current = states.get(port);
+      if (current?.child === child) states.set(port, { ...current, fingerprint: '', child: null });
     });
-    server.on('exit', () => { server = null; starting = null; });
-    // Wait for the port to answer, then load the projection.
+    child.on('error', () => {
+      const current = states.get(port);
+      if (current?.child === child) states.set(port, { ...current, fingerprint: '', child: null });
+    });
+    let ready = false;
     for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      try {
-        await evalRayforce(PORT, '(+ 1 1)', 1500);
-        await rebuildProjection(PORT, events);
-        return PORT;
-      } catch { /* not up yet */ }
+      if (await answers(port)) { ready = true; break; }
+      await new Promise(r => setTimeout(r, 250));
     }
-    throw new Error('Rayforce memory server did not start in time');
-  })();
-  return starting.then((p) => (p === 0 ? null : p)).catch(() => null);
+    if (!ready) throw Error('Rayforce memory server did not start in time');
+  }
+  appendEvent(journal, process.env.TENERAL_GEN ?? 'unknown', { type: 'note', kind: 'memory.projection.v1', data: { status: 'started', fingerprint } });
+  try {
+    const counts = await rebuildProjection(port, events);
+    states.set(port, { key, fingerprint, child: states.get(port)?.child ?? null });
+    appendEvent(journal, process.env.TENERAL_GEN ?? 'unknown', { type: 'note', kind: 'memory.projection.v1', data: { status: 'completed', fingerprint, counts } });
+  } catch (error) {
+    const current = states.get(port);
+    if (current) states.set(port, { ...current, fingerprint: '' });
+    appendEvent(journal, process.env.TENERAL_GEN ?? 'unknown', { type: 'note', kind: 'memory.projection.v1', data: { status: 'failed', fingerprint, error: error instanceof Error ? error.message : String(error) } });
+    throw error;
+  }
 }
 
-/** Best-effort stop (e.g. on mutation exit); the projection is rebuildable from the journal. */
-export function stopRayforceMemory(): void {
-  if (server !== null) {
-    server.kill('SIGTERM');
-    server = null;
+/** Synchronize and read under the same per-port queue. A later journal cannot replace the
+ * snapshot between those steps. Null means no organ or an engine failure; callers may fall back. */
+export function withRayforceMemory<T>(journal: string, events: JournalEvent[], read: (port: number) => Promise<T>, options: MemoryServerOptions = {}): Promise<T | null> {
+  const organs = options.organs ?? process.env.TENERAL_ORGANS;
+  if (!organs) return Promise.resolve(null);
+  const port = options.port ?? PORT;
+  const fingerprint = projectionFingerprint(events);
+  const previous = queues.get(port) ?? Promise.resolve();
+  const run = previous.then(async () => {
+    await synchronize(journal, events, organs, port, fingerprint);
+    return await read(port);
+  }).catch(() => null);
+  const tail = run.then(() => undefined);
+  queues.set(port, tail);
+  void tail.then(() => { if (queues.get(port) === tail) queues.delete(port); });
+  return run;
+}
+
+/** Stop owned processes only. An independently started server reused on the port is left alone. */
+export async function stopRayforceMemory(port?: number): Promise<void> {
+  const waits: Promise<void>[] = [];
+  for (const [p, state] of states) {
+    if (port !== undefined && p !== port) continue;
+    const child = state.child;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      waits.push(new Promise(resolve => child.once('exit', () => resolve())));
+      child.kill('SIGTERM');
+    }
+    states.delete(p);
   }
-  starting = null;
+  await Promise.all(waits);
 }

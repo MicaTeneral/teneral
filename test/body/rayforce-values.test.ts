@@ -25,6 +25,15 @@ test('table schema W64 marker and rectangular columns', () => {
   const raw = Buffer.concat([Buffer.from([98, 0]), schema, Buffer.from('text\0'), encodeRayData([['hello']])]);
   expect(decodeRayValue(raw)).toEqual({ type: 98, names: ['text'], columns: [{ type: 0, items: [{ type: -13, value: 'hello' }] }] });
 });
+test('STR vector permits HAS_NULLS while unknown attributes stay rejected', () => {
+  // Rayforce v3.0.2 marks an empty STR vector element as canonical null with wire attr 0x40.
+  const empty = Buffer.alloc(8), one = Buffer.from([1, 0, 0, 0, 0, 0, 0, 0, 120]);
+  const raw = Buffer.concat([Buffer.from([13, 0x40]), Buffer.from([2, 0, 0, 0, 0, 0, 0, 0]), empty, one]);
+  expect(decodeRayValue(raw)).toEqual({ type: 13, items: [{ type: -13, value: '' }, { type: -13, value: 'x' }] });
+  raw[1] = 0x80; expect(() => decodeRayValue(raw)).toThrow('Unsupported compound/vector attributes');
+  const numeric = Buffer.from(raw); numeric[0] = 5; numeric[1] = 0x40;
+  expect(() => decodeRayValue(numeric)).toThrow('Unsupported compound/vector attributes');
+});
 test('typed transport sends builtin list envelope to fake server', async () => {
   const { createServer } = await import('node:net');
   const { sendRayData } = await import('../../body/rayforce');

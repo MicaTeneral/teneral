@@ -20,6 +20,25 @@ No latency field exists yet, so do not claim a measured latency improvement from
 merging pulse or blindly shrinking context. Budget changes need their own commit,
 post-change samples and continuity/quality observation.
 
+## Rayforce memory: real projection, freshness and recall parity
+Live audit found ex_text absent while projectable() expected 373+ rows. Release v3.0.2
+src/lang/eval.c ray_table_fn proves `(table names (list col1 col2))` takes column vectors;
+the previous loader sent per-row `[id value]` pairs. Two rows accidentally looked like two
+columns, making the old 2/2 watermark meaningless; real corpora fail with `domain`. Rayforce
+`like` is case-sensitive glob with `*`, not SQL `%`; the old fast path also ignored `before`,
+did not preserve newest-first order, and reused a running server without rebuilding or checking
+its projection. Fix those semantics independently of BM25/RRF ranking. Success requires real
+organ round trips for 0/1/2/3+ rows, Unicode and hostile text, exact expected row counts,
+restart/reuse freshness, and byte-for-byte parity with the bounded journal recall including
+paging. Keep the journal authoritative and fallback available on an explicitly failed query;
+do not silently route all healthy no-match responses through another full implementation.
+Verified candidate repair: generic `list` is limited to 64 evaluator arguments, so columns now
+use typed STR vectors; empty STR elements carry the documented HAS_NULLS wire flag. Full-journal
+isolated rebuild reached 386 excerpts/3 episodes/2043 recall rows in 32ms. Real-organ regressions
+cover 0/1/2/65 rows, Unicode/metacharacters, exact/paged parity, unchanged reuse, restart and two
+concurrent journals. Sync and read share a per-port queue. Full suite: 1055 pass/0 fail, tsc clean.
+These are candidate results, not production evidence until promotion and a live receipt.
+
 ## Warm-cache cut step: measured 5%, not a blind budget shrink
 Live telemetry after 8c44a85 found first-byte latency around 4.4–5.1s and highly variable
 whole-call time (12.2–42.7s); it does not justify claiming a latency improvement by itself.

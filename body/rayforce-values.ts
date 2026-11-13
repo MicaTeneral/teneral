@@ -37,8 +37,8 @@ export function encodeRayData(value: RayData): Buffer {
   return enc(value, 0);
 }
 
-/** Strict bounded wire-v3 subset. Vector attrs must be zero: nullable/sorted
- * vectors are refused until their semantics are implemented, not guessed. */
+/** Strict bounded wire-v3 subset. Unknown attributes fail closed. STR vectors may
+ * carry HAS_NULLS because their empty string is the canonical null representation. */
 export function decodeRayValue(b: Buffer): RayValue {
   if (b.length > MAX) throw Error('Rayforce value byte limit');
   let p = 0, nodes = 0;
@@ -63,8 +63,11 @@ export function decodeRayValue(b: Buffer): RayValue {
       return decodeRayScalar(b.subarray(start, p));
     }
     const attrs = take(1)[0]!;
-    // Schema symbol vectors are emitted with W64=3; cells remain NUL strings.
-    if (attrs !== 0 && !(type === 12 && attrs === 3)) throw Error('Unsupported compound/vector attributes');
+    // Schema symbol vectors use W64=3. STR permits HAS_NULLS because its empty
+    // string is the canonical null; unknown attributes still fail closed.
+    if (attrs !== 0 && !(type === 12 && attrs === 3) && !(type === 13 && attrs === 0x40)) {
+      throw Error('Unsupported compound/vector attributes');
+    }
     if (type === 98) {
       const names = dec(depth + 1), cols = dec(depth + 1);
       if (names.type !== 12 || !('items' in names) || cols.type !== 0 || !('items' in cols)) throw Error('Invalid table layout');
