@@ -470,3 +470,8 @@ Owner all-public policy: remove channel-based READ restrictions after explicit
 «все публично» / «снимай». Retain write authority, credential filters and async
 snapshot checks. Regression: clock/external reads succeed, outsiders cannot write,
 changed turn still invalidates in-flight retrieval. No archive publication.
+
+Species queue display adoption (owner request): merge origin/main 97b629b;
+owner messages pending delivery/read remain over input with on its way/queued.
+Includes accumulated upstream documentation/site/package metadata changes.
+No lineage body changes; verify full suite and typecheck, then species acceptance.
