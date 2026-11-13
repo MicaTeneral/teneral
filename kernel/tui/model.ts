@@ -53,8 +53,11 @@ export type Entry = { id: number; rev: number } & (
   | { kind: 'owner'; text: string; images: string[]; held?: boolean; pending?: boolean; queued?: boolean; elsewhere?: boolean }
   /** A summary of the model's reasoning before a reply or a tool call, when the body journals one. */
   | { kind: 'reasoning'; text: string }
-  /** `first`: the first words this individual ever said. */
-  | { kind: 'reply'; text: string; first: boolean }
+  /**
+   * `first`: the first words this individual ever said. `aside`: said along with tool calls, in the
+   * middle of the work, and so not the answer: some models narrate every step this way.
+   */
+  | { kind: 'reply'; text: string; first: boolean; aside?: boolean }
   | { kind: 'tool'; callId: string; name: string; args: string; status: 'running' | 'ok' | 'failed' | 'cut short'; ms: number | null; output: string }
   /**
    * What the kernel did. `move`: the generation left and the one arrived in. `lead` is shown whole;
@@ -338,7 +341,8 @@ export class Transcript {
           return;
         }
         const shown = text.length > REPLY_CHARS ? `${text.slice(0, REPLY_CHARS)}\n\n[... ${text.length - REPLY_CHARS} more characters are in the journal]` : text;
-        this.push({ kind: 'reply', text: shown, first: !before.spoke });
+        const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
+        this.push({ kind: 'reply', text: shown, first: !before.spoke, ...(calls > 0 ? { aside: true } : {}) });
         return;
       }
       case 'tool.intent': {
@@ -365,6 +369,9 @@ export class Transcript {
         // The owner stopped the turn, from this terminal or another.
         this.push({ kind: 'quiet', label: 'interrupted by you', text: '' });
         return;
+      case 'mutation.approved':
+        this.push({ kind: 'quiet', label: `mutation to ${shortSha(f.commit)} approved by you`, text: '' });
+        return;
       case 'species.accepted':
         this.push({ kind: 'quiet', label: `species commit ${shortSha(f.commit)} accepted by you`, text: '' });
         return;
@@ -374,6 +381,14 @@ export class Transcript {
         this.tools.clear();
         return;
       case 'mutation.rejected':
+        // Not a refusal: the kernel judged nothing, and waits for the owner's word (kernel/approval.ts).
+        if (f.gate === 'approval') {
+          this.push({
+            kind: 'notice', tone: 'warn', title: `mutation to ${shortSha(f.commit)} waits for your approval`,
+            lead: cut(flat(clean(asText(f.output)).split('\n')[0] ?? ''), 600), body: `/approve lets it through to the checks; /approve ${shortSha(f.commit)} says the same by name.`,
+          });
+          return;
+        }
         this.push({
           kind: 'notice', tone: 'warn', title: `mutation to ${shortSha(f.commit)} rejected at gate "${cut(flat(clean(asText(f.gate))), 40)}"`,
           lead: '', body: tailOf(clean(asText(f.output)).trimEnd(), NOTICE_CHARS),

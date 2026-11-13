@@ -5,9 +5,8 @@ import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../journal';
 import { ownerCommand } from '../offer';
-import { accept, acceptedLine, interrupt, tell } from '../owner';
+import { interrupt, tell } from '../owner';
 import * as providers from '../providers';
-import { chooseAccept } from '../species';
 import { holder, readState, type Paths } from '../supervisor';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
@@ -61,7 +60,7 @@ const HELP = [
   '',
   'Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model is cancelled, a command that is running is killed with everything it started, and the agent waits for what you say next. It is told that you interrupted it. When it is doing nothing, Esc does nothing. A mutation the kernel is already checking is not stopped by it. While commands are listed under the box, Esc closes the list and interrupts nothing; press it again for the agent.',
   '',
-  '/accept is your word to the kernel, not to the agent. A mutation from the species brings the agent a new kernel, and with TENERAL_SPECIES=ask, the default, the kernel lets none through until you have accepted the species commit it stands on, or a later one. The agent asks you; /accept answers for the commit it asked about, /accept <commit> for another. Then tell the agent to ask for its mutation again.',
+  '/approve is your word to the kernel, not to the agent. The agent may change anything, its kernel included; what it changes in its own body it mutates into by itself, and a mutation that changes anything else waits for you. With TENERAL_KERNEL=ask, the default, the kernel lets none through until you have approved a commit that holds the same outside the body. The agent asks you; /approve answers for the commit it asked about, /approve <commit> for another, and tells the agent to ask for its mutation again. A new kernel that cannot bring the agent to ready is put back by the launcher. /approve <commit> with a commit that /offers lists lets that one go out to the species instead.',
   '',
   'Leaving ends this client only. Nothing else here stops the agent or changes it.',
   '',
@@ -456,6 +455,16 @@ export class TalkScreen {
     return alive.supervisor && alive.body && this.standing.turn.busy && this.standing.mutation === null;
   }
 
+  /** Ctrl-R, or /reasoning: what the model thought since the owner's last line, in full; where it thought nothing since, the last time it did. */
+  private reasoning(): void {
+    const entries = this.transcript.entries;
+    const from = entries.findLastIndex((e) => e.kind === 'owner' && !inQueue(e));
+    let thoughts = entries.slice(from + 1).filter((e) => e.kind === 'reasoning');
+    if (thoughts.length === 0) thoughts = entries.filter((e) => e.kind === 'reasoning').slice(-1);
+    if (thoughts.length === 0) return this.sayOnce('There is no reasoning to show: the body journals none, or the model gave none.');
+    this.page(thoughts.length === 1 ? 'what it thought' : `what it thought, in ${thoughts.length} stretches`, thoughts.flatMap((e, i) => [...(i > 0 ? [''] : []), ...(e as { text: string }).text.split('\n')]));
+  }
+
   /** Send every line that was kept, in the order it was typed. */
   private sendQueued(): void {
     for (const line of this.queue.splice(0)) {
@@ -634,6 +643,7 @@ export class TalkScreen {
     if (key.kind === 'key') {
       if (key.name === 'tab') return this.toggleTools();
       if (ctrl('l')) return this.inline.invalidate();
+      if (ctrl('r')) return this.reasoning();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
       if (key.name === 'enter' && !key.alt && !key.shift) return this.submit();
       if (key.name === 'up' && this.queue.length > 0 && this.edit.text === '' && this.edit.chips.length === 0) return this.takeBack();
@@ -733,18 +743,6 @@ export class TalkScreen {
         return this.toggleTools();
       case '/stop':
         return this.interrupt();
-      case '/accept': {
-        // The owner's word to the kernel, as a file of its own kind in the owner's channel (kernel/owner.ts). The agent is not told by it.
-        try {
-          const chosen = chooseAccept(this.o.paths.root, arg);
-          if ('why' in chosen) return this.say(`Not accepted: ${chosen.why}.`);
-          accept(this.o.paths.owner, chosen.commit);
-          tell(this.o.paths.owner, acceptedLine(chosen.commit));
-          return this.say(`Accepted species commit ${shortSha(chosen.commit)}${chosen.subject === '' ? '' : `, "${clean(chosen.subject).slice(0, 80)}"`}, and every one before it. The kernel takes that in when ${this.who} next asks for its mutation, and it was told to ask again.`);
-        } catch (err) {
-          return this.say(`That could not be accepted: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
       case '/image': {
         if (arg === '') return this.say('/image <path> attaches an image file from your machine: /image ~/Pictures/plan.png');
         const paths = pathsIn(arg) ?? (arg.startsWith('/') || arg.startsWith('~/') ? [arg] : null);
@@ -781,6 +779,8 @@ export class TalkScreen {
         }
         return this.page('generations, oldest first', clean(list).split('\n'));
       }
+      case '/reasoning':
+        return this.reasoning();
       case '/usage': {
         let lines: string[];
         try {
@@ -791,8 +791,11 @@ export class TalkScreen {
         return this.page('what the model was asked for', lines);
       }
       case '/offers':
-      case '/approve':
-        return this.page(name === '/offers' ? 'waiting for your approval' : 'approval', clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n'));
+      case '/approve': {
+        // The owner's word to the kernel (kernel/approval.ts) or about what goes out (kernel/offer.ts). The agent is not told by the command itself.
+        const lines = clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n');
+        return name === '/approve' && lines.length === 1 ? this.say(lines[0]!) : this.page(name === '/offers' ? 'waiting for your approval' : 'approval', lines);
+      }
       default:
         // A command in the table (kernel/commands.ts) that nothing above carries out.
         this.say(`${name} is not a command here, and was not sent. /help lists them.`);

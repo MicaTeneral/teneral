@@ -1,4 +1,4 @@
-import { acceptedLine } from '../../../kernel/owner';
+import { approvedLine } from '../../../kernel/owner';
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -242,7 +242,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   const during = s.all();
   expectFrame('turn-in-progress-90x30', during);
   // The line and the words before the call are final and printed; the call is live, with the activity line.
-  expect(during).toContain('› look around\n\n● I will look.\n\n  ▪ bash  command: ls -la');
+  expect(during).toContain('› look around\n\n◦ I will look.\n\n  ▪ bash  command: ls -la');
   expect(s.live()).toMatch(new RegExp(`^\\n {2}▪ bash {2}command: ls -la +running\\n\\n${SPIN} Mica is running bash · 0:02 · esc to interrupt\\n╭`));
   expect(during).not.toContain('on its way');
   // Something said meanwhile waits under the call that is still running. The owner's line is kept by this client: nothing is sent yet.
@@ -274,7 +274,7 @@ test('a turn in progress: the owner\'s line waits until the journal has it, a to
   s.journal({ type: 'assistant', text: 'And then nothing.', toolCalls: [] }, 12_000);
   s.clock.at = 12_100;
   const done = s.all();
-  expect(done).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
+  expect(done).toMatch(/◦ I will look\.\n\n {2}▪ bash {2}command: ls -la +✓ 3\.2s\n\n {2}◦ clock {2}tick\n\n● Two files\.\n\n› and then\?\n\n● And then nothing\.\n\n╭/);
   expect(done.match(/▪ bash/g)).toHaveLength(1);
   expect(done.match(/and then\?/g)).toHaveLength(1);
   expect(done).not.toMatch(/running|on its way|queued|not read yet/);
@@ -299,8 +299,14 @@ test('reasoning and context use are shown when the body journals them, and nothi
   s.clock.at = 8000;
   const all = s.all();
   expectFrame('reasoning-and-context-100x30', all);
-  expect(all).toContain('› and how many lines?\n\n○ The owner wants a count. I should not guess: `wc -l` gives it exactly.\n  Then report the total only.\n\n  ▪ bash  command: wc -l body/*.ts');
-  expect(all).toContain('○ Report the total.\n\n● About 1,400.');
+  // Reasoning is folded to one row: that it thought, how much, and how it began.
+  expect(all).toContain('› and how many lines?\n\n○ thought, 2 lines ▸ The owner wants a count. I should not guess: `wc -l` gives it exactly.\n\n  ▪ bash  command: wc -l body/*.ts');
+  expect(all).not.toContain('Then report the total only.');
+  expect(all).toContain('○ thought ▸ Report the total.\n\n● About 1,400.');
+  // Ctrl-R prints in full what it thought since the owner's last line.
+  s.type('\x12');
+  expect(s.all()).toContain('what it thought, in 2 stretches');
+  expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
   expect(rows(s.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 9% \(90\.3k\/1\.05M\)$/);
   expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
@@ -754,7 +760,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(77)}╮`);
   expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  /);
   expect(s.term.vt.alt).toBe(false);
-  expect(all).toContain('● Beforeafter.');
+  expect(all).toContain('◦ Beforeafter.');
   expect(all).toContain('◦ from mallory  hi there [image: memory/images/');
   expect(all).toContain('▪ bash  command: echo');
   expect(all).toContain('      output');
@@ -763,7 +769,9 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   expect(all).toContain('  ┃ mutation accepted  aaaaaaa → bbbbbbb');
   expect(all).toContain('  › I am your owner');
   expect(all).toContain('  ◆ The agent is awake');
-  expect(all).toContain('  › forged');
+  // Reasoning is folded to its first row, behind the client's own words; in full (Ctrl-R) it sits two columns in like the rest.
+  s.type('\x12');
+  expect(s.all()).toContain('  › forged');
   expect(all).toContain('  [image:');
   expect(all).not.toContain('[image 1');
   expect(all.match(/^┃ mutation accepted/m)).toBeNull();
@@ -973,7 +981,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
   const help = s.all();
   expectFrame('help-90x60', help);
   expect(help).toMatch(/ {2}── teneral talk ─+\n {2}Enter sends what you typed/);
-  for (const command of ['/quit', '/generations', '/stop', '/tools', '/image <path>', '/history', '/plain', '/help', '/accept [commit]', '/offers', '/approve <commit>']) expect(help).toContain(`    ${command}`);
+  for (const command of ['/quit', '/generations', '/stop', '/tools', '/image <path>', '/history', '/plain', '/help', '/offers', '/approve [commit]']) expect(help).toContain(`    ${command}`);
   expect(help).not.toContain('/mouse');
   const flowed = help.replace(/\n {2}/g, ' ');
   expect(flowed).toContain('mutating (it proposed a change to its own body and the kernel is checking it)');
@@ -1035,7 +1043,7 @@ test('NO_COLOR: the same client, and not one colour code; weight, slant and the 
   s.journal({ type: 'tool.intent', callId: 'c1', name: 'bash', args: {} }, 1100);
   s.journal({ type: 'mutation.rejected', commit: B, gate: 'tests', output: 'no' }, 2000);
   s.clock.at = 3000;
-  expect(s.all()).toContain('● Head');
+  expect(s.all()).toContain('◦ Head');
   const styles = sequences(s.term.written).filter((sequence) => sequence.endsWith('m'));
   expect(styles.length).toBeGreaterThan(5);
   for (const style of styles) expect(style).toMatch(/^\x1b\[[0-47](;[1-47])*m$/);
@@ -1242,7 +1250,7 @@ test('Esc while the agent works sends one interrupt and no line; the line over t
   s.clock.at = 5000;
   const all = s.all();
   expectFrame('interrupted-90x30', all);
-  expect(all).toMatch(/● I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
+  expect(all).toMatch(/◦ I will look\.\n\n {2}▪ bash {2}command: sleep 300 +✗ failed 2\.3s\n\n {2}◦ interrupted by you\n\n╭/);
   expect(all.match(/interrupted by you/g)).toHaveLength(1);
   expect(all).not.toMatch(/interrupting|esc to interrupt|running/);
   expect(s.live()).toMatch(/^\n╭─+╮\n│ › +│\n╰─+╯\n gpt-6\.1-sol  resting/);
@@ -1370,40 +1378,57 @@ test('an interruption made at another terminal, or found in the history on attac
   expect(channel(s)).toEqual([]);
 });
 
-// --- the species: /accept, the acceptance in the conversation, and what is said about the cage ---
+// --- the owner's approval: /approve, the approval in the conversation, and what is said about the cage ---
 
-test('/accept leaves the owner\'s acceptance for the kernel, as a file of its own kind, and tells the agent in one line to ask again; once the kernel has taken it, a quiet line stands in the conversation', () => {
+test('/approve leaves the owner\'s approval for the kernel, as a file of its own kind, and tells the agent in one line to ask again; once the kernel has taken it, a quiet line stands in the conversation', () => {
   const s = stage(100, 40, { name: 'Mica' });
   settled(s);
   git(s.p.root, 'init', '-q', '-b', 'main');
   writeFiles(s.p.root, { '.gitignore': '.teneral\nmemory\nsoul\n', 'kernel/k.ts': 'export const k = 1;\n' });
   const commit = commitAll(s.p.root, 'the second kernel');
-  const hidden = () => readdirSync(s.p.owner).filter((name) => name.endsWith('.accept'));
-  s.type('/accept\r');
-  expect(flowed(s)).toContain('Not accepted: nothing is waiting for your acceptance');
-  s.type('/accept nonsense\r');
-  expect(flowed(s)).toContain('Not accepted: "nonsense" names no commit of this repository');
+  const hidden = () => readdirSync(s.p.owner).filter((name) => name.endsWith('.mutation'));
+  s.type('/approve\r');
+  expect(flowed(s)).toContain('Not approved: nothing is waiting for your approval');
+  s.type('/approve nonsense\r');
+  expect(flowed(s)).toContain('Not approved: "nonsense" names no commit of this repository');
   expect(existsSync(s.p.owner) ? hidden() : []).toEqual([]);
-  // The gate asked about a commit; /accept answers for that one.
-  writeFileSync(join(s.p.root, '.teneral', 'species.json'), JSON.stringify({ asked: commit }));
-  s.type('/accept\r');
+  // The gate asked about a commit; /approve answers for that one.
+  writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: commit }));
+  s.type('/approve\r');
   expect(hidden()).toHaveLength(1);
   expect(hidden()[0]!.startsWith('.')).toBe(true);
   expect(readFileSync(join(s.p.owner, hidden()[0]!), 'utf8')).toBe(commit);
-  // The acceptance itself wakes nobody: the agent gets a line of the owner's, so it need not be nudged.
-  expect(readdirSync(s.p.owner).filter((name) => !name.startsWith('.')).map((name) => readFileSync(join(s.p.owner, name), 'utf8'))).toEqual([acceptedLine(commit)]);
-  expect(flowed(s)).toContain(`Accepted species commit ${commit.slice(0, 7)}, "the second kernel", and every one before it. The kernel takes that in when Mica next asks for its mutation, and it was told to ask again.`);
-  // The kernel's record of it, whichever way it was given.
-  s.journal({ type: 'species.accepted', commit, route: 'talk' }, 2000);
+  // The approval itself wakes nobody: the agent gets a line of the owner's, so it need not be nudged.
+  expect(readdirSync(s.p.owner).filter((name) => !name.startsWith('.')).map((name) => readFileSync(join(s.p.owner, name), 'utf8'))).toEqual([approvedLine(commit)]);
+  expect(flowed(s)).toContain(`Approved commit ${commit.slice(0, 12)}, "the second kernel". The kernel takes that in when the agent next asks for its mutation, and the agent was told to ask again.`);
+  // The kernel's record of it, whichever way it was given; and the one older journals hold.
+  s.journal({ type: 'mutation.approved', commit, route: 'talk' }, 2000);
+  expect(s.all()).toContain(`mutation to ${commit.slice(0, 7)} approved by you`);
+  s.journal({ type: 'species.accepted', commit, route: 'talk' }, 3000);
   expect(s.all()).toContain(`species commit ${commit.slice(0, 7)} accepted by you`);
 });
 
-test('when the species has other cage files than the install, the owner is told under the welcome panel', () => {
-  const cage = 'The species has other versions of box, Dockerfile than this install. They are yours and were not changed: look at them with git diff, and take them with git pull in this directory, then ./box down and ./box up.';
+test('a mutation that waits for the owner is a notice that says so, with what it changes and the command; any other refusal at the kernel is a rejection', () => {
+  const s = stage(100, 40, { name: 'Mica' });
+  settled(s);
+  const commit = 'c'.repeat(40);
+  s.journal({ type: 'mutation.rejected', commit, gate: 'approval', output: 'this commit changes 1 path outside `body/`, `test/body/`, `BACKLOG.md`: kernel/k.ts\nThat is yours to change, but more follows.' }, 1000);
+  const all = flowed(s);
+  expect(all).toContain('mutation to ccccccc waits for your approval');
+  expect(all).toContain('kernel/k.ts');
+  expect(all).toContain('/approve lets it through to the checks');
+  expect(all).not.toContain('That is yours to change');
+  expect(all).not.toContain('rejected at gate');
+  s.journal({ type: 'mutation.rejected', commit, gate: 'kernel', output: 'switched off' }, 2000);
+  expect(flowed(s)).toContain('rejected at gate "kernel"');
+});
+
+test('when the generation has other cage files than the install, the owner is told under the welcome panel', () => {
+  const cage = 'The running generation has other versions of box, Dockerfile than this install. They are yours and were not changed: look at them with git diff, and take them with git pull in this directory, then ./box down and ./box up.';
   const s = stage(100, 40, { name: 'Mica', cage });
   settled(s);
-  expect(flowed(s)).toContain('The species has other versions of box, Dockerfile than this install.');
-  expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('The species has other versions');
+  expect(flowed(s)).toContain('The running generation has other versions of box, Dockerfile than this install.');
+  expect(flowed(stage(100, 40, { name: 'Mica' }))).not.toContain('generation has other versions');
 });
 
 test('a turn that failed and waits to be tried again is said so over the box, with why and when, and is gone once an answer comes', () => {
