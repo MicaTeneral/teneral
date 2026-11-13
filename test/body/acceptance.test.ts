@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { acceptanceNotes, watchJournal } from '../../body/acceptance';
-import { needsTurn, buildMessages } from '../../body/context';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import { needsTurn, buildMessages } from '../../brain/memory';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { projectable, rebuildProjection, projectionWatermark } from '../../body/rayforce-memory';
 import { encodeRayData } from '../../body/rayforce-values';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 
 const ev = (id: string, source: string, text: string): JournalEvent => ({ v: 1, id, ts: '2026-01-01', gen: 'g', type: 'stimulus', source, text }) as JournalEvent;
 const reply = (id: string, text: string): JournalEvent => ({ v: 1, id, ts: '2026-01-01', gen: 'g', type: 'assistant', text, toolCalls: [] }) as unknown as JournalEvent;

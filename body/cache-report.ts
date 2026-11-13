@@ -2,7 +2,7 @@
  * Continuations = assistant events after tool-calling assistant events in the
  * same uninterrupted turn. Unknown cached usage is excluded, never treated as 0.
  */
-import {readEvents, type JournalEvent} from '../kernel/journal';
+import {readEvents, type JournalEvent} from '../brain/journal';
 export function cacheReport(events: JournalEvent[], generation?: string) {
  type Row = {input:number; cached?:number};
  const all: Row[] = [], within: Row[] = [];

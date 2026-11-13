@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 import {correctionEdges} from '../../body/episode-corrections';
 const base={v:1 as const,gen:'test',ts:'2026'};
 const source=(id:string,channel='terminal'):JournalEvent=>({...base,id,type:'stimulus',source:channel,text:id});

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { memoryContext, memoryRecords } from '../../body/memory';
-import { buildMessages } from '../../body/context';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import { buildMessages } from '../../brain/memory';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 let seq = 0;
 const ev = (b: EventBody): JournalEvent => ({ ...b, id: `e${++seq}`, ts: '2026-01-01', v: 1, gen: 'g' });
 const owner = (text: string) => ev({ type: 'stimulus', source: 'terminal', text });

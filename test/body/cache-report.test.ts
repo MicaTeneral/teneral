@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
 import {cacheReport} from '../../body/cache-report';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 test('cache report separates continuations and unknown cache usage',()=>{
  const events=[
   {type:'assistant',gen:'g',toolCalls:[{}],usage:{input:100,output:1,cached:0}},

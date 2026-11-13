@@ -1,5 +1,5 @@
 /** Experimental replay only: no writer or runtime context wiring. */
-import type {JournalEvent} from '../kernel/journal';
+import type {JournalEvent} from '../brain/journal';
 export function correctionEdges(events:JournalEvent[], limit=128) {
   if(!Number.isSafeInteger(limit)||limit<0||limit>128) throw Error('Invalid edge limit');
   const eligible=new Map<string,number>();

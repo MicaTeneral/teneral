@@ -2,7 +2,7 @@ import {test,expect} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {appendEvent,readEvents} from '../../kernel/journal';
+import {appendEvent,readEvents} from '../../brain/journal';
 import {semanticRecall} from '../../body/semantic-recall';
 import type {ToolContext} from '../../body/tools';
 async function fixture(fn:(ctx:ToolContext)=>Promise<void>){

@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 import {journalEpisodeCards} from '../../body/episode-adapter';
 const base={v:1 as const,gen:'test',ts:'2026-01-01'};
 const original:JournalEvent={...base,id:'s1',type:'stimulus',source:'terminal',text:'Shipment Tuesday, bay East.'};

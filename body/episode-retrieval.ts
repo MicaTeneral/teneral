@@ -1,7 +1,7 @@
 /** Small-corpus experiment, intentionally unregistered. No journal writes. */
-import type {JournalEvent} from '../kernel/journal';
+import type {JournalEvent} from '../brain/journal';
 import {cancellation} from './cancellation';
-import type {Provider} from './provider';
+import type {Provider} from '../brain/provider';
 import {episodeRetrievalBoundary,episodeRetrievalUnchanged,journalBoundEpisodes} from './episode-adapter';
 import {correctionEdges} from './episode-corrections';
 import {renderMap} from './episode-map';

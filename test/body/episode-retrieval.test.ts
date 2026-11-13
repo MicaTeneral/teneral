@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 import {retrieveEpisodes} from '../../body/episode-retrieval';
 const base={v:1 as const,gen:'g',ts:''};
 const history:JournalEvent[]=[{...base,id:'s',type:'stimulus',source:'terminal',text:'GPU purchase postponed because of cost, not power.'},{...base,id:'m',type:'note',kind:'memory.v1',data:{text:'Purchase decision',tags:[],sources:['s'],episode:{decision:'GPU postponed due cost.',reason:'Cost',openQuestions:[]}}}];

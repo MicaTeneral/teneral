@@ -1,6 +1,6 @@
 // How large one request may be is a trade this body can measure and make itself, instead of a
 // constant that fits every provider and model by fitting none. The owner set the policy (his
-// message of 2026-11-13): take the window from kernel/providers.ts `contextWindow`, measure the
+// message of 2026-11-13): take the window from brain/providers.ts `contextWindow`, measure the
 // provider's own feedback — how much of a request its cache answers, how often the front has to be
 // cut, what a request costs in tokens, when a request was refused for length — and pick the budget
 // and the cut step by the full cost of a turn, not by any single number. TENERAL_CONTEXT_CHARS, if
@@ -9,7 +9,7 @@
 // Every input is a journal note this body wrote itself (budget.sent.v1 / budget.refused.v1), so
 // the chooser is rebuildable from the journal and a rollback finds data an older body understands.
 
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 
 export const SENT_KIND = 'budget.sent.v1';
 export const REFUSED_KIND = 'budget.refused.v1';
@@ -26,7 +26,7 @@ const SAMPLE_WINDOW = 48;
 /** A refusal only caps the budget while the request that followed it is still among the recent samples. */
 const REFUSAL_WINDOW = 16;
 
-/** The default share of the budget cut in one step (body/context.ts used to hard-code this). */
+/** The default share of the budget cut in one step (brain/memory.ts used to hard-code this). */
 export const DEFAULT_STEP_SHARE = 0.2;
 /** A finer cut when the cache answers little: less content dies per cut while the start barely pays for staying put. */
 const FINE_STEP_SHARE = 0.1;
@@ -85,7 +85,7 @@ function round(n: number): number {
 /**
  * The budget and cut step for the next request, from the journal's own measurements.
  *
- * `windowTokens` is what kernel/providers.ts `contextWindow` says for this provider and model;
+ * `windowTokens` is what brain/providers.ts `contextWindow` says for this provider and model;
  * null when nothing is known, where the historical default stands. `ceilingChars` is the owner's
  * TENERAL_CONTEXT_CHARS when set: it caps whatever the measurements ask for, never raises it.
  */

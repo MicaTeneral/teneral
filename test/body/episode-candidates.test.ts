@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 import { episodeCandidates, episodeCandidateContext } from '../../body/episode-candidates';
-import { buildMessages } from '../../body/context';
+import { buildMessages } from '../../brain/memory';
 let n = 0;
 const ev = (b: EventBody): JournalEvent => ({...b,id:`c${++n}`,ts:'',gen:'g',v:1});
 const owner = () => ev({type:'stimulus',source:'terminal',text:'Discuss how we should preserve our conversation.'});
@@ -48,7 +48,7 @@ test('dismiss tool is idempotent and rejects external or aborted execution',asyn
  const {mkdtempSync,rmSync}=await import('node:fs');
  const {tmpdir}=await import('node:os');
  const {join}=await import('node:path');
- const {appendEvent,readEvents}=await import('../../kernel/journal');
+ const {appendEvent,readEvents}=await import('../../brain/journal');
  const {dismissEpisode}=await import('../../body/episode-candidates');
  const dir=mkdtempSync(join(tmpdir(),'dismiss-'));
  const ctx={workspace:dir,journal:join(dir,'journal'),gen:'g',mutationCommit:null,id:'x',inbox:dir,peers:join(dir,'peers')};

@@ -6,15 +6,15 @@ import { subagent, subagents } from './subagent';
 import { heldByInterrupt, resumeWork } from './work';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendEvent, readEvents } from '../kernel/journal';
-import { contextWindow } from '../kernel/providers';
-import { needsTurn } from './context';
+import { appendEvent, readEvents } from '../brain/journal';
+import { contextWindow } from '../brain/providers';
+import { needsTurn } from '../brain/memory';
 import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
-import { runTurn } from './loop';
-import { ProviderError, connect, type Provider } from './provider';
-import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from './retry';
+import { runTurn } from '../brain/loop';
+import { ProviderError, connect, type Provider } from '../brain/provider';
+import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
-import { birth, composeSystem } from './soul';
+import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
 import { zulip, zulipCredentials } from './zulip';
 import { TOOLS, type ToolContext } from './tools';
@@ -31,7 +31,7 @@ function env(name: string): string {
 const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
 const workspace = env('TENERAL_WORKSPACE');
-// Which provider, over which protocol, with which credentials: body/provider.ts reads that from the environment.
+// Which provider, over which protocol, with which credentials: brain/provider.ts reads that from the environment.
 let provider: Provider;
 try {
   provider = connect(process.env);
@@ -51,7 +51,7 @@ const budgetChoice = decideBudget(readEvents(journal), contextWindow(process.env
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
 const sight = { load: imageStore(rootOf(journal)), max: /^\d+$/.test(imagesSet) ? Number(imagesSet) : DEFAULT_IMAGES };
-const prompt = readFileSync(join(import.meta.dir, 'prompt.md'), 'utf8');
+const prompt = readFileSync(join(import.meta.dir, '..', 'brain', 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
@@ -87,7 +87,7 @@ function emit(s: Stimulus): void {
 
 /**
  * The owner asked for the work in progress to stop: only the owner's channel can (body/sensors.ts).
- * A turn that is running is aborted, and journals that itself (body/loop.ts). A turn that is owed
+ * A turn that is running is aborted, and journals that itself (brain/loop.ts). A turn that is owed
  * but not running, because it failed and waits to be tried again or is only about to begin, is
  * ended here. When nothing is owed there is nothing to stop and the request is dropped: it is
  * never kept for a turn that has not been asked for yet.
@@ -103,7 +103,7 @@ function interrupt(): void {
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
-  // The owner's lines from `./box talk`, which may come and go while this process lives.
+  // The owner's lines from `./nest talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
@@ -158,11 +158,11 @@ if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
 stops.push(watchJournal(journal, () => wake?.()));
 
-// Failed turns in a row, and how many of the latest kind. What each kind leads to is in body/retry.ts.
+// Failed turns in a row, and how many of the latest kind. What each kind leads to is in brain/retry.ts.
 let failures = 0;
 let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 };
 for (;;) {
-  // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
+  // Also true right after a restart: an unfinished turn or a stem note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
     if (retryAt !== null && Date.now() < retryAt) {
       // A failed turn is still owed but its next try is not due. Sleep past it without waking on
@@ -190,8 +190,8 @@ for (;;) {
     console.error(`[turn failed] ${error instanceof Error ? (kind === 'own' ? error.stack ?? error.message : error.message) : String(error)}`);
     const next = verdict(kind, streak.count);
     if (next === 'exit') {
-      // Not the provider: waiting mends nothing. As a crash the kernel counts it, and rolls this generation back if it goes on.
-      console.error(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the kernel can act`);
+      // Not the provider: waiting mends nothing. As a crash the stem counts it, and rolls this generation back if it goes on.
+      console.error(`[giving up] ${PATIENCE} turns in a row failed in this generation's own code; exiting so the stem can act`);
       process.exit(1);
     }
     if (next === 'record' && error instanceof ProviderError) {

@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { isMutationRejection, isMutationRequest, type JournalEvent } from '../kernel/journal';
+import { isMutationRejection, isMutationRequest, type JournalEvent } from '../brain/journal';
 
 /** Exact match only; newer ancestor consent requires manual reconciliation. */
 export function acceptanceNotes(events: JournalEvent[]): Map<string, string> {

@@ -2,7 +2,7 @@ import {test,expect} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {appendEvent,readEvents} from '../../kernel/journal';
+import {appendEvent,readEvents} from '../../brain/journal';
 import {retrieveJournalEpisodes} from '../../body/episode-receipts';
 async function fixture(fn:(journal:string,id:string)=>Promise<void>){
  const dir=mkdtempSync(join(tmpdir(),'episode-receipt-')),journal=join(dir,'journal');

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { appendEvent, readEvents } from '../kernel/journal';
+import { appendEvent, readEvents } from '../brain/journal';
 import { cancellation } from './cancellation';
 import { memoryRecords, secretLine } from './memory';
 import { answerEvidence, validateSelection } from './memory-selection';
-import type { Provider } from './provider';
+import type { Provider } from '../brain/provider';
 import type { Tool } from './tools';
 
 /** Explicit auxiliary call, not automatic context retrieval. No application retries. */

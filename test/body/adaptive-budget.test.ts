@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { decideBudget, SENT_KIND, REFUSED_KIND } from '../../body/adaptive-budget';
-import { buildMessages, DEFAULT_BUDGET } from '../../body/context';
-import type { JournalEvent } from '../../kernel/journal';
+import { buildMessages, DEFAULT_BUDGET } from '../../brain/memory';
+import type { JournalEvent } from '../../brain/journal';
 
 const ev = (kind: string, data: unknown): JournalEvent => ({ type: 'note', kind, data } as unknown as JournalEvent);
 

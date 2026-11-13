@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 import {memoryContext} from '../../body/memory';
 import {validateSelection,answerEvidence} from '../../body/memory-selection';
 import {episodeCards,episodeSources} from './episode-map-fixture';

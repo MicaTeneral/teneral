@@ -1,4 +1,4 @@
-import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import type { Tool } from './tools';
 
 const KIND = 'memory.v1';

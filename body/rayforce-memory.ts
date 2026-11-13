@@ -12,7 +12,7 @@
 // Rows load as RFL source produced by a small RFL-encoder (toRfl), so no executable symbol reaches
 // the wire from message text and the data survives the wire's UTF-8 round-trip as plain literals.
 
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 import { narrationLine, secretLine, tagsOf } from './memory';
 import type { RayData } from './rayforce-values';
 import { queryRayforce } from './rayforce';

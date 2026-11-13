@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { zulipPoller, zulipCredentials } from '../../body/zulip';
 import type { Stimulus } from '../../body/sensors';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 const credentials = () => ({ site: 'https://example.test', email: 'mica@test', api_key: 'fake' });
 test('Zulip DMs sorted, marked untrusted, deduplicated across restart and paginated forward', async () => {
   const notices: Stimulus[] = [];

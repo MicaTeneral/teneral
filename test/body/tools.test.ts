@@ -3,10 +3,10 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bashEnv, runBash, TOOLS, type ToolContext } from '../../body/tools';
-import { MAX_HOPS, archive, collect, deliver } from '../../kernel/envelope';
-import { git } from '../../kernel/gates';
-import { readEvents } from '../../kernel/journal';
-import { makeRepo, writeFiles } from '../kernel/helpers';
+import { MAX_HOPS, archive, collect, deliver } from '../../body/envelope';
+import { git } from '../../immune/gates';
+import { readEvents } from '../../brain/journal';
+import { makeRepo, writeFiles } from '../helpers';
 
 function tool(name: string) {
   const found = TOOLS.find((t) => t.spec.name === name);
@@ -348,9 +348,9 @@ test('send names the peers file when it is malformed', async () => {
 // --- look ---
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { buildMessages } from '../../body/context';
+import { buildMessages } from '../../brain/memory';
 import { imageStore } from '../../body/images';
-import { appendEvent } from '../../kernel/journal';
+import { appendEvent } from '../../brain/journal';
 
 const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 

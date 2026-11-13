@@ -2,7 +2,7 @@ import {test,expect} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {appendEvent,readEvents} from '../../kernel/journal';
+import {appendEvent,readEvents} from '../../brain/journal';
 import {episodeRecall} from '../../body/episode-tool';
 import type {ToolContext} from '../../body/tools';
 test('explicit wrapper reports limited coverage, evidence and only own receipts',async()=>{

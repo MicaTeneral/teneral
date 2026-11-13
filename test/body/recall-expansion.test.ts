@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
 import {recallJournal} from '../../body/recall';
-import type {JournalEvent} from '../../kernel/journal';
+import type {JournalEvent} from '../../brain/journal';
 // Single query-only worker sample e40d4f12-faad-47c0-abbf-ccd9c3819301.
 // Worker never received these documents. Fixtures overlap prior selector probes;
 // not a held-out benchmark and not a live inference test.

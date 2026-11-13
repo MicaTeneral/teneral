@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 import type { Sensor, Stimulus } from './sensors';
 
 /** Read only this setting; never return or log the configuration file itself. */

@@ -1,8 +1,8 @@
 /** Explicit supplementary lookup; never automatic context retrieval. */
-import {readEvents} from '../kernel/journal';
+import {readEvents} from '../brain/journal';
 import {journalEpisodeCards} from './episode-adapter';
 import {retrieveJournalEpisodes} from './episode-receipts';
-import type {Provider} from './provider';
+import type {Provider} from '../brain/provider';
 import type {Tool} from './tools';
 export function episodeRecall(provider:Provider):Tool {
  return {

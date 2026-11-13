@@ -1,7 +1,7 @@
 /** Unregistered journal adapter. Own receipt IDs only, not a note-kind exemption. */
 import {randomUUID} from 'node:crypto';
-import {appendEvent,readEvents} from '../kernel/journal';
-import type {Provider} from './provider';
+import {appendEvent,readEvents} from '../brain/journal';
+import type {Provider} from '../brain/provider';
 import {retrieveEpisodes} from './episode-retrieval';
 export function retrieveJournalEpisodes(query:string,journal:string,gen:string,provider:Provider,signal?:AbortSignal,timeoutMs=30000,onReceipt?:(id:string)=>void) {
  const request=randomUUID(), own=new Set<string>();

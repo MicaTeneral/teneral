@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mailKey, mailPoller } from '../../body/mail';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 import type { Stimulus } from '../../body/sensors';
 
 const response = (data: unknown) => new Response(JSON.stringify(data));

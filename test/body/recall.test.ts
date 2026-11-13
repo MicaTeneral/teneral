@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { recallJournal } from '../../body/recall';
-import type { EventBody, JournalEvent } from '../../kernel/journal';
+import type { EventBody, JournalEvent } from '../../brain/journal';
 const ev = (body: EventBody, id = 'test'): JournalEvent => ({ ...body, id, ts: '2026-01-01T00:00:00Z', gen: 'g', v: 1 });
 const owner = ev({ type: 'stimulus', source: 'terminal', text: 'Do you remember?' });
 test('recovers old account claims beyond a large recent suffix, with provenance', () => {

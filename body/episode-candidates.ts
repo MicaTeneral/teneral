@@ -1,5 +1,5 @@
 import type { Tool } from './tools';
-import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { memoryRecords, secretLine, terminalMemory } from './memory';
 
 const DISMISSED = 'episode.dismissed.v1';

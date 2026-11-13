@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 import type { Sensor, Stimulus } from './sensors';
 
 interface Credentials { site: string; email: string; api_key: string }

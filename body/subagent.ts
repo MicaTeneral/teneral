@@ -1,6 +1,6 @@
 import { cancellation } from './cancellation';
 import { randomUUID } from 'node:crypto';
-import type { Provider } from './provider';
+import type { Provider } from '../brain/provider';
 import type { Tool } from './tools';
 
 /** Capability isolation, not an OS sandbox. Transport credentials remain in Provider. */

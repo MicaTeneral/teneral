@@ -1,4 +1,4 @@
-import type { Provider } from './provider';
+import type { Provider } from '../brain/provider';
 import type { Tool } from './tools';
 import { retrieveSources, validateSources } from './sources';
 import { subagents } from './subagent';

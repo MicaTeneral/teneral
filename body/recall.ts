@@ -1,4 +1,4 @@
-import { readEvents, type JournalEvent } from '../kernel/journal';
+import { readEvents, type JournalEvent } from '../brain/journal';
 import { secretLine } from './memory';
 import { ensureRayforceMemory } from './rayforce-server';
 import { queryRayforce } from './rayforce';

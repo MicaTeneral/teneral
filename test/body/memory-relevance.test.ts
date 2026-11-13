@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { memoryContext } from '../../body/memory';
-import type { JournalEvent } from '../../kernel/journal';
+import type { JournalEvent } from '../../brain/journal';
 
 // Synthetic diagnostic selected by the same agent after initial exploration.
 // Not independent/blind evaluation; do not tune a synonym dictionary to it.

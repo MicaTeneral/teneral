@@ -12,7 +12,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { rebuildProjection, projectionWatermark } from './rayforce-memory';
 import { evalRayforce } from './rayforce';
-import type { JournalEvent } from '../kernel/journal';
+import type { JournalEvent } from '../brain/journal';
 
 const PORT = 19796;
 let starting: Promise<number> | null = null;

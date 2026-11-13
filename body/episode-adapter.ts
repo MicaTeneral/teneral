@@ -1,5 +1,5 @@
 /** Experimental journal-derived view, not a new store or runtime injection. */
-import type {JournalEvent} from '../kernel/journal';
+import type {JournalEvent} from '../brain/journal';
 import {memoryRecords} from './memory';
 import type {EpisodeCard} from './episode-map';
 export function journalEpisodeCards(events:JournalEvent[]):EpisodeCard[] {

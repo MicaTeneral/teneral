@@ -3,9 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
-import { appendEvent, readEvents } from '../../kernel/journal';
-import { deliver, ENVELOPE_VERSION } from '../../kernel/envelope';
-import { interrupt, tell } from '../../kernel/owner';
+import { appendEvent, readEvents } from '../../brain/journal';
+import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
+import { interrupt, tell } from '../../keeper/owner';
 
 async function* lines(...items: string[]) {
   for (const item of items) yield item;
@@ -146,7 +146,7 @@ test('a poll that cannot even list the inbox, or an emit that throws, does not t
   }
 });
 
-// --- the owner's lines, left as files by kernel/talk.ts ---
+// --- the owner's lines, left as files by keeper/talk.ts ---
 
 const ownerDir = () => join(mkdtempSync(join(tmpdir(), 'teneral-owner-')), 'owner');
 
