@@ -8,6 +8,7 @@ import { parseOrgans } from '../../immune/organs';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
 import { rebuildProjection, projectionWatermark } from '../../body/rayforce-memory';
 import { withRayforceMemory, stopRayforceMemory } from '../../body/rayforce-server';
+import { queryRayforce } from '../../body/rayforce';
 import { recallJournal, recallRayforce } from '../../body/recall';
 
 const ev = (id: string, type: 'assistant' | 'stimulus', text: string): JournalEvent => ({
@@ -55,6 +56,41 @@ test('real projection handles empty/small/65+ rows and recall is byte-identical 
       { excerpts: 65, episodes: 0, recall: 65 },
     ]);
     expect(result.parity).toEqual(Array(10).fill(true));
+  } finally {
+    await stopRayforceMemory(port);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('real projection chunks a corpus larger than one MiB without duplication or order loss', async () => {
+  const organs = process.env.TENERAL_ORGANS;
+  if (!organs) return;
+  const dir = mkdtempSync(join(tmpdir(), 'rayforce-chunks-'));
+  const port = await freePort(), options = { organs, port };
+  const large = Array.from({ length: 1100 }, (_, i) => ev(`large-${i}`, 'assistant', `boundary-${i} ` + (i === 550 ? '世界' : 'abcdefghij').repeat(i === 550 ? 250 : 100)));
+  expect(large.reduce((n, e) => n + Buffer.byteLength(e.type === 'assistant' ? e.text : ''), 0)).toBeGreaterThan(1024 * 1024);
+  const journal = join(dir, 'journal.jsonl');
+  try {
+    const result = await withRayforceMemory(journal, [], async p => {
+      const counts = await rebuildProjection(p, large);
+      const selected = await queryRayforce(p, '(select {from: rc_search})');
+      if (!('columns' in selected) || !('items' in selected.columns[0]!)) throw Error('Missing ordered recall ids');
+      const ids = selected.columns[0].items.map(x => 'value' in x ? x.value : null);
+      expect(ids).toEqual(large.map(e => e.id));
+      const parity = [];
+      for (const id of [0, 550, 1099]) {
+        parity.push(await recallRayforce(large, p, `boundary-${id}`) === recallJournal(large, `boundary-${id}`));
+      }
+      // Replacing the complete snapshot must not append it to the old one.
+      expect(await rebuildProjection(p, large)).toEqual(counts);
+      expect(await projectionWatermark(p)).toEqual({ excerpts: 0, episodes: 0, recall: large.length });
+      expect(await rebuildProjection(p, large.slice(0, 600))).toEqual({ excerpts: 0, episodes: 0, recall: 600 });
+      expect(await recallRayforce(large.slice(0, 600), p, 'boundary-1099')).toBe(recallJournal(large.slice(0, 600), 'boundary-1099'));
+      return { counts, parity };
+    }, options);
+    if (result === null) throw Error('Pinned Rayforce large projection failed');
+    expect(result.counts).toEqual({ excerpts: 0, episodes: 0, recall: large.length });
+    expect(result.parity).toEqual([true, true, true]);
   } finally {
     await stopRayforceMemory(port);
     rmSync(dir, { recursive: true, force: true });

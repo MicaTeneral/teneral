@@ -74,19 +74,38 @@ function value(row: MemoryRow, field: Field): string {
 }
 /** ray_table_fn takes one vector per column. Use typed STR vectors: a generic
  * `list` call is limited to 64 arguments by the evaluator. */
-function table(name: string, field: string, rows: { id: string }[], text: (row: any) => string): string {
+const REQUEST_BUDGET = 512 * 1024;
+function tableExpression(field: string, rows: { id: string }[], text: (row: any) => string): string {
   const column = (values: string[]) => `[${values.map(v => JSON.stringify(v)).join(' ')}]`;
-  return `(set ${name} (table [id ${field}] (list ${column(rows.map(r => r.id))} ${column(rows.map(text))})))`;
+  return `(table [id ${field}] (list ${column(rows.map(r => r.id))} ${column(rows.map(text))}))`;
 }
-function buildRfl(events: JournalEvent[]): string {
+/** Keep each trusted source string comfortably below the transport cap. Rows are
+ * never split; oversized single rows fail explicitly instead of weakening IPC bounds. */
+function tableRequests(name: string, field: string, rows: { id: string }[], text: (row: any) => string): string[] {
+  const batches: { id: string }[][] = [];
+  let batch: { id: string }[] = [], bytes = 128;
+  for (const row of rows) {
+    const cost = Buffer.byteLength(JSON.stringify(row.id)) + Buffer.byteLength(JSON.stringify(text(row))) + 2;
+    if (batch.length && bytes + cost > REQUEST_BUDGET) { batches.push(batch); batch = []; bytes = 128; }
+    batch.push(row); bytes += cost;
+  }
+  if (batch.length || !rows.length) batches.push(batch);
+  return batches.map((group, i) => {
+    const expression = tableExpression(field, group, text);
+    const source = i === 0 ? `(do (set ${name} ${expression}) 1)` : `(do (insert '${name} ${expression}) 1)`;
+    if (Buffer.byteLength(source) > REQUEST_BUDGET) throw Error(`Rayforce projection row exceeds ${REQUEST_BUDGET}-byte chunk budget`);
+    return source;
+  });
+}
+function buildRequests(events: JournalEvent[]): string[] {
   const rows = projectable(events).rows;
-  const statements: string[] = [];
+  const requests: string[] = [];
   for (const [prefix, group] of [['ex', rows.filter(r => r.kind !== 'curated episode claim')], ['ep', rows.filter(r => r.kind === 'curated episode claim')]] as const) {
-    for (const field of FIELDS) statements.push(table(`${prefix}_${field}`, field, group, r => value(r, field)));
+    for (const field of FIELDS) requests.push(...tableRequests(`${prefix}_${field}`, field, group, r => value(r, field)));
   }
   // Case-fold in JavaScript with the same operation as the journal renderer.
-  statements.push(table('rc_search', 'search', recallProjection(events), r => r.search));
-  return `(do ${statements.join(' ')} 1)`;
+  requests.push(...tableRequests('rc_search', 'search', recallProjection(events), r => r.search));
+  return requests;
 }
 
 export interface ProjectionWatermark { excerpts: number; episodes: number; recall: number }
@@ -102,7 +121,7 @@ export async function projectionWatermark(port: number): Promise<ProjectionWater
 export async function rebuildProjection(port: number, events: JournalEvent[]): Promise<ProjectionWatermark> {
   const rows = projectable(events).rows;
   const expected = { excerpts: rows.filter(r => r.kind !== 'curated episode claim').length, episodes: rows.filter(r => r.kind === 'curated episode claim').length, recall: recallProjection(events).length };
-  await queryRayforce(port, buildRfl(events));
+  for (const request of buildRequests(events)) await queryRayforce(port, request);
   const actual = await projectionWatermark(port);
   if (actual.excerpts !== expected.excerpts || actual.episodes !== expected.episodes || actual.recall !== expected.recall) {
     throw Error(`Rayforce memory watermark mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);

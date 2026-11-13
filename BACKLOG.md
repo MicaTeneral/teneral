@@ -61,6 +61,26 @@ Focused checks passed (14 tests), full suite passed 1058/0 fail and tsc is clean
 relevance ~0.070/0.095/0.130ms, expanded queries ~0.044/0.074/0.116ms. These are microbenchmarks,
 not end-to-end request latency. Post-promotion verify the live module and a real-journal context sample.
 
+## Rayforce projection chunking: real-corpus IPC boundary
+After BM25 promotion 40684bc, live receipt 1d3a3a5c failed with `Rayforce data byte limit`.
+The entire snapshot was serialized into one trusted-RFL string; its text exceeded the intentional
+1MiB encodeRayData cap. Do not raise the transport cap or mix this repair with ranking changes.
+Pinned v3.0.2 isolated probe verified `(insert 't newRows)` appends in order and returns a symbol.
+Chunk every table at row boundaries with conservative encoded-source headroom; first chunk uses
+`set`, subsequent chunks use quoted insert, and every request returns scalar 1 rather than a large
+table. Preserve typed STR empty columns and exact expected counts. Regression must exceed 1MiB
+across many rows, force multiple chunks, verify first/middle/last and literal recall parity, with
+no duplicated old snapshot rows. A failed rebuild remains an explicit fallback, never a completed
+receipt. Success: real-organ tests, full suite/typecheck, promotion, then fresh completed live
+receipt and journal/Rayforce parity on the actual growing corpus.
+Implemented: focused pinned-organ tests pass 6/6 including >1MiB, ordered IDs, Unicode and replacement;
+isolated real-journal rebuild completed in 352ms with 386 excerpts, 3 episodes, 2132 recall rows and
+3/3 recall parity. Full suite passed 1059/0 fail and typecheck clean before the final fixture-only
+Unicode addition; focused tests then passed again. Failure rehearsal used 600 admissible 1000-char
+lines in one event: oversized projected row produced started/failed and null fallback, next valid
+snapshot produced completed. Earlier one-line 600KiB probe was not a failure case because recallProjection
+filters lines >1000 chars. Production remains on failed receipts until this candidate is promoted.
+
 ## Warm-cache cut step: measured 5%, not a blind budget shrink
 Live telemetry after 8c44a85 found first-byte latency around 4.4–5.1s and highly variable
 whole-call time (12.2–42.7s); it does not justify claiming a latency improvement by itself.
