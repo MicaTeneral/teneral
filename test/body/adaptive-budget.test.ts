@@ -57,11 +57,14 @@ test('a recent refusal pulls the next budget below what just failed', () => {
   expect(d.report.refused).toBe(1);
 });
 
-test('a low cache-hit picks a fine cut step; a high one the coarse default', () => {
+test('a warm cache gets the measured small step; cold traffic and the unmeasured default stay bounded', () => {
   const cold = decideBudget([sent(100_000, 50_000, 5_000)], 262_144, undefined, DEFAULT_BUDGET);
   expect(cold.stepShare).toBe(0.1);
+  const boundary = decideBudget([sent(100_000, 50_000, 25_000)], 262_144, undefined, DEFAULT_BUDGET);
+  expect(boundary.stepShare).toBe(0.05);
   const warm = decideBudget([sent(100_000, 50_000, 45_000)], 262_144, undefined, DEFAULT_BUDGET);
-  expect(warm.stepShare).toBe(0.2);
+  expect(warm.stepShare).toBe(0.05);
+  expect(decideBudget([], 262_144, undefined, DEFAULT_BUDGET).stepShare).toBe(0.2);
 });
 
 test('a refusal caps only while what it refused is still recent', () => {

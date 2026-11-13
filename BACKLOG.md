@@ -20,6 +20,17 @@ No latency field exists yet, so do not claim a measured latency improvement from
 merging pulse or blindly shrinking context. Budget changes need their own commit,
 post-change samples and continuity/quality observation.
 
+## Warm-cache cut step: measured 5%, not a blind budget shrink
+Live telemetry after 8c44a85 found first-byte latency around 4.4–5.1s and highly variable
+whole-call time (12.2–42.7s); it does not justify claiming a latency improvement by itself.
+The journal showed repeated 20% prefix jumps, including input 155249 -> 63140 and cached
+147968 -> 10240. Replaying 64 identical journal prefixes gave: step 20%, mean 346696 chars,
+322944 common-prefix bytes, 4 prefix changes; step 5%, 365182 chars, 331776 common-prefix
+bytes, 5 changes; step 2.5%, 381587 chars, 334880 bytes, 7 changes. Choose 5% only once
+recent cached/input is >=0.5; retain 10% cold and 20% with no measurements. BudgetChars,
+window safety and owner ceiling are unchanged. Success requires post-promotion timed samples
+and continuity observation, not merely this offline replay.
+
 ## Request latency before budget tuning
 The pulse merge exposed no timing evidence, so a latency win cannot be inferred from cache
 or token counts. Add optional durationMs and firstByteMs to the existing budget.sent.v1

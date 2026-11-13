@@ -26,12 +26,12 @@ const SAMPLE_WINDOW = 48;
 /** A refusal only caps the budget while the request that followed it is still among the recent samples. */
 const REFUSAL_WINDOW = 16;
 
-/** The default share of the budget cut in one step (brain/memory.ts used to hard-code this). */
+/** Keep the historical coarse step until measurements exist; cold traffic retains the former fine step. */
 export const DEFAULT_STEP_SHARE = 0.2;
-/** A finer cut when the cache answers little: less content dies per cut while the start barely pays for staying put. */
-const FINE_STEP_SHARE = 0.1;
-/** Below this cached share the cut moves finely; at or above it, coarsely. */
-const FINE_CACHE_BELOW = 0.5;
+const COLD_STEP_SHARE = 0.1;
+/** Once the cache answers half the input, a smaller step avoids a large context cliff for one extra prefix change. */
+const WARM_STEP_SHARE = 0.05;
+const WARM_CACHE_FROM = 0.5;
 
 /** What one sent request reported, under names this file wrote. */
 interface Sent { chars: number; input: number; cached: number; dropped: number; durationMs?: number; firstByteMs?: number }
@@ -136,6 +136,6 @@ export function decideBudget(events: JournalEvent[], windowTokens: number | null
   if (refusedChars !== null) budgetChars = Math.max(MIN_BUDGET_CHARS, Math.min(budgetChars, round(refusedChars * 0.8)));
   if (ceilingChars !== undefined && ceilingChars > 0) budgetChars = Math.min(budgetChars, Math.floor(ceilingChars));
 
-  const stepShare = cachedRatio !== null && cachedRatio < FINE_CACHE_BELOW ? FINE_STEP_SHARE : DEFAULT_STEP_SHARE;
+  const stepShare = cachedRatio === null ? DEFAULT_STEP_SHARE : cachedRatio < WARM_CACHE_FROM ? COLD_STEP_SHARE : WARM_STEP_SHARE;
   return { budgetChars, stepShare, windowTokens, report: { samples: recent.length, cachedRatio, cutRate, peakTokens, charsPerToken, durationMs, firstByteMs, timedSamples: timed.length, refused } };
 }
