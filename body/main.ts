@@ -1,3 +1,4 @@
+import { episodeRecall } from './episode-tool';
 import { watchJournal } from "./acceptance";
 import { research } from './research';
 import { subagent, subagents } from './subagent';
@@ -105,7 +106,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, sight,
+      journal, gen, provider, tools: [...TOOLS, episodeRecall(provider), subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, sight,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),

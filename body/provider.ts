@@ -96,7 +96,13 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
   return out;
 }
 
-export interface ProviderCallOptions { signal?: AbortSignal }
+export interface ProviderCallOptions { signal?: AbortSignal; maxOutputTokens?: number }
+function outputLimit(options?: ProviderCallOptions): number | undefined {
+  const value = options?.maxOutputTokens;
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 32768))
+    throw new Error("maxOutputTokens must be an integer from 1 to 32768");
+  return value;
+}
 export type Provider = (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions) => Promise<Reply>;
 
 export interface ProviderConfig {
@@ -180,7 +186,9 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
   return async (messages, tools, options) => {
     // Cancelled before it began: nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
+    const limit = outputLimit(options);
     const body: Record<string, unknown> = { model: cfg.model, messages: toChatMessages(messages) };
+    if (limit !== undefined) body.max_completion_tokens = limit;
     if (tools.length > 0) body.tools = tools.map((t) => ({ type: 'function', function: t }));
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
@@ -359,8 +367,10 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
   const once = async (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions): Promise<Reply> => {
     // Cancelled before it began, or between the two tries below: no token is asked for and nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
+    const limit = outputLimit(options);
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
+    if (limit !== undefined) body.max_output_tokens = limit;
     if (instructions !== '') body.instructions = instructions;
     if (tools.length > 0) body.tools = toResponsesTools(tools, cfg.namespace);
     // Without this the reasoning comes back with no summary at all. `auto` is the most detailed one the model has.

@@ -326,3 +326,142 @@ Confirmed queued-work branch repeats model requests twice after final prose with
 new stimulus. Removed branch and its nudge; work sensor still resumes agenda.
 Regression asserts one provider call/assistant reply and unchanged queued outcome.
 Memory experiments preserved in git stash pending isolated promotion of this fix.
+## Retrieval evaluation before policy changes
+Observed actual runtime synthetic baseline: six of ten positive queries hit,
+all four off-topic queries return memory. Preserve a reproducible fixture before
+changing scoring. Compare removal of generic decision tag on identical runtime
+records: this isolates tag-only noise without fitting synonyms to queries.
+This is a diagnostic, not evidence of semantic improvement or a deployed fix.
+
+Semantic selector boundary: model probes confuse topical context with evidence.
+Add a pure fail-closed ID/relation validator before any runtime integration.
+This validates structure/provenance membership, NOT truth of relevance judgments.
+
+Auxiliary semantic calls require bounded output before integration. Add optional
+maxOutputTokens on both provider protocols, reject invalid limits before network
+or token acquisition, leave omitted behavior unchanged. Tests use stub transport;
+no claim of live route support. Existing provider auth/summary retries may still
+occur with the same bound; no retry may silently remove it.
+
+Implement standalone semantic recall tool factory before wiring main. Full bounded
+snapshot, same-turn recheck, original records only, usage notes before parsing,
+local cancellation/deadline, no application retry. Tests use fake provider only.
+
+Owner redirects to existing model/subagents, no new embedding installation.
+Evaluate query-only expansion using actual recallJournal against synthetic source
+records, preserving failures (wrong entities, missing details, zero-overlap and
+paging crowd-out). Worker sees queries only; frozen output is a single observed
+sample, not evidence of future deterministic expansion quality.
+
+Episode-map probe needs deterministic coverage and source-change invalidation:
+manual routing shortened the worker output and correction was only preexisting.
+Add experimental pure snapshot/render helpers, not runtime wiring; test immutable
+card rendering, omitted coverage and source-content changes before further probe.
+
+Next episode-map checkpoint: distinguish supplied-card coverage from eligible-source
+coverage, freeze all exact worker cards, detect appended-source gaps. Do not claim
+semantic supersession from string text; resolver integration remains separate.
+
+Explicit whole-source supersession resolver for episode experiment: validate
+ordered prior targets, reject ambiguous IDs, no text-based correction inference.
+Test chain invalidation and preserve unrelated source evidence. Partial-field
+corrections must not be misrepresented as whole-source replacement.
+
+Partial corrections: explicit validated source-to-prior-source edges must dirty
+cards missing correction evidence, including chained corrections, without hiding
+original sources. Structural inclusion is necessary, not proof summary is correct.
+
+Owner reported duplicate post-report replies on scheduled wakes (19:55/19:58).
+Confirmed loop.ts queued-work continuation issues two model calls without new
+stimulus after final prose. Remove nudges; work sensor owns future scheduling.
+Regression: queued work + final text => one request/assistant reply; new genuine
+stimuli still handled by arrivedSince. Preserve queue and outcome unchanged.
+
+After loop fix promotion, selectively restored experiments, leaving loop files
+unchanged. Next minimal bridge: adapt existing validated journal episode records
+into cards only on terminal-owner context; no parallel store, no automatic injection.
+Test replay of memory-record replacement and nonterminal refusal. Raw-source partial
+correction edges remain a separate unpersisted experimental primitive.
+
+Journal-to-selection integration checkpoint: exercise validated episode replay,
+exact map rendering and selection allowlist together. Unknown/hidden card IDs must
+not re-enter evidence; nonterminal views remain empty. This tests plumbing, not
+model relevance. Define partial correction note protocol before implementing it.
+
+Correction replay experiment: explicit add/withdraw operations; withdrawal names
+active correction-note ID, never removes source events. Bound active edges, reject
+unknown/forward/ineligible references, replay terminal curation only. No persistence
+writer/runtime wiring until semantics and tests reviewed.
+
+Bind experimental cards to canonical correction graph snapshot. Any graph change
+conservatively invalidates cards (including withdrawals); reordering is equivalent.
+Review duplicate assertions: retain note ownership for withdrawals, deduplicate
+returned edges. Tests before any runtime integration; no automatic rebind shortcut.
+
+Build snapshot replay: existing episode note position provides immutable creation
+boundary, so reconstruct graph from journal prefix at that note rather than current
+graph. No extra persisted digest needed for current synchronous curated-note model.
+Test withdrawal after build invalidates surviving summary. Future asynchronous
+creation must pin input snapshot explicitly rather than assume append time.
+
+Async boundary experiment: bounded whole-journal snapshot token before model call,
+validate exact snapshot and terminal audience immediately before accepting proposal.
+Any intervening event rejects; conservative, no implicit rebinding. Bound adapter
+input/card counts to contain repeated-prefix replay. No persistence/runtime writer.
+
+Common-pipeline diagnostic: compare existing memoryContext lexical filtering of
+identical episode cards against full-map exposure, then apply SAME recorded worker
+selection via validateSelection/answerEvidence. Separate candidate recall from
+answer support; recorded selector is not live/blind evaluation. No tuning to results.
+
+Unregistered small-corpus retrieval integration: bounded adapter/map -> provider
+strict parsed allowlist -> original-source evidence. Snapshot recheck, sensitive
+source refusal and output caps. No claim of semantic truth from schema validation;
+no live deployment until deadline/cost receipt integration reviewed.
+
+Retrieval safety: enforce local deadline and parent cancellation even for transports
+ignoring abort. Expose content-free auxiliary usage receipts via required option for
+future caller integration; current helper remains unregistered. Receipt sink must
+not mutate source snapshot. Test timeout, invalid output usage, sensitive originals.
+
+Receipt adapter: append content-free auxiliary notes and exclude only exact IDs
+returned by own appendEvent calls from this request's snapshot reads. Same-kind
+foreign notes, corrections and audience changes must still invalidate retrieval.
+No registration/live inference; test durable usage on mocked journal.
+
+Feasibility decision: real journal aggregate exceeds BOTH experimental caps.
+Do not register tool, truncate source history, or raise caps to force acceptance.
+Stop small-corpus implementation here pending explicit scope decision on scalable
+journal projection/indexing. Synthetic benefit established only for fixture; owner
+outcome not achieved on real history. Receipt review: append failure rejects operation;
+post-provider append failure can lose durable usage, timeout can lose late usage.
+No retry because remote billing uncertain. These limitations block production use.
+
+Owner-approved projection step: remove whole-journal caps; bound validated cards,
+source events, correction notes and current stimulus instead. Snapshot includes
+build-time bindings plus current graph. Irrelevant non-correction notes no longer
+invalidate. Still full local replay, not bounded disk IO or scalable index.
+
+Projection validation: rename guard explicitly retrieval-only, add supersession,
+tombstone and correction-projection cap tests; aggregate-only real journal replay
+measurement and full suite. No private content/model call or runtime wiring.
+
+Reviewed experimental runtime modules/provider diff and integration scope. Provider
+output cap belongs to feature; body268938 bytes incl53628 design notes, no numeric
+body-size invocation found in current gates. Chosen next: explicit episode_recall
+wrapper with unavoidable limited-coverage metadata and tests, before registration.
+Not semanticRecall (real corpus exceeds its cap), no auto ingestion or context swap.
+
+Explicit episode tool wrapper: limited-coverage/count metadata, source evidence and
+own receipt IDs returned on success/failure. No registration or backfill. Tests for
+empty scope, exact schema, private audience and receipt attribution.
+
+Wrapper failure review: changed audience/turn must not return private episode count
+or receipt IDs even on failure. Recheck exact terminal stimulus before both result
+paths; cancellation returns no private payload. Test failed provider and races before
+registration. No registration in this safety checkpoint.
+
+Integration motive: bounded paraphrase lookup now passes projection/privacy tests
+but unavailable at runtime. Register explicit episodeRecall only (not semanticRecall),
+no startup call or automatic context change. Verify full suite/typecheck; kernel
+ready/exit75/probation lifecycle remains untouched by single tools-list addition.

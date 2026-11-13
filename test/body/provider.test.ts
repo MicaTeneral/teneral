@@ -352,3 +352,23 @@ test('Responses, refused a reasoning summary and then cancelled, does not ask ag
   await expect(again([], [], { signal: new AbortController().signal })).rejects.toThrow(/answered 400/);
   expect(posts).toBe(3);
 });
+
+test('optional output bounds map to each protocol and invalid values never acquire token or send', async () => {
+ const {responsesProvider}=await import('../../body/provider');
+ for(const responses of [false,true]) {
+  let sends=0, tokens=0; const bodies: Record<string,unknown>[]=[];
+  const send=(async (_u:unknown, init?:RequestInit)=>{
+   sends++; bodies.push(JSON.parse(init!.body as string));
+   return new Response('limit unsupported',{status:400});
+  }) as typeof fetch;
+  const p=responses?responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=>{tokens++;return 'k';},fetch:send}):openAiProvider({...cfg,fetch:send});
+  for(const limit of [0,-1,1.5,NaN,Infinity,32769]) await expect(p([],[],{maxOutputTokens:limit})).rejects.toThrow('maxOutputTokens');
+  expect(sends).toBe(0); expect(tokens).toBe(0);
+  await expect(p([],[],{maxOutputTokens:512})).rejects.toThrow();
+  expect(sends).toBe(1); // Unsupported bound must not be dropped and retried.
+  expect(bodies[0]![responses?'max_output_tokens':'max_completion_tokens']).toBe(512);
+  await expect(p([],[])).rejects.toThrow();
+  expect(bodies[1]).not.toHaveProperty('max_output_tokens');
+  expect(bodies[1]).not.toHaveProperty('max_completion_tokens');
+ }
+});
