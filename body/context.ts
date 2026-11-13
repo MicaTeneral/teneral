@@ -1,4 +1,5 @@
 import { acceptanceNotes } from "./acceptance";
+import { DEFAULT_STEP_SHARE } from './adaptive-budget';
 import { episodeCandidateContext } from './episode-candidates';
 import { memoryContext } from "./memory";
 import { isMutationRejection, type JournalEvent } from '../kernel/journal';
@@ -143,6 +144,12 @@ const TOO_LARGE =
   '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
 const NOTHING = '[context] There is nothing in your journal to show yet.';
 
+/** Optional out-parameter for buildMessages: how the conversation fit the budget, for the budget chooser to learn from. */
+export interface BuildInfo {
+  /** Characters cut from the front to fit; 0 when the whole conversation fit. */
+  droppedChars: number;
+}
+
 /** Below this much room, a message is not worth cutting to fit. */
 const CLIP_MIN = 200;
 /** Room kept for the note `clip` puts where it cut. */
@@ -162,7 +169,7 @@ const STEP = 0.2;
  * conversation, is always a multiple of one step: the cut stays where it is while the journal
  * grows by up to a step, then jumps.
  */
-function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
+function fit(messages: ChatMessage[], budgetChars: number, stepShare: number, info?: BuildInfo): ChatMessage[] {
   if (messages.length === 0) return [{ role: 'user', content: NOTHING }];
   // The newest thing said to the agent is what the request is for. When it alone is too large for
   // what is left beside the exchange after it, its middle goes, not all of it.
@@ -177,7 +184,7 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   // What stands before the first user message can never be sent, so it is not counted as something to make room for.
   let start = Math.max(0, messages.findIndex((m) => m.role === 'user'));
   const total = messages.slice(start).reduce((sum, m) => sum + size(m), 0);
-  const step = Math.max(1, Math.floor(budgetChars * STEP));
+  const step = Math.max(1, Math.floor(budgetChars * stepShare));
   const toDrop = total > budgetChars ? Math.ceil((total - budgetChars) / step) * step : 0;
   let dropped = 0;
   const drop = (): void => {
@@ -187,6 +194,7 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   // A whole step may reach past the newest stimulus when that one is most of the request; the cut stops at it.
   while (start < messages.length && dropped < toDrop && start !== newest) drop();
   while (start < messages.length && messages[start]!.role !== 'user') drop();
+  if (info !== undefined) info.droppedChars = dropped;
   return start < messages.length && total - dropped <= budgetChars ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
 }
 
@@ -227,8 +235,12 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
  * The request for this journal: the system prompt, then the conversation, cut from the front to
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
+ *
+ * `opts.stepShare` is the share of the budget cut in one step (see fit): the budget chooser sets it
+ * from how much of the request the provider's cache answers. `opts.info`, when given, is filled
+ * with how the conversation fit, for that chooser to learn from.
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, work = ""): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, work = "", opts?: { stepShare?: number; info?: BuildInfo }): ChatMessage[] {
   const out: ChatMessage[] = [];
   const slots: Slot[] = [];
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
@@ -298,7 +310,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
   const memory = memoryContext(events, Math.floor(reserve * 0.5));
   const candidate = episodeCandidateContext(events, Math.floor(reserve * 0.2));
   const dynamic = memory + candidate + work.slice(0, Math.floor(reserve * 0.3));
-  const fitted = fit(out, room - reserve);
+  const fitted = fit(out, room - reserve, opts?.stepShare ?? DEFAULT_STEP_SHARE, opts?.info);
   if (dynamic) fitted.push({ role: 'user', content: dynamic });
   return [{ role: 'system', content: prompt }, ...fitted];
 }

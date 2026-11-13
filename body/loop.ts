@@ -1,8 +1,9 @@
 import { acceptanceNotes } from "./acceptance";
+import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from './adaptive-budget';
 import { appendEvent, readEvents, type JournalEvent } from '../kernel/journal';
 import { join } from 'node:path';
 import { workFooter, workContext } from './work';
-import { DEFAULT_BUDGET, buildMessages, kernelNote, type Sight } from './context';
+import { DEFAULT_BUDGET, buildMessages, kernelNote, type BuildInfo, type Sight } from './context';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import type { Tool, ToolContext } from './tools';
@@ -21,6 +22,8 @@ export interface TurnDeps {
   maxRounds?: number;
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
+  /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
+  budget?: BudgetDecision;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
   sight?: Sight;
   /** Aborts when the owner interrupts this turn (body/main.ts). The turn then ends as 'interrupted'. */
@@ -71,7 +74,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   };
   const specs = d.tools.map((t) => t.spec);
   const specsSize = JSON.stringify(specs).length;
-  let budget = d.budgetChars ?? DEFAULT_BUDGET;
+  let budget = d.budget?.budgetChars ?? d.budgetChars ?? DEFAULT_BUDGET;
   // How much of the journal the model has been shown. The journal only grows, so everything past this is new to it.
   let shown = 0;
   // Set when the provider refused a request because of its images; holds for the rest of the turn.
@@ -85,10 +88,18 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     const work = workContext(join(d.ctx.workspace, "..", "work.json"));
     let halved = false;
     let reply: Reply;
+    let stepShare = d.budget?.stepShare;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, work);
+      const info: BuildInfo = { droppedChars: 0 };
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, work, { stepShare, info });
       try {
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); } });
+        // What the provider charged and how much had to be cut, for the budget chooser (body/adaptive-budget.ts).
+        // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
+        if (d.budget !== undefined) {
+          const chars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, dropped: info.droppedChars, budget: d.budget.budgetChars, stepShare: d.budget.stepShare, windowTokens: d.budget.windowTokens } });
+        }
         break;
       } catch (err) {
         // Whatever the provider threw once the owner had interrupted, it is not a failure, and is not answered by asking again.
@@ -100,6 +111,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
           // Characters are only an estimate of tokens. Half is tried once and kept for the rest of the turn.
           budget = Math.floor(budget / 2);
           halved = true;
+          // Same gate as the decision/sent notes: only a chooser in play records measurements.
+          if (d.budget !== undefined) appendEvent(d.journal, d.gen, { type: 'note', kind: REFUSED_KIND, data: { chars: budget + specsSize } });
         } else throw err;
       }
     }

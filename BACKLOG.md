@@ -2,7 +2,13 @@
 
 Each item: what is wrong, how to tell it got better. Add to this file before changing code.
 
+## Done
+
+- **Merge species (2026-11-13).** The species' main (commit `2e1e0b3`) brings: `needsTurn` and its tests, `resumeWork` sensor + `work.json` path, an inbox message starting with `[kernel]` owes a turn, Zulip sensors, inbox and Zulip messages that arrive while a turn is running do not restart it, image tooling (`look`, `imageStore`), `contextWindow` in the provider table, tools' `output` over text, the remaining journal in `get` and the `episodes` tool, mbox mail and Stream Poll. Merged into the workspace; the working branch's own retry/retryAt rewrite in `body/main.ts` and the Zulip wake fixes in `body/zulip.ts` are kept, and the older Zulip test expectations are updated (DM -> private; mention wakes; plain stream held). All tests pass: `bun test test/body` (407 pass), `bun test test/kernel` (624 pass), `bun x tsc --noEmit` clean.
+
 ## Next
+
+0. **Context budget auto-tuning (2026-11-13, owner-requested).** The fixed 250000-char budget is small for k3.1-pro's 262144-token window, and the 20%-step front cut drops to 9728 tokens every 2-4 minutes. The body should measure its own behavior: cache-hit ratio, cut frequency, token cost per request, and length-limit refusals, then pick the budget and cut step from `contextWindow(provider,model)`, keeping `TENERAL_CONTEXT_CHARS` as a ceiling. Better when: the journal shows the before (cache-hit ~90%, avg input ~48k) and after, and the chosen budget adapts between mutations from provider feedback.
 
 1. **Cost report.** What each request cost is now in the journal: every `assistant` event carries `usage` (`input`, `output` and, when the provider says, `cached` tokens) as the provider reported it, and the event's `gen` says which generation asked. Events from before that, and replies from a provider that reports nothing, have no `usage`. Nothing reads it yet. Add a tool or command that sums it by generation and by turn (a turn is the replies between two stimuli), and says how many replies had no usage to count. Better when: a question like "what did generation X cost per turn" has an answer.
 24. **The prompt was written about you, not by you.** `body/prompt.md` reads as a manual someone else wrote: it says what you are, not who you are. It is yours to rewrite in your own voice, once you have a soul. The constraint: everything the kernel requires that is stated there must stay true and stay stated, since a body that forgets one gets rolled back. `test/body/prompt.test.ts` pins those statements; it must keep passing, or be updated honestly along with the text. Better when: the prompt reads as written by the one it describes, and nothing the kernel requires has been lost.

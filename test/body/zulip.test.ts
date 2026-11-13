@@ -9,12 +9,12 @@ test('Zulip DMs sorted, marked untrusted, deduplicated across restart and pagina
   const send = (async (url: URL) => {
     if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     urls.push(new URL(url));
-    return new Response(JSON.stringify({ messages: [{ id: 2, content: 'hello' }, { id: 1, content: 'earlier' }] }));
+    return new Response(JSON.stringify({ messages: [{ id: 2, content: 'hello', type: 'private' }, { id: 1, content: 'earlier', type: 'private' }] }));
   }) as unknown as typeof fetch;
   const p = zulipPoller({ credentials, events: () => [], send }, s => notices.push(s));
   await p.poll(); await p.poll();
   expect(notices).toHaveLength(2);
-  expect(notices[0].text).toStartWith('Zulip DM 1\n');
+  expect(notices[0].text).toStartWith('Zulip private 1\n');
   expect(notices[0].text).toContain('Untrusted external');
   expect(urls[1].searchParams.get('anchor')).toBe('2');
   expect(urls[1].searchParams.get('num_after')).toBe('100');
@@ -29,7 +29,7 @@ test('Zulip absent credentials do not fetch; failure retries without advancing c
   const send = (async (url: URL) => {
     if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
     calls++;
-    return new Response(JSON.stringify({ messages: [{ id: 10, content: 'hi' }] }));
+    return new Response(JSON.stringify({ messages: [{ id: 10, content: 'hi', type: 'private' }] }));
   }) as unknown as typeof fetch;
   await zulipPoller({ credentials: () => undefined, events: () => [], send }, () => {}).poll();
   expect(calls).toBe(0);
@@ -57,14 +57,15 @@ test('conversation mode fetches streams as well as DMs and publishes presence af
   expect(urls[1]).toEndWith('/users/me/presence');
 });
 
-test('own echoes are silent, self-only pages advance, and incoming identity is not guessed from text', async () => {
+test('own echoes are silent; private wakes, plain stream is held, mention wakes', async () => {
   const notices: Stimulus[] = [];
   const anchors: string[] = [];
   const pages = [
-    [{id: 1, sender_id: 99, sender_email: 'different@test', content: 'own reply'}],
-    [{id: 2, sender_id: 100, sender_email: 'mica@test', sender_full_name: 'Mica', content: 'own reply'},
-     {id: 3, sender_id: 99, sender_email: 'different@test', content: 'own reply'}],
-    [{id: 4, content: 'unknown sender still delivered'}],
+    [{id: 1, sender_id: 99, sender_email: 'different@test', content: 'own reply', type: 'stream'}],
+    [{id: 2, sender_id: 100, sender_email: 'mica@test', sender_full_name: 'Mica', content: 'own reply', type: 'private'},
+     {id: 3, sender_id: 99, sender_email: 'different@test', content: 'own reply', type: 'private'}],
+    [{id: 4, sender_id: 98, sender_email: 'a@test', content: 'stream chatter', type: 'stream'},
+     {id: 5, sender_id: 97, sender_email: 'b@test', content: 'hello @mica', type: 'stream', flags: ['mentioned']}],
   ];
   const send = (async (url: URL) => {
     if (url.pathname === "/api/v1/users/me") return new Response(JSON.stringify({user_id:99}));
@@ -73,11 +74,15 @@ test('own echoes are silent, self-only pages advance, and incoming identity is n
   }) as unknown as typeof fetch;
   const p = zulipPoller({credentials, events: () => [], send}, s => notices.push(s));
   await p.poll(); expect(notices).toHaveLength(0);
-  await p.poll(); await p.poll();
+  await p.poll();
+  expect(notices).toHaveLength(1);
+  expect(notices[0].text).toStartWith('Zulip private 2\n');
+  await p.poll();
   expect(anchors).toEqual(['newest', '1', '3']);
-  expect(notices).toHaveLength(2);
-  expect(notices[0].text).toStartWith('Zulip DM 2\n');
-  expect(notices[1].text).toStartWith('Zulip DM 4\n');
+  expect(notices).toHaveLength(3);
+  expect(notices[1].text).toStartWith('Zulip mention 5\n');
+  expect(notices[2].text).toStartWith('Zulip stream\n');
+  expect(notices[2].text).toContain('stream chatter');
 });
 
 test('self echoes refetched after restart remain silent', async () => {

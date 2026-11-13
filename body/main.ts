@@ -1,11 +1,13 @@
 import { episodeRecall } from './episode-tool';
 import { watchJournal } from "./acceptance";
+import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, resumeWork } from './work';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../kernel/journal';
+import { contextWindow } from '../kernel/providers';
 import { needsTurn } from './context';
 import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
 import { runTurn } from './loop';
@@ -38,9 +40,13 @@ try {
   process.exit(1);
 }
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
-// Characters per request. Not a positive number, or not set: the default in body/context.ts.
+// Characters per request. Set and positive, it is a ceiling on what the budget chooser may pick,
+// never a floor: body/adaptive-budget.ts measures the provider's own feedback and decides the rest.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
+const budgetCeiling = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
+// The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
+const budgetChoice = decideBudget(readEvents(journal), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? 0);
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
@@ -59,11 +65,23 @@ let wake: (() => void) | null = null;
 let arrived = 0;
 /** Aborts the turn in progress; null between turns. */
 let current: AbortController | null = null;
+/**
+ * When the next try of a failed turn is due, or null when none is. After a provider-side failure
+ * (a rate or usage limit) the turn is only retried at or after this time; a tick of the clock or
+ * an inbox message does not hurry it. The owner's own line always does: that is in emit.
+ */
+let retryAt: number | null = null;
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
   arrived += 1;
+  if (s.source === 'terminal' || s.source.startsWith('agent:zulip')) {
+    // Only the owner's own channels (the terminal, or a verified-owner line in Zulip) end a wait
+    // for a failed turn. A tick, a peer, or held stream traffic is journaled for the record but
+    // does not start the next try early: that would hammer a provider already at its limit.
+    retryAt = null;
+  }
   wake?.();
 }
 
@@ -106,7 +124,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, episodeRecall(provider), subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, sight,
+      journal, gen, provider, tools: [...TOOLS, episodeRecall(provider), subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, sight, budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
@@ -146,11 +164,20 @@ let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 }
 for (;;) {
   // Also true right after a restart: an unfinished turn or a kernel note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
+    if (retryAt !== null && Date.now() < retryAt) {
+      // A failed turn is still owed but its next try is not due. Sleep past it without waking on
+      // every stimulus: a clock tick or an inbox message must not hammer a provider already at
+      // its limit (see retryAt). The owner's own line clears it in emit.
+      const wait = retryAt - Date.now();
+      console.error(`[retry] waiting ${describeDelay(wait)} for the provider's limit before the next try, or until the owner writes`);
+      await idle(wait);
+    }
     const before = arrived;
     working = true;
     const failed = await turn();
     working = false;
     if (failed === null) {
+      retryAt = null;
       failures = 0;
       streak.count = 0;
       continue;
@@ -177,12 +204,24 @@ for (;;) {
       continue;
     }
     const delay = retryDelayMs(failures);
+    const note = {
+      type: 'note' as const,
+      kind: 'turn.failed',
+      data: {
+        kind, failures, message: (error instanceof Error ? error.message : String(error)).slice(0, 600),
+        retryAt: arrived !== before ? null : new Date(Date.now() + delay).toISOString(),
+      },
+    };
+    // For the owner and the record: the turn is still owed, and the journal shows why nothing is
+    // coming and when the next try is. Written before any await, so it cannot loop with the retry.
+    appendEvent(journal, gen, note);
     if (arrived !== before) {
       // Nobody was listening for it while the turn ran; it gets its try now, once.
       console.error(`[retry] ${failures} in a row; something arrived meanwhile, trying again now`);
       continue;
     }
-    console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or at once when something arrives`);
+    retryAt = Date.now() + delay;
+    console.error(`[retry] ${failures} in a row; trying again in ${describeDelay(delay)}, or when the owner writes`);
     await idle(delay);
   }
   if (quitting) break;
