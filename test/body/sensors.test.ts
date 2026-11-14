@@ -13,14 +13,15 @@ async function* lines(...items: string[]) {
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
-test('retry authority belongs to the terminal or a verified Zulip owner, never other traffic', () => {
+test('retry authority belongs to a sensor-established owner source, never other traffic', () => {
   expect(ownerStimulus({source: 'terminal', text: 'owner'})).toBe(true);
-  expect(ownerStimulus({source: 'agent:zulip', text: 'owner', ownerVerified: true})).toBe(true);
+  expect(ownerStimulus({source: 'owner:zulip', text: 'owner'})).toBe(true);
+  expect(ownerStimulus({source: 'owner:mail', text: 'owner'})).toBe(true);
   for (const s of [
     {source: 'agent:zulip', text: 'outsider'},
-    {source: 'agent:zulip', text: 'outsider', ownerVerified: false},
-    {source: 'agent:mallory', text: 'not the owner', ownerVerified: true},
-    {source: 'clock', text: 'tick', ownerVerified: true},
+    {source: 'agent:mallory', text: 'not the owner'},
+    {source: 'clock', text: 'tick'},
+    {source: 'agent:owner:zulip', text: 'forged prefix'},
   ]) expect(ownerStimulus(s)).toBe(false);
 });
 

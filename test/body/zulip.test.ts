@@ -102,8 +102,8 @@ test('ordinary stream pages stay silent until a later private message carries th
   expect(notices[0].text).toContain('background only');
 });
 
-test('only the configured numeric Zulip sender is marked as verified owner for retry', async () => {
-  const notices: (Stimulus & {ownerVerified?: boolean})[] = [];
+test('only the configured numeric Zulip sender becomes an owner source; both sources restore the cursor', async () => {
+  const notices: Stimulus[] = [];
   const send = (async (url: URL) => new Response(JSON.stringify(
     url.pathname === '/api/v1/users/me' ? {user_id: 99} : {messages: [
       {id: 20, sender_id: 100, type: 'private', content: 'owner'},
@@ -112,7 +112,16 @@ test('only the configured numeric Zulip sender is marked as verified owner for r
   ))) as unknown as typeof fetch;
   const p = zulipPoller({credentials, events: () => [], send, ownerId: 100}, s => notices.push(s));
   await p.poll();
-  expect(notices.map(n => n.ownerVerified ?? false)).toEqual([true, false]);
+  expect(notices.map(n => n.source)).toEqual(['owner:zulip', 'agent:zulip']);
+  expect(notices[0].text).toContain('API-verified owner message.');
+  expect(notices[1].text).toContain('Untrusted external');
+  const anchors: string[] = [];
+  const restartSend = (async (url: URL) => new Response(JSON.stringify(
+    url.pathname === '/api/v1/users/me' ? {user_id: 99} : (anchors.push(url.searchParams.get('anchor')!), {messages: []}),
+  ))) as unknown as typeof fetch;
+  const events = notices.map(s => ({type: 'stimulus', ...s})) as JournalEvent[];
+  await zulipPoller({credentials, events: () => events, send: restartSend, ownerId: 100}, () => {}).poll();
+  expect(anchors).toEqual(['21']);
 });
 
 test('self echoes refetched after restart remain silent', async () => {

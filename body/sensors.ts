@@ -2,19 +2,22 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from './envelope';
 import type { JournalEvent } from '../brain/journal';
+import { fromOwner } from '../brain/owned';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
 
 export interface Stimulus {
-  /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
+  /**
+   * Which sensor produced it, and with that whose word it is. 'terminal' is the owner, shown to the model as plain user text.
+   * A sensor of any other channel names its source `owner:<channel>` only after authenticating the configured owner there.
+   * Everything else gets its own source and remains someone else's word however it is signed. See `fromOwner` in brain/owned.ts.
+   */
   source: string;
   text: string;
-  /** A sensor authenticated this sender as the configured owner. Not derived from message text. */
-  ownerVerified?: boolean;
 }
 
-/** Only the terminal and an API-verified owner Zulip message may hurry a failed-turn retry. */
+/** Only a source the body itself established as the owner's may hurry a failed-turn retry. */
 export function ownerStimulus(s: Stimulus): boolean {
-  return s.source === 'terminal' || (s.source === 'agent:zulip' && s.ownerVerified === true);
+  return fromOwner(s.source);
 }
 
 /** Start sensing; call `emit` for each stimulus; return a function that stops it. */

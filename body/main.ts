@@ -76,7 +76,7 @@ const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) 
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
 // One-time import only: after this the journal is the live agenda, and the JSON file is never rewritten.
 try {
-  const imported = importLegacyWork(journal, gen, join(workspace, '..', 'work.json'));
+  const imported = importLegacyWork(journal, gen, join(ownerDir, '..', 'work.json'));
   if (imported > 0) console.error(`[work] imported ${imported} active commitments into the journal agenda`);
 } catch (err) {
   console.error(`[work] legacy agenda not imported: ${err instanceof Error ? err.message : String(err)}`);
@@ -154,7 +154,7 @@ const sensors: Sensor[] = [
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
-  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), new Date().toISOString().slice(0, 10))),
+  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), Date.now())),
   inbox(inboxDir),
   resumeWork(journal, gen, () => {
     if (working || quitting) return true;
