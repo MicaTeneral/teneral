@@ -61,6 +61,16 @@ Focused checks passed (14 tests), full suite passed 1058/0 fail and tsc is clean
 relevance ~0.070/0.095/0.130ms, expanded queries ~0.044/0.074/0.116ms. These are microbenchmarks,
 not end-to-end request latency. Post-promotion verify the live module and a real-journal context sample.
 
+## Generic query words are not relevance evidence
+Owner's repeated `так что по идеальной памяти?` pulled unrelated old Kimi/Zulip/species records.
+On the real journal, query terms were `так/что/идеальной/памяти`; several selected records matched
+only `так` or `что`. Add a deliberately small English/Russian query-only stopword list, not document
+filtering or a hand-tuned score threshold. Function-only queries return no automatic memory; topic
+terms still use the unchanged BM25 formula and tags. Existing owner-fact probes and corrections must
+remain available. A new regression proves generic-only matches cannot crowd out substantive matches,
+and that Russian/English queries retain their content terms. This is a precision repair, not semantic
+retrieval and not evidence that the full ideal-memory goal is finished.
+
 ## Rayforce projection chunking: real-corpus IPC boundary
 After BM25 promotion 40684bc, live receipt 1d3a3a5c failed with `Rayforce data byte limit`.
 The entire snapshot was serialized into one trusted-RFL string; its text exceeded the intentional

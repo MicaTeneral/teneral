@@ -30,6 +30,20 @@ function validEpisode(value: unknown): value is Episode | undefined {
     && [e.decision, e.reason, ...e.openQuestions].every(t => typeof t === 'string' && t.length <= 1000 && !secretLine.test(t));
 }
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}@._-]{3,}/gu) ?? [];
+// Function words are query syntax, not independent evidence that a historical claim is relevant.
+// Keep document tokens/statistics unchanged: filtering only the query preserves BM25 normalization.
+const queryStopwords = new Set([
+  'about', 'after', 'again', 'all', 'also', 'and', 'any', 'are', 'because', 'been', 'before', 'being', 'but', 'can', 'could',
+  'did', 'does', 'doing', 'for', 'from', 'had', 'has', 'have', 'here', 'how', 'into', 'its', 'just', 'more', 'most', 'not',
+  'now', 'off', 'only', 'other', 'our', 'out', 'over', 'should', 'some', 'still', 'such', 'than', 'that', 'the', 'their',
+  'them', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'too', 'under', 'until', 'very', 'was', 'were',
+  'what', 'when', 'where', 'which', 'while', 'who', 'why', 'will', 'with', 'would', 'you', 'your',
+  'без', 'был', 'была', 'были', 'было', 'быть', 'вам', 'вас', 'вот', 'все', 'всё', 'где', 'для', 'его', 'если', 'есть',
+  'ещё', 'же', 'за', 'из', 'или', 'ими', 'как', 'какая', 'какие', 'какой', 'когда', 'кто', 'мне', 'мы', 'нас', 'наш',
+  'не', 'него', 'нее', 'нет', 'них', 'но', 'ну', 'об', 'она', 'они', 'оно', 'от', 'по', 'под', 'после', 'почему', 'при',
+  'про', 'раз', 'сам', 'свой', 'себе', 'так', 'также', 'там', 'тебя', 'тебе', 'тем', 'то', 'того', 'тоже', 'только',
+  'уже', 'чего', 'чем', 'что', 'чтобы', 'эта', 'эти', 'это', 'этот',
+]);
 export const terminalMemory = (events: JournalEvent[]) => {
   const e = events.findLast(e => e.type === 'stimulus');
   return e?.type === 'stimulus' && e.source === 'terminal';
@@ -77,7 +91,7 @@ export function memoryContext(events: JournalEvent[], budget: number): string {
   if (!Number.isFinite(budget) || budget < 400) return '';
   const last = events.findLast(e => e.type === 'stimulus');
   if (!last || last.type !== 'stimulus' || typeof last.text !== 'string') return '';
-  const query = [...new Set(words(last.text))];
+  const query = [...new Set(words(last.text).filter(word => !queryStopwords.has(word)))];
   const tags = tagsOf(last.text);
   const records = memoryRecords(events).filter(r => !r.sources.includes(last.id));
   const docs = records.map(r => words(episodeText(r)));

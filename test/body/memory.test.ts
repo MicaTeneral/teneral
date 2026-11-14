@@ -88,3 +88,17 @@ test('malformed or secret-bearing episodes cannot enter replay', () => {
     expect(memoryRecords([source,n]).some(r=>r.id===n.id)).toBe(false);
   }
 });
+test('generic question words cannot retrieve unrelated claims in Russian or English', () => {
+  const genericRussian = say('Так что обсуждали Rayforce раньше');
+  const genericEnglish = say('What is the Rayforce design');
+  const relevant = say('Rayforce meridian remains the durable fact');
+  const base = [owner('Обсудим project'), genericRussian, genericEnglish, relevant];
+  for (const query of ['Так что по meridian?', 'What is the meridian?']) {
+    const text = memoryContext([...base, owner(query)], 6000);
+    expect(text).toContain('meridian remains');
+    expect(text).not.toContain(genericRussian.id);
+    expect(text).not.toContain(genericEnglish.id);
+  }
+  expect(memoryContext([...base, owner('Так что?')], 6000)).toBe('');
+  expect(memoryContext([...base, owner('What is this?')], 6000)).toBe('');
+});
