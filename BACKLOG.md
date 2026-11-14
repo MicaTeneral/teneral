@@ -61,6 +61,15 @@ Focused checks passed (14 tests), full suite passed 1058/0 fail and tsc is clean
 relevance ~0.070/0.095/0.130ms, expanded queries ~0.044/0.074/0.116ms. These are microbenchmarks,
 not end-to-end request latency. Post-promotion verify the live module and a real-journal context sample.
 
+## Routine clock ticks are not retrieval queries
+After the stopword repair, ordinary heartbeat c34c4f2f still injected 12 unrelated records and
+5974 characters. Three latest real clock events all have the exact scheduler template; saved work is
+provided separately. Extract the clock text generator and recognize only that exact timestamped
+heartbeat. Do not disable all clock-source retrieval: a content-bearing clock must still find memory.
+Regression covers both the production clock text and the same text with a substantive suffix. Success:
+clock historical-prefix replay goes from nonempty to empty, content/owner/correction behavior stays,
+full suite and typecheck pass, then promotion and a live heartbeat check.
+
 ## Generic query words are not relevance evidence
 Owner's repeated `так что по идеальной памяти?` pulled unrelated old Kimi/Zulip/species records.
 On the real journal, query terms were `так/что/идеальной/памяти`; several selected records matched

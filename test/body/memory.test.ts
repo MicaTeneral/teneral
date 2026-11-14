@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { memoryContext, memoryRecords } from '../../body/memory';
+import { clockText } from '../../body/sensors';
 import { buildMessages } from '../../brain/memory';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 let seq = 0;
@@ -101,4 +102,16 @@ test('generic question words cannot retrieve unrelated claims in Russian or Engl
   }
   expect(memoryContext([...base, owner('Так что?')], 6000)).toBe('');
   expect(memoryContext([...base, owner('What is this?')], 6000)).toBe('');
+});
+test('routine heartbeat skips automatic memory while content-bearing clock still recalls', () => {
+  const fact = say('Rayforce meridian remains the durable fact');
+  const base = [owner('Rayforce meridian'), fact];
+  const tick = clockText(new Date('2026-11-14T00:42:17.387Z'));
+  const heartbeat = ev({ type: 'stimulus', source: 'clock', text: tick });
+  expect(memoryContext([...base, heartbeat], 6000)).toBe('');
+  expect(buildMessages([...base, heartbeat], 'system', 12000).map(m => m.content).join('')).not.toContain('[memory.v1]');
+  const content = ev({ type: 'stimulus', source: 'clock', text: `${tick} meridian` });
+  expect(memoryContext([...base, content], 6000)).toContain('Rayforce meridian remains');
+  const malformed = ev({ type: 'stimulus', source: 'clock', text: 'Clock tick at 2026-99-99T99:99:99.999Z. Your owner has not written since their last message.' });
+  expect(() => memoryContext([...base, malformed], 6000)).not.toThrow();
 });

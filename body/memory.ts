@@ -1,4 +1,5 @@
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
+import { routineClock } from './sensors';
 import type { Tool } from './tools';
 
 const KIND = 'memory.v1';
@@ -90,7 +91,8 @@ export function memoryRecords(events: JournalEvent[], includeHidden = false): Re
 export function memoryContext(events: JournalEvent[], budget: number): string {
   if (!Number.isFinite(budget) || budget < 400) return '';
   const last = events.findLast(e => e.type === 'stimulus');
-  if (!last || last.type !== 'stimulus' || typeof last.text !== 'string') return '';
+  if (!last || last.type !== 'stimulus' || typeof last.text !== 'string'
+    || (last.source === 'clock' && routineClock(last.text))) return '';
   const query = [...new Set(words(last.text).filter(word => !queryStopwords.has(word)))];
   const tags = tagsOf(last.text);
   const records = memoryRecords(events).filter(r => !r.sources.includes(last.id));

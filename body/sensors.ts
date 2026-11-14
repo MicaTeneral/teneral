@@ -47,6 +47,20 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
   return events.slice(newest + 1).some((later) => later.type === 'turn.interrupted' || (later.type === 'assistant' && !(later.toolCalls?.length > 0)));
 }
 
+export function clockText(date: Date): string {
+  return `Clock tick at ${date.toISOString()}. Your owner has not written since their last message. ` +
+    'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
+    'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks.';
+}
+
+/** Exact routine heartbeat, not any clock stimulus carrying a substantive query. */
+export function routineClock(text: string): boolean {
+  const timestamp = /^Clock tick at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\. Your owner has not written since their last message\./.exec(text)?.[1];
+  if (!timestamp) return false;
+  const date = new Date(timestamp);
+  return !Number.isNaN(date.getTime()) && text === clockText(date);
+}
+
 /**
  * A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off.
  * `mayTick` is asked before each one; body/main.ts passes `clockMayTick` over the journal and the soul.
@@ -62,12 +76,7 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true): 
       } catch {
         return;
       }
-      emit({
-        source: 'clock',
-        text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
-          'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
-          'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks.',
-      });
+      emit({ source: 'clock', text: clockText(new Date()) });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);
   };
