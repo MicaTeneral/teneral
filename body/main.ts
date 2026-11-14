@@ -1,4 +1,3 @@
-import { episodeRecall } from './episode-tool';
 import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
@@ -14,6 +13,9 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { openPast } from '../brain/past';
+import { libraryAt } from '../brain/ray';
+import { sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
 import { zulip, zulipCredentials } from './zulip';
@@ -45,6 +47,9 @@ const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
 const budgetCeiling = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
+// Characters of the conversation shown as it happened. Not a positive number, or not set: the default in brain/logbook.ts.
+const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
+const tailChars = tailSet > 0 ? Math.floor(tailSet) : undefined;
 // The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
 const budgetChoice = decideBudget(readEvents(journal), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? 0);
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
@@ -56,7 +61,10 @@ const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS') };
+// The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
+const organs = process.env.TENERAL_ORGANS ?? '';
+const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
 
 let quitting = false;
 let working = false;
@@ -124,7 +132,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, episodeRecall(provider), subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, sight, budget: budgetChoice,
+      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
@@ -148,6 +156,39 @@ function idle(ms?: number): Promise<void> {
     const timer = ms === undefined ? undefined : setTimeout(resolve, ms);
     wake = () => { clearTimeout(timer); resolve(); };
   }).then(() => { wake = null; });
+}
+
+/** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
+const REST_RETRY_MS = 15 * 60_000;
+let restNotBefore = 0;
+
+/**
+ * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
+ * that is over and has none (brain/sleep.ts). Whatever arrives meanwhile cancels the request and
+ * is answered first. Returns false when there was nothing to remember, or no use in trying now.
+ */
+async function rest(): Promise<boolean> {
+  if (Date.now() < restNotBefore) return false;
+  const woken = new AbortController();
+  wake = () => woken.abort();
+  try {
+    const slept = await sleep({
+      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars,
+      system: () => composeSystem(prompt, soulDir, journal),
+      signal: woken.signal,
+    });
+    const said = { remembered: 'formed a memory', merged: 'made several memories into one', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
+    if (slept === 'remembered' || slept === 'merged' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
+    return slept !== 'nothing';
+  } catch (err) {
+    if (woken.signal.aborted) return true;
+    // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
+    console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
+    restNotBefore = Date.now() + REST_RETRY_MS;
+    return false;
+  } finally {
+    wake = null;
+  }
 }
 
 // Everything above loaded and parsed: this generation can start.
@@ -225,6 +266,16 @@ for (;;) {
     await idle(delay);
   }
   if (quitting) break;
+  // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
+  if (await rest()) continue;
+  if (quitting) break;
+  // Before waiting: what the store gained is written out, so that the next start finds it on disk.
+  try {
+    past.sync();
+    past.persist();
+  } catch (err) {
+    console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // A prompt only where someone can type at it; in the background it would be noise in the log.
   if (process.stdin.isTTY) process.stdout.write('> ');
   await idle();

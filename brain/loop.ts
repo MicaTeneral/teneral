@@ -3,7 +3,7 @@ import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-b
 import { appendEvent, readEvents, type JournalEvent } from './journal';
 import { join } from 'node:path';
 import { workFooter, workContext } from '../body/work';
-import { DEFAULT_BUDGET, buildMessages, stemNote, type BuildInfo, type Sight } from './memory';
+import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import type { Tool, ToolContext } from '../body/tools';
@@ -22,6 +22,8 @@ export interface TurnDeps {
   maxRounds?: number;
   /** Characters for one request: system prompt, tool specs and messages together. */
   budgetChars?: number;
+  /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
+  tailChars?: number;
   /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
   budget?: BudgetDecision;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
@@ -88,10 +90,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     const work = workContext(join(d.ctx.workspace, "..", "work.json"));
     let halved = false;
     let reply: Reply;
-    let stepShare = d.budget?.stepShare;
     for (;;) {
-      const info: BuildInfo = { droppedChars: 0 };
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, work, { stepShare, info });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars, work });
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; } });
@@ -99,7 +99,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
         // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
         if (d.budget !== undefined) {
           const chars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, dropped: info.droppedChars, budget: d.budget.budgetChars, stepShare: d.budget.stepShare, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
+          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, dropped: 0, budget: d.budget.budgetChars, stepShare: d.budget.stepShare, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
         }
         break;
       } catch (err) {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { JournalEvent } from '../../brain/journal';
 import { cacheUse } from '../../keeper/tui/view';
-import { formatUsage, share, usageReport } from '../../keeper/usage';
+import { REMEMBERING, formatUsage, memoryLine, share, usageReport } from '../../keeper/usage';
 
 const NOW = Date.parse('2027-01-15T12:00:00Z');
 const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -35,4 +35,36 @@ test('a journal with no usage says so, and the footer says nothing of a cache th
   expect(cacheUse(50_000, null)).toBe('');
   expect(cacheUse(50_000, 0)).toBe('cached 0%');
   expect(cacheUse(54_396, 52_608)).toBe('cached 97%');
+});
+
+test('what forming memories cost is counted, in a row of its own: those requests belong to no turn', () => {
+  const memory = (minutesAgo: number, usage: unknown): JournalEvent => ev({ type: 'note', kind: 'memory.episode.v1', data: { title: 't', usage }, ts: at(minutesAgo), gen: 'g2' });
+  const r = usageReport([
+    said('terminal', 30), reply(29, { input: 1000, output: 10, cached: 900 }),
+    memory(20, { input: 500, output: 60 }), memory(10, { input: 700, output: 80, cached: 100 }),
+    // A memory without usage, and a note of another kind that happens to carry one, count for nothing.
+    memory(5, undefined), ev({ type: 'note', kind: 'other.v1', data: { usage: { input: 9, output: 9 } }, ts: at(4), gen: 'g2' }),
+  ], NOW, 'g2');
+  expect(r.spans[0]!.spent).toEqual({ requests: 3, input: 2200, cached: 1000, output: 150 });
+  expect(Object.fromEntries(r.sources.map((s) => [s.name, s.spent]))).toEqual({
+    [REMEMBERING]: { requests: 2, input: 1200, cached: 100, output: 140 },
+    terminal: { requests: 1, input: 1000, cached: 900, output: 10 },
+  });
+  expect(formatUsage(r).join('\n')).toContain('remembering');
+});
+
+test('the report says how the memory stands: what is remembered, what waits, what could not be, and what is held', () => {
+  const t = (minutesAgo: number): string => at(minutesAgo);
+  const a = [ev({ id: 'a1', type: 'stimulus', source: 'terminal', text: 'set up the mail please', ts: t(600), gen: 'g' }), ev({ id: 'a2', type: 'assistant', text: 'done, it works now', toolCalls: [], ts: t(599), gen: 'g' })];
+  const b = [ev({ id: 'b1', type: 'stimulus', source: 'terminal', text: 'and the calendar too please', ts: t(300), gen: 'g' }), ev({ id: 'b2', type: 'assistant', text: 'the calendar is set up', toolCalls: [], ts: t(299), gen: 'g' })];
+  const c = [ev({ id: 'c1', type: 'stimulus', source: 'terminal', text: 'thanks', ts: t(10), gen: 'g' })];
+  const memory = ev({ id: 'n1', type: 'note', kind: 'memory.episode.v1', data: { from: 'a1', to: 'a2', start: t(600), end: t(599), title: 'Mail', text: 'I set up the mail.', outcome: 'done' }, ts: t(9), gen: 'g' });
+  const fact = ev({ id: 'f1', type: 'note', kind: 'memory.fact.v1', data: { text: 'The owner uses the work address', source: 'owner', episode: 'a1' }, ts: t(9), gen: 'g' });
+  const intention = ev({ id: 'i1', type: 'note', kind: 'memory.intention.v1', data: { text: 'Send the weekly report' }, ts: t(9), gen: 'g' });
+  expect(memoryLine([...a, ...b, ...c, memory, fact, intention], NOW)).toBe(
+    'Memory: 1 episodes remembered, 1 waiting to be (the oldest ended 5 h ago), 1 facts held, 1 intentions open.',
+  );
+  expect(memoryLine([...a, memory], NOW)).toBe('Memory: 1 episodes remembered, none waiting, 0 facts held, 0 intentions open.');
+  expect(memoryLine(c, NOW)).toBe('');
+  expect(formatUsage(usageReport([...a, { ...a[1]!, usage: { input: 5, output: 1 } } as JournalEvent, memory], NOW, 'g')).join('\n')).toContain('Memory: 1 episodes remembered');
 });

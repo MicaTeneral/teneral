@@ -2,6 +2,8 @@
 // provider said the request cost. Nothing here asks anyone anything; it only adds up.
 import { tokens } from './tui/view';
 import type { JournalEvent } from '../brain/journal';
+import { known } from '../brain/known';
+import { memoryHealth } from '../brain/sleep';
 
 export interface Spent {
   requests: number;
@@ -18,11 +20,31 @@ const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(
 /** The share of the input that came from the provider's cache, as `87%`; empty when nothing was asked. */
 export const share = (s: Spent): string => (s.input > 0 ? `${Math.round((s.cached / s.input) * 100)}%` : '');
 
+/** The row for what forming memories cost: requests the agent makes of itself while nothing is asked of it. */
+export const REMEMBERING = 'remembering';
+
 export interface UsageReport {
   /** By span of time, the widest last. */
   spans: { name: string; spent: Spent }[];
-  /** By what woke the agent for the turn the request belongs to, the costliest first. */
+  /** By what woke the agent for the turn the request belongs to, with `REMEMBERING` for the requests that belong to none; the costliest first. */
   sources: { name: string; spent: Spent }[];
+  /** How the agent's memory stands, in a line; empty for a journal with no episode that is over. */
+  memory: string;
+}
+
+/** The agent's memory in a line: what is remembered, what waits, what could not be, and what it holds. */
+export function memoryLine(events: JournalEvent[], now: number): string {
+  const health = memoryHealth(events);
+  const held = known(events);
+  if (health.remembered + health.waiting + health.quarantined + held.facts.length + held.intentions.length === 0) return '';
+  const hours = health.oldest === null ? 0 : Math.max(0, Math.round((now - Date.parse(health.oldest)) / 3_600_000));
+  return [
+    `Memory: ${health.remembered} episodes remembered`,
+    health.waiting === 0 ? 'none waiting' : `${health.waiting} waiting to be (the oldest ended ${hours} h ago)`,
+    ...(health.quarantined === 0 ? [] : [`of ${health.quarantined} no memory could be formed`]),
+    `${held.facts.length} facts held`,
+    `${held.intentions.length} intentions open`,
+  ].join(', ') + '.';
 }
 
 /** Add up every journaled usage: by span of time ending at `now`, and over the last day by what started the turn. */
@@ -48,8 +70,11 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       source = typeof f.source === 'string' && f.source !== '' ? f.source.slice(0, 40) : 'unknown';
       continue;
     }
-    if (e.type !== 'assistant' || typeof f.usage !== 'object' || f.usage === null) continue;
-    const u = f.usage as Record<string, unknown>;
+    // A reply carries what its request cost. So does a memory (brain/sleep.ts), whose request is no part of any turn.
+    const memory = e.type === 'note' && typeof f.kind === 'string' && f.kind.startsWith('memory.') && typeof f.data === 'object' && f.data !== null;
+    const told = memory ? (f.data as Record<string, unknown>).usage : e.type === 'assistant' ? f.usage : null;
+    if (typeof told !== 'object' || told === null) continue;
+    const u = told as Record<string, unknown>;
     const input = count(u.input);
     const output = count(u.output);
     const cached = count(u.cached);
@@ -59,13 +84,15 @@ export function usageReport(events: JournalEvent[], now: number, generation: str
       if (inSpan) add(span.spent, input, cached, output);
     }
     if (Number.isFinite(at) && at >= now - 24 * HOUR) {
-      if (!sources.has(source)) sources.set(source, NONE());
-      add(sources.get(source)!, input, cached, output);
+      const name = memory ? REMEMBERING : source;
+      if (!sources.has(name)) sources.set(name, NONE());
+      add(sources.get(name)!, input, cached, output);
     }
   }
   return {
     spans: spans.map(({ name, spent }) => ({ name, spent })),
     sources: [...sources].map(([name, spent]) => ({ name, spent })).sort((a, b) => b.spent.input - a.spent.input),
+    memory: memoryLine(events, now),
   };
 }
 
@@ -84,6 +111,7 @@ export function formatUsage(r: UsageReport): string[] {
     ...table('', r.spans),
     '',
     ...(r.sources.length > 0 ? [...table('the last 24 hours, by what woke it', r.sources), ''] : []),
+    ...(r.memory === '' ? [] : [r.memory, '']),
     'Tokens, as the provider counted them. "cached" is the share of the input it read from its cache: a request that only adds to the one before should be nearly all cached, and what is not is paid in full.',
   ];
 }

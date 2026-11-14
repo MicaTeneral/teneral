@@ -22,8 +22,8 @@ function context(workspace: string, gen = 'gen'): ToolContext {
   };
 }
 
-test('seed tools and Zulip conversation tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'dismiss_episode', 'edit', 'look', 'mutate', 'read', 'recall', 'remember', 'send', 'work', 'write', 'zulip_history', 'zulip_reply']);
+test('the seed tools exist', () => {
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['bash', 'done', 'edit', 'forget', 'intend', 'look', 'mutate', 'open', 'read', 'recall', 'send', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
 });
 
 test('write creates parent directories and read returns the content', async () => {

@@ -80,38 +80,3 @@ test('a refusal caps only while what it refused is still recent', () => {
   expect(aged.budgetChars).toBeGreaterThan(Math.round(262_144 * 3 * 0.75) - 10_000);
   expect(aged.budgetChars).toBeLessThan(Math.round(262_144 * 3 * 0.75) + 10_000);
 });
-
-test('buildMessages honours a custom stepShare and reports what it cut', () => {
-  const events: JournalEvent[] = [];
-  for (let i = 0; i < 60; i++) {
-    events.push({ type: 'stimulus', source: 'terminal', text: `tick ${i} ${'.'.repeat(60)}` } as unknown as JournalEvent);
-    events.push({ type: 'assistant', text: `ack ${i}`, toolCalls: [] } as unknown as JournalEvent);
-  }
-  const fine = { droppedChars: -1 };
-  const coarse = { droppedChars: -1 };
-  const fineMsgs = buildMessages(events, 'S', 4000, undefined, '', { stepShare: 0.05, info: fine });
-  const coarseMsgs = buildMessages(events, 'S', 4000, undefined, '', { stepShare: 0.2, info: coarse });
-  // Both fit.
-  expect(fineMsgs.reduce((s, m) => s + (m.content?.length ?? 0), 0)).toBeLessThanOrEqual(4000);
-  expect(coarseMsgs.reduce((s, m) => s + (m.content?.length ?? 0), 0)).toBeLessThanOrEqual(4000);
-  expect(fine.droppedChars).toBeGreaterThanOrEqual(0);
-  expect(coarse.droppedChars).toBeGreaterThanOrEqual(0);
-  // A finer step cuts at least as precisely: it never drops more than the coarse step here.
-  expect(fine.droppedChars).toBeLessThanOrEqual(coarse.droppedChars + 4000 * 0.2);
-  // A cut happened (the journal is larger than the budget).
-  expect(coarse.droppedChars).toBeGreaterThan(0);
-});
-
-test('the default stepShare reproduces the historical 0.2 behaviour', () => {
-  // No opts: the front still moves in 20% steps, so a request stays a prefix of the next for many rounds.
-  const events: JournalEvent[] = [];
-  const firsts: (string | null)[] = [];
-  for (let i = 0; i < 120; i++) {
-    events.push({ type: 'stimulus', source: 'terminal', text: `m ${i} ${'.'.repeat(30)}` } as unknown as JournalEvent);
-    firsts.push(buildMessages(events, 'S', 4000)[1]!.content);
-    events.push({ type: 'assistant', text: `r ${i}`, toolCalls: [] } as unknown as JournalEvent);
-  }
-  const changes = firsts.filter((f, i) => i > 0 && f !== firsts[i - 1]).length;
-  expect(changes).toBeGreaterThan(2);
-  expect(changes).toBeLessThan(40);
-});

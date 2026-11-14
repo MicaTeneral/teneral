@@ -98,7 +98,7 @@ test('over budget, the oldest messages go and no orphan tool result leads', () =
     said('new'), replied('answer'),
   ];
   // Room for 'new', 'answer' and the note that follows a closing reply, which counts like any message.
-  const messages = buildMessages(events, 'S', 200);
+  const messages = buildMessages(events, 'S', 160);
   expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
   expect(messages[1]!.content).toBe('new');
   expect(messages[2]!.content).toBe('answer');
@@ -311,8 +311,8 @@ test('everything sent is well-formed Unicode, whatever an old journal holds', ()
 
 test('the system prompt counts against the budget', () => {
   const events = [said('a'.repeat(100)), replied('b'.repeat(100)), said('c'.repeat(100))];
-  expect(buildMessages(events, 'S', 388)).toHaveLength(4);
-  expect(buildMessages(events, 'S'.repeat(50), 388).map((m) => m.role)).toEqual(['system', 'user']);
+  expect(buildMessages(events, 'S', 310)).toHaveLength(4);
+  expect(buildMessages(events, 'S'.repeat(50), 310).map((m) => m.role)).toEqual(['system', 'user']);
 });
 
 test('a newest stimulus too large for what is left is cut to fit, head and tail, not dropped', () => {
@@ -325,7 +325,7 @@ test('a newest stimulus too large for what is left is cut to fit, head and tail,
   expect(shown.endsWith('xxxTAIL')).toBe(true);
   expect(shown).toContain('characters dropped here');
   expect(total(messages)).toBeLessThanOrEqual(1000);
-  expect(shown.length).toBeGreaterThan(700);
+  expect(shown.length).toBeGreaterThan(800);
 
   // It is cut to what the budget leaves, so short messages before it may stay.
   const kept = buildMessages([said('old'), replied('fine'), said(big)], 'S', 1000);
@@ -391,7 +391,7 @@ test('the front is cut in coarse steps, so the start of the request stays the sa
 
 test('a coarse step never drops the newest stimulus, however large it is', () => {
   const big = said(`HEAD${'x'.repeat(3500)}TAIL`);
-  const messages = buildMessages([said('a'.repeat(300)), replied('b'.repeat(300)), big], 'S', 5000);
+  const messages = buildMessages([said('a'.repeat(300)), replied('b'.repeat(300)), big], 'S', 4000);
   expect(messages.at(-1)!.role).toBe('user');
   expect(messages.at(-1)!.content).toBe(`HEAD${'x'.repeat(3500)}TAIL`);
 });
@@ -469,15 +469,15 @@ test('an image counts a fixed amount against the budget, not the length of its d
   expect(buildMessages(events, 'S', 250_000, huge)).toHaveLength(4);
   // The charge is what makes the difference between fitting and not.
   const room = 1 + 'old words'.length + 'old reply'.length + 'this one'.length;
-  expect(buildMessages(events, 'S', withReserve(room + IMAGE_CHARS), huge)).toHaveLength(4);
-  const cut = buildMessages(events, 'S', withReserve(room + IMAGE_CHARS - 1), huge);
+  expect(buildMessages(events, 'S', room + IMAGE_CHARS, huge)).toHaveLength(4);
+  const cut = buildMessages(events, 'S', room + IMAGE_CHARS - 1, huge);
   expect(cut.map((m) => m.content)).toEqual(['S', 'this one']);
   expect(cut[1]!.images).toHaveLength(1);
 });
 
 test('a newest message too long for its room loses the middle of its text, and keeps its image', () => {
   const sight = fakeSight();
-  const m = buildMessages([said(`${'w'.repeat(30_000)}\n${marker(1)}`)], 'S', withReserve(IMAGE_CHARS + 2000), sight);
+  const m = buildMessages([said(`${'w'.repeat(30_000)}\n${marker(1)}`)], 'S', IMAGE_CHARS + 2000, sight);
   expect(m).toHaveLength(2);
   expect(m[1]!.images).toHaveLength(1);
   expect(m[1]!.content).toContain('characters dropped here');
@@ -642,22 +642,10 @@ test('a journal from before interruptions reads as before, and an event of a kin
 
 test('mutable work stays after unchanged history and instructions across tool rounds', () => {
   const events = [said('start'), called('cache-call'), result('cache-call', 'one')];
-  const a = buildMessages(events, 'fixed instructions', 250000, undefined, 'work version one');
-  const b = buildMessages([...events, called('cache-next'), result('cache-next', 'two')], 'fixed instructions', 250000, undefined, 'work version two');
+  const a = buildMessages(events, 'fixed instructions', 250000, undefined, { work: 'work version one' });
+  const b = buildMessages([...events, called('cache-next'), result('cache-next', 'two')], 'fixed instructions', 250000, undefined, { work: 'work version two' });
   expect(JSON.stringify(b.slice(0, a.length - 1))).toBe(JSON.stringify(a.slice(0, -1)));
   expect(a.at(-1)!.content).toBe('work version one');
   expect(b.at(-1)!.content).toBe('work version two');
   expect(b[0]!.content).toBe('fixed instructions');
-});
-
-// Gross budget that leaves this historical budget after fixed dynamic reserve.
-function withReserve(net: number): number { let gross = net; while (gross - Math.min(12000, Math.floor((gross - 1) * .2)) < net) gross++; return gross; }
-
-test('retrieved memory changes only the suffix, not the historical prefix',()=>{
- const base=[said('my email is sample@example.invalid'),replied('noted'),said('what is my email?'),called('lookup'),result('lookup','ok')];
- const a=buildMessages(base,'S');
- const b=buildMessages([...base,called('next'),result('next','done')],'S');
- expect(a.at(-1)!.content).toContain('[memory.v1]');
- expect(JSON.stringify(b.slice(0,a.length-1))).toBe(JSON.stringify(a.slice(0,-1)));
- expect(a[1]!.content).toBe('my email is sample@example.invalid');
 });

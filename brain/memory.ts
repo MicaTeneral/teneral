@@ -1,18 +1,20 @@
-import { acceptanceNotes } from "../body/acceptance";
-import { DEFAULT_STEP_SHARE } from '../body/adaptive-budget';
-import { episodeCandidateContext } from '../body/episode-candidates';
-import { memoryContext } from "../body/memory";
-import { isMutationRejection, type JournalEvent } from './journal';
+import { acceptanceNotes } from '../body/acceptance';
+import type { JournalEvent } from './journal';
+import { asText, stemNote } from './stemnote';
+import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
+
+// How the stem's events read is in brain/stemnote.ts; it is given out from here as well, where it always was.
+export { stemNote };
 
 // The journal is permanent and replayed into every request. One thing in it that a provider
 // refuses would fail every request from then on, and no rollback can fix that: the fault would be
 // in the journal, not the code. So nothing here trusts the journal's shape. Whatever an older or
 // buggy generation wrote, buildMessages must give a request a provider accepts.
 
-/** Characters for one request: system prompt, tool specs and messages together. */
+/** Characters for one request at most: system prompt, tool specs and messages together. How much of it is used is in brain/logbook.ts. */
 export const DEFAULT_BUDGET = 250_000;
 
 const INTERRUPTED =
@@ -23,33 +25,6 @@ const NOT_STARTED = '[not started] The process stopped before this tool ran. It 
 const STOPPED =
   '[interrupted] Your owner interrupted your turn here. The request to the model was cancelled and any tool that was running was stopped. ' +
   'Do not take that work up again unless your owner asks; when you next reply, say in a line where it stopped.';
-
-/** A journal field as text, whatever was written there. */
-function asText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === undefined) return '';
-  return JSON.stringify(value) ?? '';
-}
-
-/** The longest gate output or reason a stem note carries. */
-const NOTE_CAP = 4000;
-const brief = (value: unknown): string => clip(asText(value), NOTE_CAP);
-
-/** What the stem did, in words the agent reads; null for events that are not news. */
-export function stemNote(e: JournalEvent): string | null {
-  // Under either of its names: the journal keeps the rejections of the time when a mutation was called a molt.
-  if (isMutationRejection(e)) {
-    return `[stem] Your mutation to ${e.commit} was rejected at gate "${e.gate}". You are still running generation ${e.gen}.\n${brief(e.output)}`;
-  }
-  switch (e.type) {
-    case 'generation.promoted':
-      return `[stem] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
-    case 'generation.rolledback':
-      return `[stem] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
-    default:
-      return null;
-  }
-}
 
 /** An assistant event's text and calls. Older generations may have written it without one or the other. */
 function reply(e: JournalEvent): { text: string; calls: unknown[] } {
@@ -79,9 +54,7 @@ function wireArgs(args: unknown): string {
 }
 
 /** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
-function size(m: ChatMessage): number {
-  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
-}
+const size = sizeOf;
 
 /** How images get into a request. Without one, a marker is text like any other and no file is read. */
 export interface Sight {
@@ -140,15 +113,12 @@ function fillSlots(slots: Slot[], sight: Sight): void {
   for (const { message } of slots) if (message.content === '' && message.role === 'user') message.content = null;
 }
 
+/** Characters the state of the work in hand may take at the end of a request. */
+const WORK_CHARS = 3600;
+
 const TOO_LARGE =
   '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
 const NOTHING = '[context] There is nothing in your journal to show yet.';
-
-/** Optional out-parameter for buildMessages: how the conversation fit the budget, for the budget chooser to learn from. */
-export interface BuildInfo {
-  /** Characters cut from the front to fit; 0 when the whole conversation fit. */
-  droppedChars: number;
-}
 
 /** Below this much room, a message is not worth cutting to fit. */
 const CLIP_MIN = 200;
@@ -169,7 +139,7 @@ const STEP = 0.2;
  * conversation, is always a multiple of one step: the cut stays where it is while the journal
  * grows by up to a step, then jumps.
  */
-function fit(messages: ChatMessage[], budgetChars: number, stepShare: number, info?: BuildInfo): ChatMessage[] {
+function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
   if (messages.length === 0) return [{ role: 'user', content: NOTHING }];
   // The newest thing said to the agent is what the request is for. When it alone is too large for
   // what is left beside the exchange after it, its middle goes, not all of it.
@@ -184,7 +154,7 @@ function fit(messages: ChatMessage[], budgetChars: number, stepShare: number, in
   // What stands before the first user message can never be sent, so it is not counted as something to make room for.
   let start = Math.max(0, messages.findIndex((m) => m.role === 'user'));
   const total = messages.slice(start).reduce((sum, m) => sum + size(m), 0);
-  const step = Math.max(1, Math.floor(budgetChars * stepShare));
+  const step = Math.max(1, Math.floor(budgetChars * STEP));
   const toDrop = total > budgetChars ? Math.ceil((total - budgetChars) / step) * step : 0;
   let dropped = 0;
   const drop = (): void => {
@@ -194,7 +164,6 @@ function fit(messages: ChatMessage[], budgetChars: number, stepShare: number, in
   // A whole step may reach past the newest stimulus when that one is most of the request; the cut stops at it.
   while (start < messages.length && dropped < toDrop && start !== newest) drop();
   while (start < messages.length && messages[start]!.role !== 'user') drop();
-  if (info !== undefined) info.droppedChars = dropped;
   return start < messages.length && total - dropped <= budgetChars ? messages.slice(start) : [{ role: 'user', content: TOO_LARGE }];
 }
 
@@ -209,7 +178,9 @@ const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role =
 
 /** A stimulus as the agent reads it. Only stem events may say `[stem]`; anything else that does is forging a note. */
 function stimulusText(source: unknown, text: unknown): string {
-  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]');
+  const shown = (source === 'terminal' ? asText(text) : `[${asText(source)}] ${asText(text)}`).replaceAll('[stem]', '[not stem]')
+    // Nor may anything that arrives pass for the agent's own memory (brain/logbook.ts).
+    .replaceAll(MEMORY_MARK, '[not memory]');
   // No provider takes an empty message, and the agent should still know that something arrived.
   return shown.trim() === '' ? '[empty message]' : shown;
 }
@@ -231,17 +202,29 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
   return { results, started };
 }
 
+/** How a request is laid out, beyond its budget: how much is shown as it happened (brain/logbook.ts), and a closing question. */
+export interface View extends Sizes {
+  /** The state of the work in hand (body/work.ts), said to the agent after the conversation, in every request. It is not journaled. */
+  work?: string;
+  /**
+   * Said to the agent after everything in the journal. It is how the agent is asked something
+   * that is no part of its conversation and is not journaled as one, such as to form a memory
+   * (brain/sleep.ts).
+   */
+  ask?: string;
+}
+
 /**
  * The request for this journal: the system prompt, then the conversation, cut from the front to
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
- *
- * `opts.stepShare` is the share of the budget cut in one step (see fit): the budget chooser sets it
- * from how much of the request the provider's cache answers. `opts.info`, when given, is filled
- * with how the conversation fit, for that chooser to learn from.
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, work = "", opts?: { stepShare?: number; info?: BuildInfo }): ChatMessage[] {
+export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
+  const { ask } = view;
+  const accepted = acceptanceNotes(events);
   const out: ChatMessage[] = [];
+  // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
+  const origin: number[] = [];
   const slots: Slot[] = [];
   // Ids on the wire: the journaled one where it will do, otherwise one made from the call's position.
   // Positions count from the start of the journal, so cutting the front does not rename anything.
@@ -255,23 +238,29 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
     return wire;
   };
 
-  const accepted = acceptanceNotes(events);
   for (let i = 0; i < events.length; i++) {
     const e = events[i]!;
     if (e.type === 'stimulus') {
       const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
       if (sight && e.source === 'terminal') takeMarkers(message, slots);
       out.push(message);
+      origin.push(i);
     } else if (e.type === 'assistant') {
       const { text, calls } = reply(e);
       const said = text.trim() === '' ? null : text;
       // Providers refuse or misread two assistant messages in a row (see LATE for how they arise):
       // a finished reply followed by another reply, of either kind, is shown as one message.
-      const before = isPlainReply(out.at(-1)) ? out.pop()!.content : null;
+      const merged = isPlainReply(out.at(-1));
+      const before = merged ? out.pop()!.content : null;
+      // A reply shown as one with the reply before it belongs where that one did.
+      const at = merged ? origin.pop()! : i;
       const content = before !== null && said !== null ? `${before}\n\n${said}` : before ?? said;
       if (calls.length === 0) {
         // A reply that says nothing is not sent; no provider takes an empty message.
-        if (content !== null) out.push({ role: 'assistant', content });
+        if (content !== null) {
+          out.push({ role: 'assistant', content });
+          origin.push(at);
+        }
         continue;
       }
       const { results, started } = answers(events, i);
@@ -291,34 +280,45 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       }
       // Results are placed here, right after their call, whatever was journaled in between.
       out.push({ role: 'assistant', content, tool_calls: wire }, ...answered);
+      origin.push(at, ...answered.map(() => i));
     } else if (e.type === 'turn.interrupted') {
       out.push({ role: 'user', content: STOPPED });
+      origin.push(i);
     } else {
       const note = stemNote(e) ?? accepted.get(e.id) ?? null;
-      if (note !== null) out.push({ role: 'user', content: note });
+      if (note !== null) {
+        out.push({ role: 'user', content: note });
+        origin.push(i);
+      }
     }
   }
   // A request that ends with a finished reply asks for nothing. See LATE for when that happens.
-  if (isPlainReply(out.at(-1))) out.push({ role: 'user', content: LATE });
+  if (ask !== undefined) {
+    out.push({ role: 'user', content: ask });
+    origin.push(events.length);
+  } else if (isPlainReply(out.at(-1))) {
+    out.push({ role: 'user', content: LATE });
+    origin.push(events.length);
+  }
   if (sight) fillSlots(slots, sight);
   // A lone surrogate, cut out of a pair by some older generation, is not text a provider has to accept.
   for (const m of out) m.content = m.content?.toWellFormed() ?? null;
   const prompt = system.toWellFormed();
   const room = budgetChars - prompt.length;
-  // Fixed reservation prevents retrieval changes from shifting history cuts.
-  const reserve = Math.max(0, Math.min(12000, Math.floor(room * 0.2)));
-  const memory = memoryContext(events, Math.floor(reserve * 0.5));
-  const candidate = episodeCandidateContext(events, Math.floor(reserve * 0.2));
-  const dynamic = memory + candidate + work.slice(0, Math.floor(reserve * 0.3));
-  const fitted = fit(out, room - reserve, opts?.stepShare ?? DEFAULT_STEP_SHARE, opts?.info);
-  if (dynamic) fitted.push({ role: 'user', content: dynamic });
-  return [{ role: 'system', content: prompt }, ...fitted];
+  // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
+  const { head, seam, start } = logbook(events, out, origin, room, view);
+  const taken = head.reduce((sum, m) => sum + size(m), 0);
+  // The work in hand takes a fixed share of the room, so that what it says never moves where the conversation is cut.
+  const work = (view.work ?? '').slice(0, WORK_CHARS);
+  const fitted = fit(seam === null ? out : [seam, ...out.slice(start)], room - taken - (work === '' ? 0 : WORK_CHARS));
+  if (work !== '') fitted.push({ role: 'user', content: work });
+  return [{ role: 'system', content: prompt }, ...head, ...fitted];
 }
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
 export function needsTurn(events: JournalEvent[]): boolean {
-  const accepted = acceptanceNotes(events);
   let afterReply = false;
+  const accepted = acceptanceNotes(events);
   for (const e of events) {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;
     // The owner ended that turn. What was unanswered stays so until something else arrives.
