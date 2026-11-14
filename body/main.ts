@@ -12,7 +12,7 @@ import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
 import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
-import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { openPast } from '../brain/past';
@@ -63,6 +63,11 @@ const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
 const inboxDir = env('TENERAL_INBOX');
 const ownerDir = env('TENERAL_OWNER');
+// Optional numeric Zulip user id, explicitly configured by the owner. Absent or invalid, no
+// Zulip sender may shorten provider retry backoff; ordinary conversation still works.
+const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
+const zulipOwnerNumber = /^\d+$/.test(zulipOwnerSetting) ? Number(zulipOwnerSetting) : 0;
+const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber > 0 ? zulipOwnerNumber : undefined;
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
@@ -71,8 +76,8 @@ const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: en
 let quitting = false;
 let working = false;
 let wake: (() => void) | null = null;
-/** Stimuli journaled by this process, so a failed turn can tell that one came in while it ran. */
-let arrived = 0;
+/** Owner stimuli journaled by this process: only these may shorten a failed turn's backoff. */
+let ownerArrived = 0;
 /** Aborts the turn in progress; null between turns. */
 let current: AbortController | null = null;
 /**
@@ -85,11 +90,10 @@ let retryAt: number | null = null;
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
-  arrived += 1;
-  if (s.source === 'terminal' || s.source.startsWith('agent:zulip')) {
-    // Only the owner's own channels (the terminal, or a verified-owner line in Zulip) end a wait
-    // for a failed turn. A tick, a peer, or held stream traffic is journaled for the record but
-    // does not start the next try early: that would hammer a provider already at its limit.
+  if (ownerStimulus(s)) {
+    ownerArrived += 1;
+    // Only the owner's own channels end a wait for a failed turn. A tick, a peer, or another
+    // Zulip sender is journaled but cannot hurry a provider already at its limit.
     retryAt = null;
   }
   wake?.();
@@ -148,7 +152,7 @@ const sensors: Sensor[] = [
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
   }),
-  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal) }),
+  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: zulipOwnerId }),
   mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
 
@@ -240,8 +244,11 @@ for (;;) {
       const wait = retryAt - Date.now();
       console.error(`[retry] waiting ${describeDelay(wait)} for the provider's limit before the next try, or until the owner writes`);
       await idle(wait);
+      // Any stimulus can end the sleep. Recheck the deadline before calling the provider: only
+      // the owner's own message clears retryAt, and the scheduled time may not have arrived.
+      continue;
     }
-    const before = arrived;
+    const before = ownerArrived;
     working = true;
     const failed = await turn();
     working = false;
@@ -274,20 +281,22 @@ for (;;) {
       continue;
     }
     const delay = retryDelayMs(failures);
+    const ownerWrote = ownerArrived !== before;
     const note = {
       type: 'note' as const,
       kind: 'turn.failed',
       data: {
         kind, failures, message: (error instanceof Error ? error.message : String(error)).slice(0, 600),
-        retryAt: arrived !== before ? null : new Date(Date.now() + delay).toISOString(),
+        retryAt: ownerWrote ? null : new Date(Date.now() + delay).toISOString(),
       },
     };
     // For the owner and the record: the turn is still owed, and the journal shows why nothing is
     // coming and when the next try is. Written before any await, so it cannot loop with the retry.
     appendEvent(journal, gen, note);
-    if (arrived !== before) {
-      // Nobody was listening for it while the turn ran; it gets its try now, once.
-      console.error(`[retry] ${failures} in a row; something arrived meanwhile, trying again now`);
+    if (ownerWrote) {
+      // The owner wrote while the turn ran; that message gets its try now, once. Other traffic
+      // remains journaled but leaves the provider's backoff in force.
+      console.error(`[retry] ${failures} in a row; the owner wrote meanwhile, trying again now`);
       continue;
     }
     retryAt = Date.now() + delay;

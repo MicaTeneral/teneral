@@ -712,3 +712,15 @@ than the original event. Success: the pinned species tests pass for both journal
 and store paths; all checks and mutation gates pass. Do not infer a general
 quality claim beyond the supplied 15-question result. No external action and no
 change to the separate legacy species-acceptance wait.
+
+## Silent Zulip buffering and retry authority
+A local mocked-page reproduction on fcb7fc3 showed that one ordinary stream
+message emitted a `Zulip stream` stimulus and `needsTurn` returned true, despite
+text claiming it did not wake the agent. The same generic emit path clears
+retry backoff for every Zulip sender. Keep ordinary stream traffic buffered
+until a real DM/mention, and let only terminal input or a configured numeric
+Zulip owner id request an early retry. Success: stream-only pages emit nothing,
+held traffic accompanies the next genuine wake, outsider messages cannot clear
+backoff, focused/full tests and typecheck pass, and the resulting body mutation
+is promoted. Do not change journal or memory code; preserve the independent
+legacy species-acceptance wait.

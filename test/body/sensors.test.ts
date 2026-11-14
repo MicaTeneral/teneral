@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
+import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Stimulus } from '../../body/sensors';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
@@ -12,6 +12,17 @@ async function* lines(...items: string[]) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
+
+test('retry authority belongs to the terminal or a verified Zulip owner, never other traffic', () => {
+  expect(ownerStimulus({source: 'terminal', text: 'owner'})).toBe(true);
+  expect(ownerStimulus({source: 'agent:zulip', text: 'owner', ownerVerified: true})).toBe(true);
+  for (const s of [
+    {source: 'agent:zulip', text: 'outsider'},
+    {source: 'agent:zulip', text: 'outsider', ownerVerified: false},
+    {source: 'agent:mallory', text: 'not the owner', ownerVerified: true},
+    {source: 'clock', text: 'tick', ownerVerified: true},
+  ]) expect(ownerStimulus(s)).toBe(false);
+});
 
 test('terminal emits each non-empty line, trimmed', async () => {
   const got: Stimulus[] = [];

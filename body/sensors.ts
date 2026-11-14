@@ -8,6 +8,13 @@ export interface Stimulus {
   /** Which sensor produced it. 'terminal' is shown to the model as plain user text. */
   source: string;
   text: string;
+  /** A sensor authenticated this sender as the configured owner. Not derived from message text. */
+  ownerVerified?: boolean;
+}
+
+/** Only the terminal and an API-verified owner Zulip message may hurry a failed-turn retry. */
+export function ownerStimulus(s: Stimulus): boolean {
+  return s.source === 'terminal' || (s.source === 'agent:zulip' && s.ownerVerified === true);
 }
 
 /** Start sensing; call `emit` for each stimulus; return a function that stops it. */

@@ -79,10 +79,40 @@ test('own echoes are silent; private wakes, plain stream is held, mention wakes'
   expect(notices[0].text).toStartWith('Zulip private 2\n');
   await p.poll();
   expect(anchors).toEqual(['newest', '1', '3']);
-  expect(notices).toHaveLength(3);
+  expect(notices).toHaveLength(2);
   expect(notices[1].text).toStartWith('Zulip mention 5\n');
-  expect(notices[2].text).toStartWith('Zulip stream\n');
-  expect(notices[2].text).toContain('stream chatter');
+  expect(notices[1].text).toContain('stream chatter');
+});
+
+test('ordinary stream pages stay silent until a later private message carries their context', async () => {
+  const notices: Stimulus[] = [];
+  const pages = [
+    [{id: 10, sender_id: 98, type: 'stream', content: 'background only'}],
+    [{id: 11, sender_id: 97, type: 'private', content: 'a real question'}],
+  ];
+  const send = (async (url: URL) => new Response(JSON.stringify(
+    url.pathname === '/api/v1/users/me' ? {user_id: 99} : {messages: pages.shift() ?? []},
+  ))) as unknown as typeof fetch;
+  const p = zulipPoller({credentials, events: () => [], send}, s => notices.push(s));
+  await p.poll();
+  expect(notices).toHaveLength(0);
+  await p.poll();
+  expect(notices).toHaveLength(1);
+  expect(notices[0].text).toStartWith('Zulip private 11\n');
+  expect(notices[0].text).toContain('background only');
+});
+
+test('only the configured numeric Zulip sender is marked as verified owner for retry', async () => {
+  const notices: (Stimulus & {ownerVerified?: boolean})[] = [];
+  const send = (async (url: URL) => new Response(JSON.stringify(
+    url.pathname === '/api/v1/users/me' ? {user_id: 99} : {messages: [
+      {id: 20, sender_id: 100, type: 'private', content: 'owner'},
+      {id: 21, sender_id: 101, type: 'private', content: 'outsider'},
+    ]},
+  ))) as unknown as typeof fetch;
+  const p = zulipPoller({credentials, events: () => [], send, ownerId: 100}, s => notices.push(s));
+  await p.poll();
+  expect(notices.map(n => n.ownerVerified ?? false)).toEqual([true, false]);
 });
 
 test('self echoes refetched after restart remain silent', async () => {

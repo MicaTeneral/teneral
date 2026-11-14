@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
+import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
 
 // The body as the stem starts it, `bun body/main.ts`, with a stand-in for the model on a local
@@ -172,6 +173,39 @@ test('an interrupt while nothing is owed is dropped, also one left from before t
   expect(l.types()).not.toContain('turn.interrupted');
   expect(l.asked).toHaveLength(2);
   expect(l.asked.some((a) => a.aborted)).toBe(false);
+}, 30_000);
+
+test('an outsider arriving during a failed turn does not hurry the retry; the next owner line does', async () => {
+  let fail: (() => void) | undefined;
+  const first = new Promise<Response>((resolve) => {
+    fail = () => resolve(new Response('upstream is down', { status: 503 }));
+  });
+  const l = life((n) => n === 1 ? first : says(' answered after the owner wrote'));
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'hello?');
+  await l.until('the first request', () => l.asked.length === 1);
+  deliver(join(l.dir, 'inbox'), {
+    v: ENVELOPE_VERSION, id: 'background-1', from: 'other', to: 'test', replyTo: null,
+    ts: new Date().toISOString(), hops: 0, text: 'background traffic',
+  });
+  await l.until('the outsider is journaled', () => l.events().some(e => e.type === 'stimulus' && e.source === 'agent:other'));
+  fail!();
+  await l.until('the failed turn is waiting', () => l.stderr().includes('[retry] 1 in a row'));
+  const failure = l.events().findLast(e => e.type === 'note' && e.kind === 'turn.failed');
+  expect(failure?.type).toBe('note');
+  if (failure?.type === 'note') expect(typeof (failure.data as {retryAt?: unknown}).retryAt).toBe('string');
+  deliver(join(l.dir, 'inbox'), {
+    v: ENVELOPE_VERSION, id: 'background-2', from: 'other', to: 'test', replyTo: null,
+    ts: new Date().toISOString(), hops: 0, text: 'traffic during the retry wait',
+  });
+  await l.until('the wait is interrupted by an outsider', () => l.events().some(e => e.type === 'stimulus' && e.source === 'agent:other' && e.text.includes('background-2')));
+  await Bun.sleep(500);
+  expect(l.asked).toHaveLength(1);
+  expect(l.stderr()).not.toContain('something arrived meanwhile');
+  tell(l.owner, 'try now');
+  await l.until('the owner shortens the wait', () => l.asked.length === 2);
+  await l.until('the reply', () => l.types().at(-1) === 'assistant');
+  expect(l.body.exitCode).toBeNull();
 }, 30_000);
 
 test('interrupted while it waits to try a failed turn again: the turn is given up, and the body neither retries nor exits', async () => {
