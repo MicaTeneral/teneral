@@ -285,8 +285,8 @@ export function welcome(w: Welcome, max: number, g: Glyphs): Line[] {
   if (inner >= markWidth + 28) {
     const beside: Line[] = [greeting, help, []];
     g.mark.forEach((row, i) => {
-      // The creature in teneral's own colour; the skin it left, under it, set back.
-      rows.push([{ text: '  ' }, { text: row, style: i === g.mark.length - 1 ? FAINT : BRAND }, { text: '   ' }, ...clip(beside[i] ?? [], inner - markWidth - 5, { text: g.ellipsis, style: DIM })]);
+      // The mark, whole, in teneral's own colour.
+      rows.push([{ text: '  ' }, { text: row, style: BRAND }, { text: '   ' }, ...clip(beside[i] ?? [], inner - markWidth - 5, { text: g.ellipsis, style: DIM })]);
     });
   } else {
     rows.push(...wrap(greeting, inner), ...wrap(help, inner));
@@ -418,6 +418,12 @@ function contextGround(text: string): Style {
   return { fg: 'ink', bg: share >= 70 ? 'good' : share < 30 ? 'warn' : 'accent', bold: true };
 }
 
+/** The ground of the segment that says how the memory stands: green while it is well, amber when behind, red when failing. Null for any other segment. */
+function memoryGround(text: string): Style | null {
+  const state = /^memory (well|behind|failing)\b/.exec(text);
+  return state === null ? null : { fg: 'ink', bg: state[1] === 'well' ? 'good' : state[1] === 'behind' ? 'amber' : 'warn', bold: true };
+}
+
 /** Segments side by side, each on its ground; where the font has them, an arrow of the left one's colour leads into the next. */
 function segments(parts: { text: string; style: Style }[], g: Glyphs, side: 'left' | 'right'): Line {
   const out: Line = [];
@@ -441,7 +447,7 @@ function footerRow(v: Live, max: number): Line {
   let tip = v.hint === '' ? v.tip : '';
   let context = v.context;
   const build = (): { left: Line; right: Line } => {
-    const left = segments(about.map((text, i) => ({ text, style: groundOf(i) })), g, 'left');
+    const left = segments(about.map((text, i) => ({ text, style: memoryGround(text) ?? groundOf(i) })), g, 'left');
     const gap = context === '' ? '' : ' ';
     const said: Line = v.hint !== '' ? [{ text: `${v.hint}${gap}`, style: BRAND }] : tip !== '' ? [{ text: `${tip}${gap}`, style: FAINT }] : [];
     return { left, right: [...said, ...(context === '' ? [] : segments(context.split(` ${g.sep} `).map((text) => ({ text, style: contextGround(text) })), g, 'right'))] };

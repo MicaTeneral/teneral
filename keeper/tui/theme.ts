@@ -29,6 +29,8 @@ export const PALETTE = {
   deep: [[104, 101, 95], 242, '90'],
   good: [[110, 180, 104], 71, '32'],
   warn: [[222, 110, 88], 167, '31'],
+  /** Between the two: something has fallen back and nothing is broken. */
+  amber: [[214, 168, 84], 179, '33'],
 } as const satisfies Record<string, Colour>;
 
 export type ColourName = keyof typeof PALETTE;
@@ -102,10 +104,11 @@ const UTF8 = {
   /** The corners of a panel: top left, top right, bottom left, bottom right. */
   corners: ['╭', '╮', '╰', '╯'],
   /**
-   * teneral's mark: a creature just out of its old skin. Wings still opening, the body under
-   * them, and below, drawn in shade, the skin it left. Each row is as wide as the others.
+   * teneral's mark, as the logo has it, in the few cells a terminal gives: a soft shell with a
+   * point drawn out of it at the top right, and inside it, off centre, what it holds. Each row is
+   * as wide as the others.
    */
-  mark: ['▚▖  ▗▞', ' ▜██▛ ', ' ░▒▒░ '],
+  mark: ['▗▛▀▀▜▄▖', '█ ▟▙ ▐ ', '▝▜▄▄▟▘ '],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
 };
 
@@ -136,7 +139,7 @@ const ASCII: Glyphs = {
   seg: '',
   segBack: '',
   corners: ['+', '+', '+', '+'],
-  mark: ['\\\\  //', ' (oo) ', ' \'::\' '],
+  mark: [' .--._ ', '( () ) ', ' `--\'  '],
   spinner: ['|', '/', '-', '\\'],
 };
 

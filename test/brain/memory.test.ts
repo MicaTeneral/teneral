@@ -640,12 +640,11 @@ test('a journal from before interruptions reads as before, and an event of a kin
   expect(needsTurn(withUnknown)).toBe(needsTurn(old));
 });
 
-test('mutable work stays after unchanged history and instructions across tool rounds', () => {
+test('a completed tool round adds no mutable footer or synthetic work message', () => {
   const events = [said('start'), called('cache-call'), result('cache-call', 'one')];
-  const a = buildMessages(events, 'fixed instructions', 250000, undefined, { work: 'work version one' });
-  const b = buildMessages([...events, called('cache-next'), result('cache-next', 'two')], 'fixed instructions', 250000, undefined, { work: 'work version two' });
-  expect(JSON.stringify(b.slice(0, a.length - 1))).toBe(JSON.stringify(a.slice(0, -1)));
-  expect(a.at(-1)!.content).toBe('work version one');
-  expect(b.at(-1)!.content).toBe('work version two');
+  const a = buildMessages(events, 'fixed instructions', 250000);
+  const b = buildMessages([...events, called('cache-next'), result('cache-next', 'two')], 'fixed instructions', 250000);
+  expect(JSON.stringify(b.slice(0, a.length))).toBe(JSON.stringify(a));
+  expect(a.some((m) => m.content === 'work version one')).toBe(false);
   expect(b[0]!.content).toBe('fixed instructions');
 });

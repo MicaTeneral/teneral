@@ -570,26 +570,21 @@ test('an image refused and then a request too long: each is answered once, in tu
   expect(seen).toHaveLength(3);
 });
 
-import { saveWork, readWork, work } from '../../body/work';
+import { work } from '../../body/work';
+import { known } from '../../brain/known';
 
 test("queued work final text does not request another model round without a new event", async () => {
   const s = setup([{ text: "Step verified.", toolCalls: [] }]);
-  s.ctx.workspace = join(s.journal, "..", "workspace");
-  const path = join(s.ctx.workspace, "..", "work.json");
-  saveWork(path, {task:"fix",status:"queued",next:"next step",outcome:"verified result",attempts:0,due:0});
+  await work.run({task:"fix",status:"queued",next:"next step",outcome:"verified result"}, s.ctx);
   expect(await runTurn(s.deps)).toBe("done");
   expect(s.seen).toHaveLength(1);
   expect(readEvents(s.journal).filter(e=>e.type==="assistant")).toHaveLength(1);
-  expect(readWork(path)?.status).toBe("queued");
-  expect(readWork(path)?.outcome).toBe("verified result");
+  expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: "queued", outcome: "verified result" });
 });
 
 test('completion cannot silently shrink an established outcome', async () => {
   const s = setup([]);
-  s.ctx.workspace = join(s.journal, '..', 'workspace');
-  const path = join(s.ctx.workspace, '..', 'work.json');
-  saveWork(path, { task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation', attempts: 0, due: 0 });
+  await work.run({ task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation' }, s.ctx);
   await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
-  expect(readWork(path)?.status).toBe('queued');
-  expect(readWork(path)?.outcome).toBe('tested implementation');
+  expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
 });

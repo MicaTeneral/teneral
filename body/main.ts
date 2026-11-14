@@ -2,7 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { subagent, subagents } from './subagent';
-import { heldByInterrupt, resumeWork } from './work';
+import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../brain/journal';
@@ -15,6 +15,8 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
+import { offered } from '../brain/agenda';
+import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
 import { sleep } from '../brain/sleep';
@@ -72,6 +74,13 @@ const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber 
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
+// One-time import only: after this the journal is the live agenda, and the JSON file is never rewritten.
+try {
+  const imported = importLegacyWork(journal, gen, join(workspace, '..', 'work.json'));
+  if (imported > 0) console.error(`[work] imported ${imported} active commitments into the journal agenda`);
+} catch (err) {
+  console.error(`[work] legacy agenda not imported: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 let quitting = false;
 let working = false;
@@ -145,9 +154,9 @@ const sensors: Sensor[] = [
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
-  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
+  clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir), () => offered(known(standing(readEvents(journal))), new Date().toISOString().slice(0, 10))),
   inbox(inboxDir),
-  resumeWork(join(workspace, '..', 'work.json'), () => {
+  resumeWork(journal, gen, () => {
     if (working || quitting) return true;
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
@@ -204,12 +213,12 @@ async function rest(): Promise<boolean> {
   wake = () => woken.abort();
   try {
     const slept = await sleep({
-      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars,
+      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
       system: () => composeSystem(prompt, soulDir, journal),
       signal: woken.signal,
     });
-    const said = { remembered: 'formed a memory', merged: 'made several memories into one', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
-    if (slept === 'remembered' || slept === 'merged' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
+    const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
+    if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
     return slept !== 'nothing';
   } catch (err) {
     if (woken.signal.aborted) return true;

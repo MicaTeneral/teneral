@@ -114,8 +114,7 @@ function fillSlots(slots: Slot[], sight: Sight): void {
   for (const { message } of slots) if (message.content === '' && message.role === 'user') message.content = null;
 }
 
-/** Characters the state of the work in hand may take at the end of a request. */
-const WORK_CHARS = 3600;
+  /** Characters the state of the work in hand may take at the end of a request. */
 
 const TOO_LARGE =
   '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
@@ -205,8 +204,6 @@ function answers(events: JournalEvent[], at: number): { results: Map<unknown, { 
 
 /** How a request is laid out, beyond its budget: how much is shown as it happened (brain/logbook.ts), and a closing question. */
 export interface View extends Sizes {
-  /** The state of the work in hand (body/work.ts), said to the agent after the conversation, in every request. It is not journaled. */
-  work?: string;
   /**
    * Said to the agent after everything in the journal. It is how the agent is asked something
    * that is no part of its conversation and is not journaled as one, such as to form a memory
@@ -313,10 +310,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
   const { head, seam, start } = logbook(events, out, origin, room, view);
   const taken = head.reduce((sum, m) => sum + size(m), 0);
-  // The work in hand takes a fixed share of the room, so that what it says never moves where the conversation is cut.
-  const work = (view.work ?? '').slice(0, WORK_CHARS);
-  const fitted = fit(seam === null ? out : [seam, ...out.slice(start)], room - taken - (work === '' ? 0 : WORK_CHARS));
-  if (work !== '') fitted.push({ role: 'user', content: work });
+  const fitted = fit(seam === null ? out : [seam, ...out.slice(start)], room - taken);
   return [{ role: 'system', content: prompt }, ...head, ...fitted];
 }
 

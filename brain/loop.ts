@@ -1,8 +1,6 @@
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, readEvents, type JournalEvent } from './journal';
-import { join } from 'node:path';
-import { workFooter, workContext } from '../body/work';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
@@ -87,11 +85,10 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     const events = readEvents(d.journal);
     shown = events.length;
     const system = d.system();
-    const work = workContext(join(d.ctx.workspace, "..", "work.json"));
     let halved = false;
     let reply: Reply;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars, work });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars });
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; } });
@@ -116,9 +113,6 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
           if (d.budget !== undefined) appendEvent(d.journal, d.gen, { type: 'note', kind: REFUSED_KIND, data: { chars: budget + specsSize } });
         } else throw err;
       }
-    }
-    if (reply.toolCalls.length === 0 && reply.text.trim()) {
-      reply.text += workFooter(join(d.ctx.workspace, '..', 'work.json'));
     }
     // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
     appendEvent(d.journal, d.gen, {
