@@ -6,7 +6,9 @@ import { GAP_MS } from '../../brain/episodes';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { journalPast, openPast, shown, timeline, when, type Past } from '../../brain/past';
 import { documentOf, postings, queryTerms, recall, scanIndex, words } from '../../brain/recall';
-import { EPISODE_KIND } from '../../brain/remembered';
+import { EPISODE_KIND, MERGE_KIND } from '../../brain/remembered';
+import { FACT_KIND } from '../../brain/known';
+import { WITHDRAW_KIND } from '../../brain/owned';
 import { TOOLS, type ToolContext } from '../../body/tools';
 import { library } from './rayforce';
 
@@ -144,6 +146,51 @@ test('a question put in other words than its answer finds it through the memory 
   expect(found.slice(0, 2).map((f) => f.event.id)).toEqual([memories[7]!.id, stretches[7]![0]!.id]);
   // Narrowed to what was said, the memory is not shown and still lends its weight.
   expect(past.find('which machine stores our backups', { kinds: ['owner'], limit: 1 })[0]!.event.id).toBe(stretches[7]![0]!.id);
+});
+
+for (const [name, open] of ways) test(`${name}: replaced and withdrawn derivatives are not current recall evidence, but their originals remain readable`, () => {
+  const source = said('The original report destination was old-quartz@example.org.');
+  const old = ev({ type: 'note', kind: FACT_KIND, data: { text: 'Reports go to old-quartz@example.org', source: 'owner', episode: source.id } });
+  const now = ev({ type: 'note', kind: FACT_KIND, data: { text: 'Reports go to new-quartz@example.org', source: 'owner', episode: source.id, replaces: [old.id] } });
+  const forgotten = ev({ type: 'note', kind: FACT_KIND, data: { text: 'The obsolete token is obsolete-obsidian', source: 'seen', episode: source.id } });
+  const withdraw = ev({ type: 'note', kind: WITHDRAW_KIND, data: { ids: [forgotten.id] } });
+  const past = open(journalOf([source, old, now, forgotten, withdraw, said('later conversation', LONG)]));
+  const original = past.find('old-quartz').map((hit) => hit.event.id);
+  expect(original).toContain(source.id);
+  expect(original).not.toContain(old.id);
+  expect(past.find('new-quartz').map((hit) => hit.event.id)).toContain(now.id);
+  expect(past.find('obsidian').map((hit) => hit.event.id)).not.toContain(forgotten.id);
+  expect(past.around(old.id, 0, 0)?.events.map((event) => event.id)).toEqual([old.id]);
+  expect(past.around(forgotten.id, 0, 0)?.events.map((event) => event.id)).toEqual([forgotten.id]);
+});
+
+for (const [name, open] of ways) test(`${name}: a withdrawn episode memory can be replaced by a fresh one without the old note lending weight`, () => {
+  const owner = said('The delivery address changed.');
+  const reply = replied('Noted the delivery correction.');
+  const data = { from: owner.id, to: reply.id, start: owner.ts, end: reply.ts, outcome: 'done', title: 'Delivery correction' };
+  const old = ev({ type: 'note', kind: EPISODE_KIND, data: { ...data, text: 'The velvet routing destination is recorded.' } });
+  const withdraw = ev({ type: 'note', kind: WITHDRAW_KIND, data: { ids: [old.id] } });
+  const fresh = ev({ type: 'note', kind: EPISODE_KIND, data: { ...data, text: 'The owner corrected the destination.' } });
+  const past = open(journalOf([owner, reply, old, withdraw, fresh, said('later conversation', LONG)]));
+  expect(past.find('velvet routing').map((hit) => hit.event.id)).toEqual([]);
+  expect(past.around(old.id, 0, 0)?.events.map((event) => event.id)).toEqual([old.id]);
+});
+
+for (const [name, open] of ways) test(`${name}: a withdrawn wider memory neither ranks nor lends weight to its stretch`, () => {
+  const owner = said('Where should the quartz reports be delivered?');
+  const reply = replied('Deliver quartz reports to archive@example.org.');
+  const memoryData = {
+    from: owner.id, to: reply.id, start: owner.ts, end: reply.ts, outcome: 'done', title: 'Quartz delivery',
+    text: 'The velvet routing decision is recorded here.', level: 2,
+  };
+  const old = ev({ type: 'note', kind: MERGE_KIND, data: memoryData });
+  const withdraw = ev({ type: 'note', kind: WITHDRAW_KIND, data: { ids: [old.id] } });
+  const past = open(journalOf([owner, reply, old, withdraw]));
+  const found = past.find('velvet routing');
+  expect(found.map((hit) => hit.event.id)).not.toContain(old.id);
+  // The original events have no matching words; the withdrawn memory must not boost this stretch.
+  expect(found.map((hit) => hit.event.id)).toEqual([]);
+  expect(past.around(old.id, 0, 0)?.events.map((event) => event.id)).toEqual([old.id]);
 });
 
 test('an index over lines reads them again only when there are more', () => {

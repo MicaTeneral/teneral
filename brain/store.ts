@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { JournalEvent } from './journal';
 import { eventChars } from './episodes';
 import { dayName, toRayDay, toRayNs, type Column, type Ray, type Table } from './ray';
-import { documentOf, postings, type Index, type Kind, type Match } from './recall';
+import { currentMemoryIds, documentOf, postings, type Index, type Kind, type Match } from './recall';
 
 // The store is the journal laid out for asking questions of, in two tables of the database that
 // are partitioned by day: one row an event, and one row for each term of each event that says
@@ -147,6 +147,7 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
   /** How many of the events say something, and so have terms: the number of documents recall counts with. */
   let documents = 0;
   const dirty = new Set<number>();
+  let currentCache: { mark: number; offsets: Set<number> } | null = null;
 
   const mount = (): void => {
     for (const name of NAMES) ray.run(`(set ${TABLES[name].bound} (.db.parted.get ${root} '${name}))`);
@@ -273,6 +274,17 @@ export function openStore(ray: Ray, journal: string, dir = storeDir(journal)): S
     },
     index: {
       documents: () => documents,
+      current() {
+        if (currentCache?.mark === reached) return currentCache.offsets;
+        // Currentness is computed from the whole journal. The indexed table below limits the
+        // result to this store's watermark if the journal grew during this query.
+        const ids = [...currentMemoryIds(scan(journal, 0).lines.map((line) => line.event))];
+        ray.bind(ASKED, { ids: { type: 'str', data: ids } });
+        const table = ray.table(`(select {from: ${BOUND} where: (in id (at ${ASKED} 'ids)) off: off})`);
+        const offsets = new Set([...(table.columns.off as BigInt64Array | undefined ?? [])].map(Number));
+        currentCache = { mark: reached, offsets };
+        return offsets;
+      },
       matches(asked) {
         if (!mounted || asked.length === 0) return [];
         // The terms go over as a column, never as part of the statement: they are words somebody typed.
