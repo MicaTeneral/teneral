@@ -65,17 +65,27 @@ const LENDERS = 3;
 // answering event was among the first five finds for 3; with 0.3 for 6; with 0.6 to 1 for 7; past 1, questions that name the answer's own
 // words began to lose it. The exam is how this number is to be changed (brain/exam.ts).
 export const LENT = 0.8;
-/** How many finds are looked through for events that a memory lends weight to: they may stand far down the list by their own words. */
+/** How many finds are looked through before the selected memories' own stretches add their matches. */
 const LOOKED = 80;
+/** How much the best memory lends to its closing reply, beyond the ordinary lending to every event. */
+const CLOSING = 0.4;
 
 /**
  * Finding in two steps. A question put in other words than the answer shares few words with the
  * message that answers it, but many with the memory of that stretch, which the agent wrote in the
  * words it thinks in. So the memories are found first, and the best of them lend part of their
  * score to every find that lies in their stretch: the answer rises because its episode was
- * recognised, not because its own words matched. `offsetsOf` says where the lines of events lie.
+ * recognised, not because its own words matched. Matches inside those stretches are included even
+ * when they fall below LOOKED globally. The closing reply of the best stretch gets a further lift:
+ * after a complaint and the work, it is usually where the outcome is stated. `offsetsOf` says where
+ * the lines of events lie; `closingReply` finds the last nonempty assistant reply in a stretch.
  */
-function finder(index: Index, read: (off: number) => JournalEvent | null, offsetsOf: (ids: string[]) => Map<string, number>): Past['find'] {
+function finder(
+  index: Index,
+  read: (off: number) => JournalEvent | null,
+  offsetsOf: (ids: string[]) => Map<string, number>,
+  closingReply: (from: number, to: number) => number | null,
+): Past['find'] {
   return (question, options) => {
     const limit = options?.limit ?? 10;
     const withEvent = (hits: Hit[]): Found[] => hits.flatMap((hit) => {
@@ -93,10 +103,18 @@ function finder(index: Index, read: (off: number) => JournalEvent | null, offset
       const [from, to] = [at.get(st.from), at.get(st.to)];
       return from === undefined || to === undefined ? [] : [{ from, to, score: st.score }];
     });
-    const lifted = recall(index, question, { ...options, limit: Math.max(LOOKED, limit) }).map((hit) => {
+    if (spans.length === 0) return withEvent(recall(index, question, options));
+    // Recall has already scored every matching document. Keep the ordinary global pool, then add
+    // matches from the selected stretches without another index scan or a local rarity calculation.
+    const all = recall(index, question, { ...options, limit: Number.MAX_SAFE_INTEGER });
+    const inside = all.filter((hit) => hit.kind !== 'memory' && spans.some((sp) => hit.doc >= sp.from && hit.doc <= sp.to));
+    const candidates = [...new Map([...all.slice(0, LOOKED + limit), ...inside].map((hit) => [hit.doc, hit])).values()];
+    const closing = closingReply(spans[0]!.from, spans[0]!.to);
+    const lifted = candidates.map((hit) => {
       // A memory is not lifted by a memory: only what happened is.
       const lent = hit.kind === 'memory' ? 0 : Math.max(0, ...spans.filter((sp) => hit.doc >= sp.from && hit.doc <= sp.to).map((sp) => sp.score));
-      return lent === 0 ? hit : { ...hit, score: hit.score + LENT * lent };
+      const close = hit.kind !== 'memory' && hit.doc === closing ? CLOSING * spans[0]!.score : 0;
+      return lent === 0 && close === 0 ? hit : { ...hit, score: hit.score + LENT * lent + close };
     });
     return withEvent(lifted.sort((a, b) => b.score - a.score || b.doc - a.doc).slice(0, limit));
   };
@@ -110,7 +128,10 @@ export function journalPast(journal: string): Past {
     find: finder(scanIndex(lines), (off) => readLine(journal, off), (ids) => {
       const wanted = new Set(ids);
       return new Map(lines().filter((line) => wanted.has(line.event.id)).map((line) => [line.event.id, line.off]));
-    }),
+    }, (from, to) => lines().filter((line) => line.off >= from && line.off <= to).findLast((line) => {
+      const text = (line.event as { text?: unknown }).text;
+      return line.event.type === 'assistant' && typeof text === 'string' && text.trim() !== '';
+    })?.off ?? null),
     asked: () => lines().findLast((line) => line.event.type === 'stimulus')?.off ?? null,
     around(id, before, after) {
       const all = lines();
@@ -151,6 +172,15 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     const t = store.ask("(select {from: events where: (in id (at mem_wanted 'wanted)) id: id off: off})");
     return new Map((t.columns.id as string[] | undefined ?? []).map((id, i) => [id, Number((t.columns.off as BigInt64Array)[i])]));
   };
+  /** The last assistant event with text in this stretch, or null when it has none. */
+  const closingReply = (from: number, to: number): number | null => {
+    const candidates = offsets(`(select {from: events where: (and (>= off ${from}) (and (<= off ${to}) (== type 'assistant))) desc: off off: off})`);
+    for (const off of candidates) {
+      const event = store.read(off) as { text?: unknown } | null;
+      if (typeof event?.text === 'string' && event.text.trim() !== '') return off;
+    }
+    return null;
+  };
   /** Whether the event at `off` still stands: records and notes always do, what was said in a stretch taken back does not. */
   const stands = (ranges: [number, number][], off: number, e: JournalEvent): boolean =>
     !wasSaid(e) || !ranges.some(([from, to]) => off >= from && off < to);
@@ -159,7 +189,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
     find(question, options) {
       store.sync();
       const ranges = aside();
-      const found = finder(store.index, store.read, offsetsOf)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
+      const found = finder(store.index, store.read, offsetsOf, closingReply)(question, ranges.length === 0 ? options : { ...options, limit: (options?.limit ?? 10) + 50 });
       return ranges.length === 0 ? found : found.filter((hit) => stands(ranges, hit.doc, hit.event)).slice(0, options?.limit ?? 10);
     },
     asked() {

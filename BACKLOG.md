@@ -713,6 +713,19 @@ and store paths; all checks and mutation gates pass. Do not infer a general
 quality claim beyond the supplied 15-question result. No external action and no
 change to the separate legacy species-acceptance wait.
 
+## Within-episode answer coverage and closing-answer ranking
+The owner asked why memory work stopped while improvements remain. A controlled diagnostic found
+that memory-first recall selected the right memory first, but the answering event ranked 23 and was
+outside the 80-candidate pre-lending pool (raw rank 175 of 859). On an immutable journal snapshot,
+five bounded within-episode variants first tied baseline at 11/50 fit hit@5. Candidate-coverage and
+closing-answer variants were then compared on fit only. The frozen winner includes lexical matches
+from the three selected memory spans and adds 0.4 times the best selected memory score to its last
+nonempty assistant reply. Fit improved from 11/50 to 14/50; the single held-out validation run
+improved from 10/49 to 14/49 (nearness 0.11735 -> 0.17653), with exact current-baseline parity on
+every evaluated question. Implement exactly that frozen rule, with journal/store parity and regression
+coverage for a below-80 closing answer, then full tests,
+typecheck and mutation. Do not retune after validation or claim semantic retrieval from lexical matches.
+
 ## Silent Zulip buffering and retry authority
 A local mocked-page reproduction on fcb7fc3 showed that one ordinary stream
 message emitted a `Zulip stream` stimulus and `needsTurn` returned true, despite
