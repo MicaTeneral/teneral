@@ -1,6 +1,7 @@
 import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
+import { github, GITHUB_CURSOR_KIND, type GithubCursor } from './github';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
 import { readFileSync } from 'node:fs';
@@ -75,6 +76,8 @@ const ownerDir = env('TENERAL_OWNER');
 const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
 const zulipOwnerNumber = /^\d+$/.test(zulipOwnerSetting) ? Number(zulipOwnerSetting) : 0;
 const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber > 0 ? zulipOwnerNumber : undefined;
+// Public read-only repository activity. Empty disables it; no GitHub credential is read or sent.
+const githubRepository = process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce';
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
@@ -172,6 +175,18 @@ const sensors: Sensor[] = [
     },
   ),
   inbox(inboxDir),
+  ...(githubRepository ? [github({
+    repository: githubRepository,
+    events: () => readEvents(journal),
+    checkpoint: (cursor: GithubCursor) => {
+      // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
+      // holds this checkpoint back. One note replaces both feed cursors atomically; a crash before
+      // it repeats the stimuli, whose ids suppress duplicates after restart.
+      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND);
+      if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
+      appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
+    },
+  })] : []),
   resumeWork(journal, gen, () => {
     if (working || quitting) return true;
     const events = readEvents(journal);
