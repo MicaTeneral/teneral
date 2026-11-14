@@ -167,6 +167,15 @@ test('/memory shows how the memory stands, with a mark for everything the owner 
   expect(lines.join('\n')).toContain('/memory back [n]');
 });
 
+test('the owner page loads in a fresh process despite the agenda/health import cycle', () => {
+  const run = Bun.spawnSync([
+    process.execPath, '--eval',
+    'import { memoryCommand } from "./keeper/memory.ts"; const answer = memoryCommand([], "", 0); if (answer.lines.length === 0) process.exit(1);',
+  ], { cwd: join(import.meta.dir, '..', '..'), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+  expect(run.stderr.toString()).toBe('');
+  expect(run.exitCode).toBe(0);
+});
+
 test('/memory pin names a stretch by a memory\'s mark, or the one going on, and refuses what would not fit', () => {
   const { a, c, notes, events } = life();
   expect(memoryCommand(events, `pin ${markOf(notes[0]!.id)}`, 0)).toEqual({

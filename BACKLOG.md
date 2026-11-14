@@ -737,3 +737,13 @@ held traffic accompanies the next genuine wake, outsider messages cannot clear
 backoff, focused/full tests and typecheck pass, and the resulting body mutation
 is promoted. Do not change journal or memory code; preserve the independent
 legacy species-acceptance wait.
+
+## Final species agenda integration through 4cdbbe3
+Anton relayed approval of the final agenda rules in origin/main 4cdbbe3: owner
+answers become bounded owner-sourced rules, closed intentions feed model-free
+initiative metrics, stalled ticks surface and affect memory health, reminders
+stop after 1/3/7 days, and an optional daily own-token cap limits clock work.
+Merge these with the journal-backed work tool and scheduler, not a second queue.
+Success: one coherent agenda in the model and /memory, preserved Zulip/retry and
+legacy import behaviour, focused and full tests plus typecheck pass, and the
+exact merge commit is submitted for mutation with owner approval as required.
