@@ -701,3 +701,14 @@ owner interruption propagation; budget and common-prefix checks across ordinary
 tool rounds; real-journal replay showing chronological recollection instead of
 an empty cut, with raw recovery by existing recall. Measure context characters,
 provider-call count and one successful replay before any production promotion.
+
+## Memory-first recall (owner-relayed species update)
+Anton relayed the measured exam result: on the first 15 self-written paraphrased
+questions, direct answer-event recall passed 3 and memory matching 6; origin/main
+ed4cc1a lifts events in the stretches of the three best memories, reaching 7/15
+without harming easy cases. Adopt it together with the preceding loadability-only
+test fix. Motive: lexical miss occurs when a question resembles my memory rather
+than the original event. Success: the pinned species tests pass for both journal
+and store paths; all checks and mutation gates pass. Do not infer a general
+quality claim beyond the supplied 15-question result. No external action and no
+change to the separate legacy species-acceptance wait.
