@@ -15,7 +15,8 @@ const FOUR = 4; // fallback chars/token, used before any measurement exists
 test('with no measurements and no known window, the historical default stands', () => {
   const d = decideBudget(lastUsage(), null, undefined, DEFAULT_BUDGET);
   expect(d.budgetChars).toBe(DEFAULT_BUDGET);
-  expect(d.stepShare).toBe(0.2);
+  expect(d).not.toHaveProperty('stepShare');
+  expect(d.report).not.toHaveProperty('cutRate');
   expect(d.report.samples).toBe(0);
   expect(d.report.cachedRatio).toBeNull();
   expect(d.report.durationMs).toBeNull();
@@ -57,14 +58,20 @@ test('a recent refusal pulls the next budget below what just failed', () => {
   expect(d.report.refused).toBe(1);
 });
 
-test('a warm cache gets the measured small step; cold traffic and the unmeasured default stay bounded', () => {
+test('legacy cut and cache-step fields remain readable but no longer drive a fixed-step logbook', () => {
   const cold = decideBudget([sent(100_000, 50_000, 5_000)], 262_144, undefined, DEFAULT_BUDGET);
-  expect(cold.stepShare).toBe(0.1);
   const boundary = decideBudget([sent(100_000, 50_000, 25_000)], 262_144, undefined, DEFAULT_BUDGET);
-  expect(boundary.stepShare).toBe(0.05);
   const warm = decideBudget([sent(100_000, 50_000, 45_000)], 262_144, undefined, DEFAULT_BUDGET);
-  expect(warm.stepShare).toBe(0.05);
-  expect(decideBudget([], 262_144, undefined, DEFAULT_BUDGET).stepShare).toBe(0.2);
+  expect(boundary.report.cachedRatio).toBe(0.5);
+  expect(warm.report.cachedRatio).toBe(0.9);
+  expect(cold.budgetChars).toBe(boundary.budgetChars);
+  expect(boundary.budgetChars).toBe(warm.budgetChars);
+});
+
+test('new measurements without dropped are equivalent to legacy measurements that carry it', () => {
+  const current = ev(SENT_KIND, { chars: 200_000, input: 50_000, cached: 45_000 });
+  expect(decideBudget([current], 262_144, undefined, DEFAULT_BUDGET))
+    .toEqual(decideBudget([sent(200_000, 50_000, 45_000)], 262_144, undefined, DEFAULT_BUDGET));
 });
 
 test('a refusal caps only while what it refused is still recent', () => {

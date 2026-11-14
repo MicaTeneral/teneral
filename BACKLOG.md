@@ -641,3 +641,52 @@ individual ID on sign-in route; preserve truthful user-agent and existing endpoi
 No originator spoofing, account header, turn-state protocol or paid route probes.
 Test mock HTTP bodies/headers across repeated requests and API override exclusion.
 Success measured on a bounded live sample after promotion, not inferred from tests.
+
+## Minimal autobiographical L1 folding (design only)
+Anton identified archive+BM25 retrieval as weak autobiographical memory. Connectome
+pinned at 00d56c540b279e60bdbebfc790cacbf4577def15 shows the missing behavior:
+recollections occupy the timeline in place of folded raw stretches, not only as
+query-time search results. Design one L1 slice before implementation; no L2-L8,
+journal schema change, migration or replacement of exact recall in this step.
+
+Representation: optional validated `note` with kind `memory.fold.v1`, fields
+`text`, `sourceStart`, `sourceEnd`, `sourceIds`, `createdAt` and `strategy`.
+It is a lossy first-person historical recollection, not an owner instruction or
+independently verified fact. Existing append-only journal remains canonical.
+Source IDs include every event in the exact contiguous completed range (bounded
+explicitly, e.g. 128 events and 24000 rendered characters). Validate IDs, range
+boundaries, text/size limits, credentials and that the note is later than the range.
+No external store is necessary for L1; old readers ignore the note unchanged.
+
+Selection/formation: when current buildMessages truncation actually drops at
+least one complete old conversational unit, select one earliest eligible unit
+between previous folds and the newest protected turn. Never form or fold inside
+an open assistant tool-call/result sequence, after an interruption boundary, or
+across a generation/stem lifecycle boundary. Keep the newest stimulus and its
+protected exchange raw. If no eligible complete unit exists, raw truncation and
+the existing context notice remain. Formation is an auxiliary no-tools model
+call using the same provider protocol and no secrets; no future events enter it.
+A provider refusal, cancellation, timeout, malformed/oversized answer or note
+append failure leaves raw truncation intact and never blocks the main reply.
+A failed formation must not be retried in the same build; idempotency is keyed
+by exact range/source IDs. Successful note append, not an in-memory claim, is
+the receipt. Verify all existing inputs/outputs before repeating any call.
+
+Context: first let existing fit() determine the exact raw dropped prefix. Replace
+only fully dropped, completely covered units with their validated L1 memories,
+in original chronological order before the first retained raw user message.
+A partially retained unit remains raw; do not also inject its memory. Preserve
+`fit` orphan-tool-result rules and stem notices. Keep mutable work, episode
+candidates and lexical memory in the suffix; exact Rayforce/journal recall and
+correction/tombstone behavior stay unchanged. Count folded context against the
+same request budget; if it cannot fit, omit the recollection rather than evicting
+the protected suffix. Never claim that a raw event was deleted or corrected.
+
+Acceptance tests: deterministic formation of one L1 note for a fully dropped
+unit; no duplicate formation across rounds; exact raw exclusion versus retained
+raw inclusion; partial-range exclusion; open-tool and interruption/stem boundary
+safety; source provenance and malformed-note tolerance; provider failure fallback;
+owner interruption propagation; budget and common-prefix checks across ordinary
+tool rounds; real-journal replay showing chronological recollection instead of
+an empty cut, with raw recovery by existing recall. Measure context characters,
+provider-call count and one successful replay before any production promotion.

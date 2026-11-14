@@ -95,11 +95,11 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; } });
-        // What the provider charged and how much had to be cut, for the budget chooser (body/adaptive-budget.ts).
+        // What the provider charged, for the request-size chooser (body/adaptive-budget.ts).
         // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
         if (d.budget !== undefined) {
           const chars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, dropped: 0, budget: d.budget.budgetChars, stepShare: d.budget.stepShare, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
+          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, budget: d.budget.budgetChars, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
         }
         break;
       } catch (err) {

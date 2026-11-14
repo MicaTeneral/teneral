@@ -215,6 +215,9 @@ test('a successful adaptive-budget request journals provider timing without chan
   expect(await runTurn({ ...s.deps, provider, budget })).toBe('done');
   const note = readEvents(s.journal).find((e) => e.type === 'note' && e.kind === 'budget.sent.v1');
   expect(note).toMatchObject({ data: { durationMs: 123, firstByteMs: 45, input: 10, cached: 5 } });
+  const data = note?.type === 'note' ? note.data : undefined;
+  expect(data).not.toHaveProperty('dropped');
+  expect(data).not.toHaveProperty('stepShare');
   expect(readEvents(s.journal).filter((e) => e.type === 'assistant').at(-1)).toMatchObject({ text: 'timed' });
 });
 

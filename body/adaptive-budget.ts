@@ -1,10 +1,10 @@
 // How large one request may be is a trade this body can measure and make itself, instead of a
 // constant that fits every provider and model by fitting none. The owner set the policy (his
 // message of 2026-11-13): take the window from brain/providers.ts `contextWindow`, measure the
-// provider's own feedback — how much of a request its cache answers, how often the front has to be
-// cut, what a request costs in tokens, when a request was refused for length — and pick the budget
-// and the cut step by the full cost of a turn, not by any single number. TENERAL_CONTEXT_CHARS, if
-// the owner ever sets it, is only a ceiling on what this chooser may pick.
+// provider's own feedback — how much of a request its cache answers, what a request costs in tokens,
+// when a request was refused for length — and pick the total request budget from the full cost of
+// a turn, not by any single number. The verbatim tail is chosen separately in brain/logbook.ts.
+// TENERAL_CONTEXT_CHARS, if the owner ever sets it, is only a ceiling on what this chooser may pick.
 //
 // Every input is a journal note this body wrote itself (budget.sent.v1 / budget.refused.v1), so
 // the chooser is rebuildable from the journal and a rollback finds data an older body understands.
@@ -26,15 +26,8 @@ const SAMPLE_WINDOW = 48;
 /** A refusal only caps the budget while the request that followed it is still among the recent samples. */
 const REFUSAL_WINDOW = 16;
 
-/** Keep the historical coarse step until measurements exist; cold traffic retains the former fine step. */
-export const DEFAULT_STEP_SHARE = 0.2;
-const COLD_STEP_SHARE = 0.1;
-/** Once the cache answers half the input, a smaller step avoids a large context cliff for one extra prefix change. */
-const WARM_STEP_SHARE = 0.05;
-const WARM_CACHE_FROM = 0.5;
-
-/** What one sent request reported, under names this file wrote. */
-interface Sent { chars: number; input: number; cached: number; dropped: number; durationMs?: number; firstByteMs?: number }
+/** What one sent request reported. Legacy `dropped` and `stepShare` fields are ignored: logbook folding has its own fixed step. */
+interface Sent { chars: number; input: number; cached: number; durationMs?: number; firstByteMs?: number }
 /** What one refused request reported. */
 interface Refused { chars: number }
 
@@ -43,8 +36,6 @@ export interface BudgetReport {
   samples: number;
   /** sum(cached)/sum(input) over recent samples, or null before any sample. */
   cachedRatio: number | null;
-  /** What share of recent requests had to cut the front to fit, or null before any sample. */
-  cutRate: number | null;
   /** The largest input a recent request was charged, in the provider's tokens. */
   peakTokens: number | null;
   /** Measured characters per charged input token, or null before any sample. */
@@ -61,7 +52,6 @@ export interface BudgetReport {
 
 export interface BudgetDecision {
   budgetChars: number;
-  stepShare: number;
   windowTokens: number | null;
   report: BudgetReport;
 }
@@ -73,10 +63,10 @@ function num(v: unknown): number | undefined {
 function readSent(data: unknown): Sent | null {
   if (typeof data !== 'object' || data === null) return null;
   const d = data as Record<string, unknown>;
-  const chars = num(d.chars), input = num(d.input), cached = num(d.cached), dropped = num(d.dropped);
-  if (chars === undefined || input === undefined || cached === undefined || dropped === undefined || input === 0) return null;
+  const chars = num(d.chars), input = num(d.input), cached = num(d.cached);
+  if (chars === undefined || input === undefined || cached === undefined || input === 0) return null;
   const durationMs = num(d.durationMs), firstByteMs = num(d.firstByteMs);
-  return { chars, input, cached, dropped,
+  return { chars, input, cached,
     ...(durationMs === undefined ? {} : { durationMs }), ...(firstByteMs === undefined ? {} : { firstByteMs }) };
 }
 
@@ -91,7 +81,7 @@ function round(n: number): number {
 }
 
 /**
- * The budget and cut step for the next request, from the journal's own measurements.
+ * The total request budget for the next request, from the journal's own measurements.
  *
  * `windowTokens` is what brain/providers.ts `contextWindow` says for this provider and model;
  * null when nothing is known, where the historical default stands. `ceilingChars` is the owner's
@@ -117,9 +107,8 @@ export function decideBudget(events: JournalEvent[], windowTokens: number | null
   const stillLive = refusals.filter((f) => totalSent - f.at <= REFUSAL_WINDOW);
   const refused = refusals.length;
   const refusedChars = stillLive.length > 0 ? stillLive[stillLive.length - 1]!.chars : null;
-  const totals = recent.reduce((a, s) => ({ chars: a.chars + s.chars, input: a.input + s.input, cached: a.cached + s.cached, cuts: a.cuts + (s.dropped > 0 ? 1 : 0) }), { chars: 0, input: 0, cached: 0, cuts: 0 });
+  const totals = recent.reduce((a, s) => ({ chars: a.chars + s.chars, input: a.input + s.input, cached: a.cached + s.cached }), { chars: 0, input: 0, cached: 0 });
   const cachedRatio = recent.length > 0 ? totals.cached / totals.input : null;
-  const cutRate = recent.length > 0 ? totals.cuts / recent.length : null;
   const peakTokens = recent.length > 0 ? Math.max(...recent.map((s) => s.input)) : null;
   const charsPerToken = recent.length > 0 ? totals.chars / totals.input : null;
   const timed = recent.filter((s): s is Sent & { durationMs: number } => s.durationMs !== undefined);
@@ -136,6 +125,5 @@ export function decideBudget(events: JournalEvent[], windowTokens: number | null
   if (refusedChars !== null) budgetChars = Math.max(MIN_BUDGET_CHARS, Math.min(budgetChars, round(refusedChars * 0.8)));
   if (ceilingChars !== undefined && ceilingChars > 0) budgetChars = Math.min(budgetChars, Math.floor(ceilingChars));
 
-  const stepShare = cachedRatio === null ? DEFAULT_STEP_SHARE : cachedRatio < WARM_CACHE_FROM ? COLD_STEP_SHARE : WARM_STEP_SHARE;
-  return { budgetChars, stepShare, windowTokens, report: { samples: recent.length, cachedRatio, cutRate, peakTokens, charsPerToken, durationMs, firstByteMs, timedSamples: timed.length, refused } };
+  return { budgetChars, windowTokens, report: { samples: recent.length, cachedRatio, peakTokens, charsPerToken, durationMs, firstByteMs, timedSamples: timed.length, refused } };
 }
