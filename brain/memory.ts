@@ -1,5 +1,6 @@
 import { acceptanceNotes } from '../body/acceptance';
 import type { JournalEvent } from './journal';
+import { backNote, standing } from './owned';
 import { asText, stemNote } from './stemnote';
 import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
@@ -219,8 +220,12 @@ export interface View extends Sizes {
  * `budgetChars` (which the system prompt counts against). With `sight`, the images the owner sent
  * and the ones `look` returned go with their messages; see `takeMarkers` and `fillSlots`.
  */
-export function buildMessages(events: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
+export function buildMessages(journaled: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
   const { ask } = view;
+  // Without what the owner took back (brain/owned.ts): that is in the journal and in no request.
+  // Acceptance is derived from that same view. Stem records deliberately survive a take-back:
+  // forgetting the conversation does not cancel a candidate or consent that really happened.
+  const events = standing(journaled);
   const accepted = acceptanceNotes(events);
   const out: ChatMessage[] = [];
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
@@ -285,7 +290,7 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
       out.push({ role: 'user', content: STOPPED });
       origin.push(i);
     } else {
-      const note = stemNote(e) ?? accepted.get(e.id) ?? null;
+      const note = stemNote(e) ?? accepted.get(e.id) ?? backNote(e, MEMORY_MARK);
       if (note !== null) {
         out.push({ role: 'user', content: note });
         origin.push(i);
@@ -316,8 +321,10 @@ export function buildMessages(events: JournalEvent[], system: string, budgetChar
 }
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
-export function needsTurn(events: JournalEvent[]): boolean {
+export function needsTurn(journaled: JournalEvent[]): boolean {
   let afterReply = false;
+  // What the owner took back asks for nothing any more. Derive acceptance from that same view.
+  const events = standing(journaled);
   const accepted = acceptanceNotes(events);
   for (const e of events) {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;

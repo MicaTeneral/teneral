@@ -62,6 +62,8 @@ test('an episode that is over is remembered: the reply is journaled as a note ab
       from: first[0]!.id, to: first[1]!.id, start: first[0]!.ts, end: first[1]!.ts,
       title: 'Setting up the mail', outcome: 'done',
       text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
+      // Whose words the stretch was made of: counted from the journal.
+      voices: { owner: 44, others: 0, tools: 0, own: 40 },
     },
   });
   expect(await sleep(s.deps)).toBe('nothing');
@@ -201,7 +203,7 @@ test('a memory is read from the form asked for, with or without marks around the
   expect(parseMemory(MEMORY, 600)).toEqual({
     title: 'Setting up the mail', outcome: 'done',
     text: 'My owner asked me to set up the mail and said "use the work address". I did, and it works.',
-    facts: [], intentions: [],
+    facts: [], intentions: [], done: [], questions: [],
   });
   expect(parseMemory(`\n**Title:** A\n**Outcome:** Failed\n\n${'x'.repeat(50)}`, 600)).toMatchObject({ title: 'A', outcome: 'failed' });
 });

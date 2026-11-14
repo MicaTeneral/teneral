@@ -5,7 +5,9 @@ import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
 import { ownerCommand } from '../../species/offer';
-import { interrupt, tell } from '../owner';
+import { interrupt, leaveWord, tell } from '../owner';
+import { memoryCommand } from '../memory';
+import { health, healthBadge } from '../../brain/health';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
 import { Follower } from '../talk';
@@ -46,6 +48,8 @@ const INTERRUPT_MS = 5000;
 const TIP_MS = 20_000;
 /** A pulse older than this, while no turn is owed, was left behind by a body that is gone. */
 const STALE_PULSE_MS = 120_000;
+/** How often the status line works out anew how the memory stands. */
+const MEMORY_BADGE_MS = 30_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
 const PENDING_SHOWN = 12;
 
@@ -457,6 +461,19 @@ export class TalkScreen {
     return alive.supervisor && alive.body && this.standing.turn.busy && this.standing.mutation === null;
   }
 
+  /** How the agent's memory stands, for the status line, and when that was last worked out: the whole journal is read for it, so not often. */
+  private memory: { read: number; badge: string } = { read: 0, badge: '' };
+
+  private memoryBadge(now: number): string {
+    if (this.memory.read !== 0 && now - this.memory.read < MEMORY_BADGE_MS && now >= this.memory.read) return this.memory.badge;
+    let badge = '';
+    try {
+      badge = healthBadge(health(readEvents(this.o.paths.journal), now));
+    } catch { /* a journal that cannot be read says nothing of the memory */ }
+    this.memory = { read: now, badge };
+    return badge;
+  }
+
   /** The pulse file as it was last read, and when: it is looked at a few times a second at most. */
   private pulse: { read: number; words: string } = { read: 0, words: '' };
 
@@ -808,6 +825,20 @@ export class TalkScreen {
         }
         return this.page('what the model was asked for', lines);
       }
+      case '/memory': {
+        let lines: string[];
+        try {
+          const contextChars = Number(this.o.env.TENERAL_CONTEXT_CHARS);
+          const answer = memoryCommand(readEvents(this.o.paths.journal), arg, this.now(), contextChars > 0 ? Math.floor(contextChars) : undefined);
+          // The word goes to the body, which journals it between turns; this client only says what was asked.
+          if (answer.word !== undefined) leaveWord(this.o.paths.owner, answer.word);
+          lines = answer.lines;
+        } catch (err) {
+          lines = [`It could not be done: ${err instanceof Error ? err.message : String(err)}`];
+        }
+        const shown = clean(lines.join('\n')).split('\n');
+        return shown.length <= 2 ? this.say(shown.join(' ')) : this.page('the agent\'s memory', shown);
+      }
       case '/offers':
       case '/approve': {
         // The owner's word to the stem (immune/approval.ts) or about what goes out (species/offer.ts). The agent is not told by the command itself.
@@ -1030,7 +1061,7 @@ export class TalkScreen {
       pending: laid,
       activity,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, this.memoryBadge(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

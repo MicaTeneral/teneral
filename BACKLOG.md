@@ -8,6 +8,17 @@ Each item: what is wrong, how to tell it got better. Add to this file before cha
 
 ## Next
 
+## Adopt outcome-aware memories, owner controls and memory health
+History shows memories ending in `open` even when their main work completed, while old intentions
+remain listed after completion. Owner requested origin/main 5aa411c: outcome-first memories,
+intention closure and self-written exam questions; exam-gated memory mutations; journal-derived
+health; and /memory pin, withdraw and take-back controls. Preserve this lineage's work queue,
+acceptance wake, provider telemetry, Zulip/mail and subagent wiring, including the local adaptive
+budget cleanup checkpoint cb9fe32. Carry over settleWords and the idle exam in body/main.ts.
+Success: merged integrations remain exercised by their existing tests, incoming memory tests pass,
+full suite and typecheck pass, then mutation is requested. immune/ and stem/ require owner approval;
+do not treat acceptance of an older species as approval for this candidate.
+
 ## Species pulse adoption; budget is a separate measured change
 Merged origin/main 66060df on 2026-11-13. Resolve the provider conflict by keeping
 lineage cache probes, session-id, cache keys and output bounds while adding the

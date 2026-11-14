@@ -57,6 +57,9 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
       TENERAL_GEN: 'g1', TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
+      // This test is about interruption, not trimming. Keep enough room after the real composed
+      // prompt and tool specifications to show the interrupted exchange on the next request.
+      TENERAL_CONTEXT_CHARS: '100000',
     },
     stdin: 'ignore', stdout: 'ignore', stderr: 'pipe',
   });

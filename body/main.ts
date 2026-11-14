@@ -13,6 +13,8 @@ import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
 import { clock, clockMayTick, inbox, owner, terminal, type Sensor, type Stimulus } from './sensors';
+import { RESULT_KIND, due, sit } from '../brain/exam';
+import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
 import { sleep } from '../brain/sleep';
@@ -108,11 +110,36 @@ function interrupt(): void {
   wake?.();
 }
 
+/** The owner's words about memory that are not journaled yet (brain/owned.ts). */
+const words: Word[] = [];
+
+/**
+ * The owner said something about the agent's memory. It is journaled between turns, never in the
+ * middle of one, so that a note stands at a place where nothing is half done. Taking the
+ * conversation back also ends the turn in progress: that turn belongs to what is taken back.
+ */
+function ownerWord(text: string): void {
+  const word = parseWord(text);
+  if (word === null) return console.error('[owner] a word about memory that could not be read was dropped');
+  words.push(word);
+  if (word.do === 'back') current?.abort();
+  wake?.();
+}
+
+/** Journals the owner's words that wait. A word about something the journal does not hold is dropped. */
+function settleWords(): void {
+  for (const word of words.splice(0)) {
+    const note = noteOf(word, readEvents(journal));
+    if (note === null) console.error(`[owner] nothing in the journal for the word "${word.do}"; it was dropped`);
+    else appendEvent(journal, gen, note);
+  }
+}
+
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => { quitting = true; wake?.(); }),
   // The owner's lines from `./one talk`, which may come and go while this process lives.
-  owner(ownerDir, undefined, interrupt),
+  owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
   clock(heartbeatMinutes * 60_000, () => clockMayTick(readEvents(journal), soulDir)),
   inbox(inboxDir),
@@ -203,6 +230,7 @@ stops.push(watchJournal(journal, () => wake?.()));
 let failures = 0;
 let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 };
 for (;;) {
+  settleWords();
   // Also true right after a restart: an unfinished turn or a stem note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
     if (retryAt !== null && Date.now() < retryAt) {
@@ -217,6 +245,7 @@ for (;;) {
     working = true;
     const failed = await turn();
     working = false;
+    settleWords();
     if (failed === null) {
       retryAt = null;
       failures = 0;
@@ -269,7 +298,15 @@ for (;;) {
   // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
   if (await rest()) continue;
   if (quitting) break;
-  // Before waiting: what the store gained is written out, so that the next start finds it on disk.
+  // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
+  // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
+  try {
+    const events = standing(readEvents(journal));
+    if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
+  } catch (err) {
+    console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // And what the store gained is written out, so that the next start finds it on disk.
   try {
     past.sync();
     past.persist();
