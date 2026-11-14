@@ -15,7 +15,7 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
-import { idleTicks, offered, ownSpend } from '../brain/agenda';
+import { idleTicks, offered, ownSpend, reportAsk } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -49,6 +49,8 @@ const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
 // Tokens a day that turns woken by a clock tick may spend. Not positive or not set: no cap.
 const ownSet = Number(process.env.TENERAL_OWN_TOKENS_DAY);
 const ownTokensDay = ownSet > 0 ? Math.floor(ownSet) : null;
+// Hours between reports to the owner of what was done on the agent's own. Unset: 24; not positive: none.
+const reportHours = process.env.TENERAL_REPORT_HOURS === undefined ? 24 : Number(process.env.TENERAL_REPORT_HOURS) > 0 ? Number(process.env.TENERAL_REPORT_HOURS) : 0;
 // Characters per request. Set and positive, it is a ceiling on what the budget chooser may pick,
 // never a floor: body/adaptive-budget.ts measures the provider's own feedback and decides the rest.
 const contextChars = Number(process.env.TENERAL_CONTEXT_CHARS);
@@ -166,7 +168,7 @@ const sensors: Sensor[] = [
     },
     () => {
       const events = standing(readEvents(journal));
-      return offered(known(events), Date.now(), idleTicks(events));
+      return offered(known(events), Date.now(), idleTicks(events), reportAsk(events, Date.now(), reportHours * 3_600_000));
     },
   ),
   inbox(inboxDir),
