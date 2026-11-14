@@ -7,10 +7,13 @@ test('worker gets explicit context only, no tools; result is attributed and capp
   expect(messages).toHaveLength(2); expect(tools).toEqual([]);
   expect(messages[1]!.content).toBe(JSON.stringify({task:'Review', context:'data'}));
   expect(options?.signal).toBeDefined();
-  return {text:'x'.repeat(13000),toolCalls:[]};
+  expect(options?.maxOutputTokens).toBe(4096);
+  return {text:'x'.repeat(13000),toolCalls:[],usage:{input:123,output:45,cached:67}};
  });
  const result=JSON.parse(await worker.run({task:'Review',context:'data'},ctx));
  expect(result.worker).toBeString(); expect(result.untrusted).toBe(true);
+ expect(result.usage).toEqual({input:123,output:45,cached:67});
+ expect(result.usageScope).toBe('auxiliary-excluded-from-parent-usage');
  expect(result.truncated).toBe(true);expect(result.text.length).toBe(12000);
 });
 test('deadline bounds waiting even when provider ignores cancellation', async () => {
@@ -38,13 +41,15 @@ test('batch starts all workers concurrently and preserves ordered independent re
   const task=JSON.parse(messages[1]!.content as string).task;
   if(task==='fail') throw new Error('private transport details');
   if(task==='hang') return new Promise(()=>{});
-  return {text:'ok',toolCalls:[]};
+  return {text:'ok',toolCalls:[],usage:{input:10,output:2,cached:task==='ok'?3:undefined}};
  },30);
  const result=JSON.parse(await tool.run({jobs:['ok','fail','hang'].map(task=>({label:task,task,context:''}))},ctx));
  expect(started).toBe(3);
  expect(result.results.map((r:any)=>r.status)).toEqual(['completed','failed','timed_out']);
  expect(result.results.map((r:any)=>r.label)).toEqual(['ok','fail','hang']);
  expect(new Set(result.results.map((r:any)=>r.worker)).size).toBe(3);
+ expect(result.results[0].usage).toEqual({input:10,output:2,cached:3});
+ expect(result.usage).toEqual({input:10,output:2,cached:3,reportedWorkers:1,totalWorkers:3,complete:false,scope:'auxiliary-excluded-from-parent-usage'});
  expect(JSON.stringify(result)).not.toContain('private transport');
 });
 
