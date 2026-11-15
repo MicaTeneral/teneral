@@ -16,7 +16,9 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
   expect(prompt).toMatch(/must be in your reply text/);
 });
 
-// "What the stem requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
+// "What the stem requires of you": this section deliberately keeps its
+// second-person contract phrasing inside Mica's otherwise first-person prompt.
+// Each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
 // The numbers are checked against the stem's own constants where it exports them.
 import { OWNER_REASON } from '../../keeper/back';
 import { FREE } from '../../immune/protected';
