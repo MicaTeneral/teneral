@@ -85,6 +85,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   let shown = 0;
   // Set when the provider refused a request because of its images; holds for the rest of the turn.
   let blind = false;
+  // A length-limited answer gets one continuation per turn. A second cut-off stays visibly marked.
+  let continued = false;
   const route = d.imageRoute;
   const learned = route ? refusedImages(readEvents(d.journal), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
@@ -94,7 +96,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     shown = events.length;
     // Durable request boundary: a late stimulus before a finished reply must remain owed
     // even if this process dies before the extra round. Older readers ignore this note.
-    appendEvent(d.journal, d.gen, { type: 'note', kind: SHOWN_KIND, data: { through: events.at(-1)?.id ?? null } });
+    appendEvent(d.journal, d.gen, { type: 'note', kind: SHOWN_KIND, data: { through: events.at(-1)?.id ?? null, ...(continued ? { continued: true } : {}) } });
     const system = d.system();
     let halved = false;
     let reply: Reply;
@@ -135,11 +137,18 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
       }
     }
     // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
+    const journaledCalls = reply.cutOff === true && reply.partialCalls !== undefined ? reply.partialCalls : reply.toolCalls;
     appendEvent(d.journal, d.gen, {
-      type: 'assistant', text: reply.text, toolCalls: reply.toolCalls,
+      type: 'assistant', text: reply.text, toolCalls: journaledCalls,
       ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
     });
     if (reply.text !== '' && !streamed) d.onText?.(reply.text);
+    if (reply.cutOff === true && !continued && round + 1 < (d.maxRounds ?? 50)) {
+      // The fragment is in the next request. No tool call from a cut-off reply was run.
+      // The request boundary makes the continuation owed across a crash between these calls.
+      continued = true;
+      continue;
+    }
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
       if (arrivedSince(d.journal, shown)) continue;

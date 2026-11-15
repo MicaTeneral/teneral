@@ -206,6 +206,17 @@ test('a response the provider cut short gives what was complete, marked as cut o
   const reply = readResponsesStream(sse(CREATED, incomplete));
   expect(reply.text).toStartWith('Half a rep');
   expect(reply.text).toMatch(/cut off.*max_output_tokens/);
+  expect(reply.cutOff).toBe(true);
+});
+
+test('an output-limited response never exposes its incomplete tool call', () => {
+  const incomplete = { type: 'response.incomplete', response: {
+    status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+    output: [message('Half'), { ...call(1, 'bash', '{"command":'), status: 'incomplete' }],
+  } };
+  const reply = readResponsesStream(sse(CREATED, incomplete));
+  expect(reply.cutOff).toBe(true);
+  expect(reply.toolCalls).toEqual([]);
 });
 
 // --- the request ---

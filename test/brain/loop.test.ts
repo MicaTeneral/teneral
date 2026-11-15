@@ -67,6 +67,39 @@ test('the intent is journaled before the tool runs, the result after', async () 
   expect(s.seen[1]!.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'ok' });
 });
 
+test('a cut-off reply gets one continuation with its fragment, and no partial call runs', async () => {
+  const fragment = 'half a reply\n[this reply was cut off by the provider: max_output_tokens]';
+  let ran = 0;
+  const spy: Tool = { spec: { name: 'echo', description: '', parameters: {} }, run: async () => { ran += 1; return 'ran'; } };
+  const s = setup([{ text: fragment, toolCalls: [{ id: 'partial', name: 'echo', args: {} }], cutOff: true }, { text: 'continued', toolCalls: [] }], [spy]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(s.seen[1]!.some(m => m.role === 'assistant' && m.content === fragment)).toBe(true);
+  expect(s.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringMatching(/Continue exactly where/) });
+  expect(readEvents(s.journal).filter(e => e.type === 'assistant').map(e => e.text)).toEqual([fragment, 'continued']);
+  expect(ran).toBe(0);
+  expect(readEvents(s.journal).some(e => e.type === 'tool.intent')).toBe(false);
+  expect(s.seen[1]!.some(m => m.role === 'tool')).toBe(false);
+  expect(s.seen[1]!.some(m => m.tool_calls !== undefined)).toBe(false);
+});
+
+test('a cut-off reply containing only a partial call still has a valid continuation', async () => {
+  const fragment = '[this reply was cut off by the provider: length]';
+  const s = setup([{ text: fragment, toolCalls: [{ id: 'partial', name: 'echo', args: {} }], cutOff: true }, { text: 'finished', toolCalls: [] }]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(s.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringMatching(/Continue exactly where/) });
+  expect(s.seen[1]!.some(m => m.role === 'tool' || m.tool_calls !== undefined)).toBe(false);
+});
+
+test('a second cut-off remains marked and does not loop forever', async () => {
+  const fragment = 'half\n[this reply was cut off by the provider: length]';
+  const s = setup([{ text: fragment, toolCalls: [], cutOff: true }, { text: 'still half', toolCalls: [], cutOff: true }]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ text: 'still half', toolCalls: [] });
+});
+
 test('a tool that throws becomes a failed result the model can read', async () => {
   const boom: Tool = { spec: { name: 'boom', description: '', parameters: {} }, async run() { throw new Error('kaput'); } };
   const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'boom', args: {} }] }, { text: 'ok', toolCalls: [] }], [boom]);

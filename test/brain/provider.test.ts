@@ -41,6 +41,25 @@ test('adjacent user messages are joined without losing their order or boundaries
   ]);
 });
 
+test('a length finish is marked and a partial tool call is not returned for execution', async () => {
+  const provider = openAiProvider({
+    ...cfg,
+    fetch: fakeFetch(200, { choices: [{ finish_reason: 'length', message: { content: 'half', tool_calls: [{ id: 'c', function: { name: 'bash', arguments: '{"command":' } }] } }] }),
+  });
+  const reply = await provider([], []);
+  expect(reply.cutOff).toBe(true);
+  expect(reply.text).toContain('half');
+  expect(reply.text).toContain('cut off by the provider: length');
+  expect(reply.toolCalls).toEqual([]);
+});
+
+test('stop and tool_calls finishes do not request a continuation', async () => {
+  for (const finish_reason of ['stop', 'tool_calls']) {
+    const provider = openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ finish_reason, message: { content: 'done' } }] }) });
+    expect((await provider([], [])).cutOff).toBeUndefined();
+  }
+});
+
 test('parses tool calls and their JSON arguments', async () => {
   const provider = openAiProvider({
     ...cfg,

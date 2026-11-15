@@ -38,6 +38,10 @@ export interface Reply {
   usage?: Usage;
   /** A summary of the model's reasoning, when the provider gives one. For the owner's terminal: it is journaled and never sent back. */
   reasoning?: string;
+  /** The output budget stopped this reply. It needs a continuation, not tools from a partial call. */
+  cutOff?: boolean;
+  /** A provider-delivered call retained for the continuation, never executed before it is whole. */
+  partialCalls?: ToolCall[];
 }
 
 /** The longest reasoning summary that is journaled. */
@@ -263,17 +267,23 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
     }
     if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text, retryAfterMs(res));
-    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
+    let parsed: { choices?: { finish_reason?: unknown; message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
       throw new ProviderError(`provider reply is not JSON: ${text.slice(0, 2000)}`, res.status, text);
     }
-    const message = parsed?.choices?.[0]?.message;
+    const choice = parsed?.choices?.[0];
+    const message = choice?.message;
     if (!message) throw new ProviderError(`provider reply has no message: ${text.slice(0, 2000)}`, res.status, text);
     // Endpoints that show a model's reasoning do it under one of two names; neither is in the protocol itself.
     const reasoning = tidyReasoning(message.reasoning_content) ?? tidyReasoning(message.reasoning);
-    return withExtras({ text: contentText(message.content), toolCalls: readCalls(message.tool_calls) }, readUsage(parsed?.usage), reasoning);
+    const cutOff = choice?.finish_reason === 'length';
+    const content = contentText(message.content);
+    return withExtras({
+      text: cutOff ? `${content}${content === '' ? '' : '\n'}[this reply was cut off by the provider: length]` : content,
+      toolCalls: cutOff ? [] : readCalls(message.tool_calls), ...(cutOff ? { cutOff, partialCalls: readCalls(message.tool_calls) } : {}),
+    }, readUsage(parsed?.usage), reasoning);
   };
 }
 
@@ -393,17 +403,20 @@ export function readResponsesStream(stream: string, onTextDelta?: (delta: string
   const sent = last.response?.output;
   const output = (Array.isArray(sent) && sent.length > 0 ? sent as Item[] : done).filter((item) => item.status !== 'in_progress' && item.status !== 'incomplete');
   let text = output.filter((item) => item.type === 'message').map((item) => contentText(item.content as WireContent)).join('');
+  let cutOff = false;
   if (last.type === 'response.incomplete') {
     const reason = (last.response?.incomplete_details as { reason?: unknown } | undefined)?.reason;
     text += `${text === '' ? '' : '\n'}[this reply was cut off by the provider: ${String(reason ?? 'no reason given')}]`;
+    cutOff = reason === 'max_output_tokens';
   }
   const calls = output.filter((item) => item.type === 'function_call');
   // A reasoning item carries its summary as a list of `summary_text` parts; one item per stretch of reasoning.
   const summaries = output.filter((item) => item.type === 'reasoning').map((item) => contentText(
     Array.isArray(item.summary) ? item.summary.flatMap((s: unknown) => [s, { text: '\n\n' }]) : null,
   ));
+  const parsedCalls = readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } })));
   return withExtras(
-    { text, toolCalls: readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } }))) },
+    { text, toolCalls: cutOff ? [] : parsedCalls, ...(cutOff ? { cutOff, partialCalls: parsedCalls } : {}) },
     readUsage(last.response?.usage), tidyReasoning(summaries.join('')),
   );
 }

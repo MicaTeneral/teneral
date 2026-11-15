@@ -176,6 +176,8 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
  */
 const LATE =
   '[context] Something arrived while you were writing your last reply; it is shown above, before that reply. Respond to it now.';
+const CONTINUE =
+  '[context] Your previous reply was cut off by the provider\'s output limit. Continue exactly where it stopped; do not repeat the fragment or call tools from an unfinished call.';
 
 const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role === 'assistant' && m.tool_calls === undefined;
 
@@ -228,6 +230,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // Acceptance is derived from that same view. Stem records deliberately survive a take-back:
   // forgetting the conversation does not cancel a candidate or consent that really happened.
   const events = standing(journaled);
+  const last = events.at(-1);
+  const continuation = last?.type === 'assistant' && reply(last).text.includes('[this reply was cut off by the provider:');
   const accepted = acceptanceNotes(events);
   const out: ChatMessage[] = [];
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
@@ -272,6 +276,13 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
       }
       const { results, started } = answers(events, i);
       const wire: WireToolCall[] = [];
+      if (continuation && i === events.length - 1) {
+        // A truncated call cannot be executed. Omit it entirely: neither protocol can replay
+        // it without a fabricated result. The visible fragment is enough to continue.
+        if (content !== null) out.push({ role: 'assistant', content });
+        origin.push(i);
+        continue;
+      }
       const answered: ChatMessage[] = [];
       for (const call of calls) {
         const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown; args?: unknown };
@@ -303,8 +314,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   if (ask !== undefined) {
     out.push({ role: 'user', content: ask });
     origin.push(events.length);
-  } else if (isPlainReply(out.at(-1))) {
-    out.push({ role: 'user', content: LATE });
+  } else if (continuation || isPlainReply(out.at(-1))) {
+    out.push({ role: 'user', content: continuation ? CONTINUE : LATE });
     origin.push(events.length);
   }
   if (sight) fillSlots(slots, sight);

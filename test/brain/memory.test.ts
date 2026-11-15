@@ -136,6 +136,15 @@ test('request boundaries preserve late work across a crash, but never repeat a r
   expect(needsTurn([first, boundary, late, reply, secondBoundary, replied('answered late')])).toBe(false);
   // A historical journal has no proof of a late event, so its completed replies stay complete.
   expect(needsTurn([said('old'), replied('done'), ev({ type: 'note', kind: 'other', data: {} })])).toBe(false);
+  // A second continuation reply that saw the fragment must not restart the loop forever.
+  const fragment = replied('half\n[this reply was cut off by the provider: length]');
+  expect(needsTurn([first, fragment])).toBe(true);
+  const continued = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: fragment.id, continued: true } });
+  expect(needsTurn([first, fragment, continued, replied('still cut off')])).toBe(false);
+  expect(needsTurn([first, fragment, continued, replied('half\n[this reply was cut off by the provider: length]')])).toBe(false);
+  expect(needsTurn([first, fragment, continued, called('partial')])).toBe(true);
+  // A crash between the first reply and its continuation remains owed after restart.
+  expect(needsTurn([first, fragment, ev({ type: 'note', kind: 'brain.shown.v1', data: { through: fragment.id } })])).toBe(true);
 });
 const result = (callId: string, output: string) => ev({ type: 'tool.result', callId, ok: true, output });
 const toolContents = (events: JournalEvent[]) => buildMessages(events, 'S').filter((m) => m.role === 'tool').map((m) => m.content);

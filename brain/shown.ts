@@ -6,12 +6,12 @@ import { standing } from './owned';
 /** Written before a request. The id is the last journal event that request may contain. */
 export const SHOWN_KIND = 'brain.shown.v1';
 
-interface Shown { through: string }
+interface Shown { through: string; continued?: boolean }
 
-function shownAt(e: JournalEvent): string | null {
+function shownAt(e: JournalEvent): Shown | null {
   if (e.type !== 'note' || e.kind !== SHOWN_KIND) return null;
-  const through = (e.data as Partial<Shown> | null)?.through;
-  return typeof through === 'string' ? through : null;
+  const data = e.data as Partial<Shown> | null;
+  return typeof data?.through === 'string' ? { through: data.through, ...(data.continued === true ? { continued: true } : {}) } : null;
 }
 
 /**
@@ -34,14 +34,21 @@ export function replyIsCurrent(events: JournalEvent[], reply: JournalEvent): boo
   // before the request boundary, even when the request is not the nearest preceding note
   // (a tool result or another reply may intervene).
   for (let i = at - 1; i > previousReply; i--) {
-    const through = shownAt(events[i]!);
-    if (through === null) continue;
-    if (through === latest.id) return true;
-    const boundary = events.findIndex(e => e.id === through);
+    const shown = shownAt(events[i]!);
+    if (shown === null) continue;
+    if (shown.through === latest.id) {
+      // A cut-off reply's fragment has been shown, but its completion is still owed.
+      return shown.continued !== true;
+    }
+    const boundary = events.findIndex(e => e.id === shown.through);
     if (boundary < 0) return false; // taken back: no proof this reply saw the current event
     const target = events.findIndex(e => e.id === latest!.id);
     return target >= 0 && target <= boundary;
   }
+  // A completed continuation may end in another length-limited fragment. Older journals
+  // have no explicit boundary; only a cut-off text without calls can be treated this way.
+  const { toolCalls, text } = reply;
+  if ((!Array.isArray(toolCalls) || toolCalls.length === 0) && typeof text === 'string' && text.includes('[this reply was cut off by the provider:')) return false;
   // Before request boundaries existed, an event before the reply is indistinguishable
   // from a late one. Do not make every historical journal permanently owe a turn.
   return true;
