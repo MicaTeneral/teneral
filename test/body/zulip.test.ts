@@ -209,6 +209,24 @@ test('Zulip reaction queue baselines history, emits add/remove, and checkpoints 
   expect(anchors).toEqual(['15']);
 });
 
+test('Zulip reaction queue replaces an expired queue without replaying its baseline', async () => {
+  const events: JournalEvent[] = [{ type:'note', kind:ZULIP_QUEUE_CURSOR_KIND, data:{queueId:'old',eventId:4,site:'https://example.test',email:'mica@test'} } as JournalEvent];
+  const checkpoints: any[] = []; let queues = 0; let notices = 0;
+  const send = (async (url: URL) => new Response(JSON.stringify(
+    url.pathname === '/api/v1/users/me' ? {user_id:99} :
+    url.pathname === '/api/v1/register' ? {queue_id:`q${++queues}`,last_event_id:0} :
+    url.searchParams.get('queue_id') === 'old' ? {result:'error',code:'BAD_EVENT_QUEUE_ID',msg:'expired'} :
+    url.searchParams.get('last_event_id') === '0' ? {events:[{id:1,type:'reaction',op:'add',message_id:1,user_id:10,emoji_name:'old',emoji_code:'1',reaction_type:'unicode_emoji'}]} : {events:[]},
+  ), {status:url.pathname === '/api/v1/events' && url.searchParams.get('queue_id') === 'old' ? 400 : 200})) as unknown as typeof fetch;
+  const p = zulipReactionPoller({credentials,events:()=>events,send,checkpoint:c=>{checkpoints.push(c);events.push({type:'note',kind:ZULIP_QUEUE_CURSOR_KIND,data:c} as JournalEvent)}},()=>{notices++});
+  await p.poll(); // only discard the dead queue; do not register and discard another event in one call
+  expect(checkpoints).toEqual([]);
+  await p.poll(); // new baseline: historical reactions stay silent
+  expect(notices).toBe(0); expect(checkpoints.at(-1)).toMatchObject({queueId:'q1',eventId:1});
+  await p.poll(); // ordinary empty event list uses the new cursor
+  expect(notices).toBe(0); expect(queues).toBe(1);
+});
+
 test('Zulip reaction queue retries a partial batch and does not checkpoint before emit returns', async () => {
   const events: JournalEvent[]=[]; const checkpoints:any[]=[]; let batches=0; let notices=0;
   const send=(async(url:URL)=>new Response(JSON.stringify(

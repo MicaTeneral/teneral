@@ -154,10 +154,13 @@ function queueCursor(value: unknown, c: Credentials): ZulipQueueCursor | undefin
  */
 export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
   const send = o.send ?? fetch;
-  let cursor: ZulipQueueCursor | undefined, identity: { key: string; id: number } | undefined;
+  let cursor: ZulipQueueCursor | undefined, restoredFor: string | undefined, identity: { key: string; id: number } | undefined;
+  const keyOf = (c: Credentials) => JSON.stringify([c.site, c.email, c.api_key]);
   let stopped = false, busy = false, failed = false;
   const delivered = new Set<string>();
   function restore(c: Credentials) {
+    if (restoredFor === keyOf(c)) return;
+    restoredFor = keyOf(c);
     cursor = undefined; delivered.clear();
     for (const event of o.events()) {
       if (event.type === 'note' && event.kind === ZULIP_QUEUE_CURSOR_KIND) {
@@ -177,8 +180,14 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       ...init, redirect: 'error', signal: AbortSignal.timeout(15_000),
       headers: { ...init.headers, Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
     });
-    if (!response.ok) throw new Error('Zulip reaction request failed');
-    return response.json();
+    const result = await response.json();
+    if (!response.ok) {
+      // Zulip's short-lived queues expire while this process sleeps or restarts.
+      // That is a normal new baseline, not a permanent retry of a dead id.
+      if (result?.code === 'BAD_EVENT_QUEUE_ID') return { expired: true };
+      throw new Error('Zulip reaction request failed');
+    }
+    return result;
   }
   async function poll() {
     if (stopped || busy) return;
@@ -204,12 +213,22 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         const baseline = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: registered.queue_id, last_event_id: String(registered.last_event_id), dont_block: 'true' })}`);
         const historical = Array.isArray(baseline.events) ? baseline.events : [];
         const eventId = historical.reduce((last: number, event: any) => Number.isSafeInteger(event?.id) && event.id > last ? event.id : last, registered.last_event_id);
-        o.checkpoint?.({ queueId: registered.queue_id, eventId, site: c.site, email: c.email });
+        cursor = { queueId: registered.queue_id, eventId, site: c.site, email: c.email };
+        o.checkpoint?.(cursor);
         failed = false;
         return;
       }
       const active = cursor;
+      for (const event of o.events()) {
+        if (event.type !== 'stimulus' || event.source !== ZULIP_REACTION_SOURCE || !event.text.startsWith(QUEUE_PREFIX)) continue;
+        const lines = event.text.split('\n');
+        try {
+          const d = JSON.parse(lines[2]) as Record<string, unknown>;
+          if (typeof d.queue_id === 'string' && Number.isSafeInteger(d.event_id)) delivered.add(`${d.queue_id}:${d.event_id}`);
+        } catch { /* a malformed historical stimulus is not delivered evidence */ }
+      }
       const result = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: active.queueId, last_event_id: String(active.eventId), dont_block: 'true' })}`);
+      if (result.expired) { cursor = undefined; return; }
       if (!Array.isArray(result.events)) throw new Error('Invalid Zulip event list');
       const reactions = result.events.filter((event: any) => event?.type === 'reaction').sort((a: any, b: any) => a.id - b.id);
       if (reactions.length > MAX_REACTIONS) throw new Error('Zulip reaction batch limit');
