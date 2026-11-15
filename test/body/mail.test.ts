@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mailKey, mailPoller } from '../../body/mail';
+import { createHash } from 'node:crypto';
+import { duplicateZulipNotice, mailKey, mailPoller } from '../../body/mail';
 import type { JournalEvent } from '../../brain/journal';
 import type { Stimulus } from '../../body/sensors';
 
@@ -45,6 +46,46 @@ test('metadata notification, pagination, durable deduplication, read-only reques
   await again.poll();
   expect(notices).toHaveLength(2);
   again.stop(); const count = urls.length; await again.poll(); expect(urls).toHaveLength(count);
+});
+
+test('Zulip DM notices are durably quiet; other Zulip and ordinary mail still wake', async () => {
+  const quiet: string[] = [];
+  const notices: Stimulus[] = [];
+  const send = (async (url: string | URL | Request) => response(String(url).includes('/messages')
+    ? { messages: [
+        { message_id: 'dm', from: 'Zulip notifications <noreply@zulip.com>', subject: 'DMs with Anton Kundenko' },
+        { message_id: 'group', from: 'Zulip notifications <noreply@zulip.com>', subject: 'DMs with Anton Kundenko and Morsel' },
+        { message_id: 'stream', from: 'Zulip notifications <noreply@zulip.com>', subject: '#general > memory' },
+        { message_id: 'other', from: 'other@example.com', subject: 'DMs with Anton Kundenko' },
+      ] }
+    : { inboxes: [{ inbox_id: 'i' }] })) as typeof fetch;
+  const worker = mailPoller({ key: () => 'fake', events: () => [], send, quiet: id => quiet.push(id) }, s => notices.push(s));
+  await worker.poll();
+  expect(notices).toHaveLength(3);
+  expect(notices.map(n => JSON.parse(n.text.split('\n').at(-1)!).message_id)).toEqual(['other', 'stream', 'group']);
+  expect(quiet).toHaveLength(1);
+  // A fresh poller reconstructs quiet dedup as well as ordinary emitted metadata.
+  const events: JournalEvent[] = [...quiet.map(data => ({ type: 'note', kind: 'mail.quiet.v1', data })),
+    ...notices.map(s => ({ type: 'stimulus', ...s }))] as JournalEvent[];
+  const restarted = mailPoller({ key: () => 'fake', events: () => events, send, quiet: id => quiet.push(id) }, s => notices.push(s));
+  await restarted.poll();
+  expect(quiet).toHaveLength(1);
+  expect(notices).toHaveLength(3);
+});
+
+test('a failed quiet receipt retries instead of losing the notification', async () => {
+  const send = (async (url: string | URL | Request) => response(String(url).includes('/messages')
+    ? { messages: [{ message_id: 'dm', from: 'Zulip notifications <noreply@zulip.com>', subject: 'DMs with Anton Kundenko' }] }
+    : { inboxes: [{ inbox_id: 'i' }] })) as typeof fetch;
+  let attempts = 0;
+  const worker = mailPoller({ key: () => 'fake', events: () => [], send, quiet: () => {
+    attempts++; if (attempts === 1) throw new Error('disk failure');
+  } }, () => { throw new Error('quiet notice must not wake'); });
+  await worker.poll(); await worker.poll();
+  expect(attempts).toBe(2);
+  // The ID is the hash of the exact inbox/message pair, not sender-controlled content.
+  expect(duplicateZulipNotice({ from: 'Zulip notifications <noreply@zulip.com>', subject: 'DMs with Anton Kundenko' })).toBe(true);
+  expect(createHash('sha256').update(JSON.stringify(['i', 'dm'])).digest('hex')).toHaveLength(64);
 });
 
 test('missing key makes no network request; transient failure retries', async () => {

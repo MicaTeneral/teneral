@@ -18,7 +18,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 ## Sensors
 
 12. **Workspace watcher.** Notice when the person edits files in the repository. Better when: such an edit shows up as a stimulus without the person saying so.
-13. **Wake policy.** Not every stimulus deserves a full turn. Decide cheaply which ones do. Better when: the cost report shows less spent on turns that end in one line.
 
 ## Robustness
 

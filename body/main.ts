@@ -228,7 +228,11 @@ const sensors: Sensor[] = [
     }, 60_000);
     return () => { clearTimeout(start); if (timer) clearInterval(timer); reactions.stop(); };
   },
-  mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
+  mail({
+    key: () => mailKey(process.env, join(workspace, '..', '..', '.env')),
+    events: () => readEvents(journal),
+    quiet: id => appendEvent(journal, gen, { type: 'note', kind: 'mail.quiet.v1', data: id }),
+  }),
 ];
 
 /** One turn. Returns what was thrown, or null when it ran to its end. */
