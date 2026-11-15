@@ -87,6 +87,21 @@ test('inbox turns a delivered envelope into a stimulus and archives it', async (
   expect(readdirSync(join(dir, 'seen'))).toHaveLength(2);
 });
 
+test('inbox shows owner-maintained peer names and raw ids, and marks unknown senders', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'teneral-peer-inbox-')), dir = join(root, 'inbox'), peers = join(root, 'peers.json');
+  writeFileSync(peers, JSON.stringify({ morsel: { inbox: '/somewhere', id: 'morsel-123' }, alice: join(root, 'alice') }));
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'morsel-123', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm2', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'legacy' });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm3', from: 'mallory', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'unlisted' });
+  const got: Stimulus[] = [];
+  inbox(dir, 'me', 10, peers)((s) => got.push(s))();
+  expect(got).toEqual([
+    { source: 'agent:morsel', text: '(message m1, from morsel-123) hello' },
+    { source: 'agent:alice', text: '(message m2, from alice) legacy' },
+    { source: 'agent:mallory', text: '(message m3, from unknown sender) unlisted' },
+  ]);
+});
+
 test('inbox sets aside an envelope addressed to someone else without emitting', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
   const wrong = deliver(dir, { v: ENVELOPE_VERSION, id: 'm0', from: 'alice', to: 'other', replyTo: null, ts: 't', hops: 0, text: 'not for you' });

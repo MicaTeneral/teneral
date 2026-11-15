@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from './envelope';
+import { peerName, readPeers } from './peers';
 import type { JournalEvent } from '../brain/journal';
 import { fromOwner } from '../brain/owned';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
@@ -100,7 +101,7 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true, a
 }
 
 /** Messages other agents and programs dropped into this agent's inbox directory. */
-export function inbox(dir: string, id: string, intervalMs = 2000): Sensor {
+export function inbox(dir: string, id: string, intervalMs = 2000, peersFile?: string): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, one that was journaled but cannot be moved would be emitted on every poll.
@@ -119,8 +120,16 @@ export function inbox(dir: string, id: string, intervalMs = 2000): Sensor {
         return;
       }
       const reply = e.replyTo === null ? '' : `, in reply to ${e.replyTo}`;
+      // The name is display metadata, never sender authentication. A legacy peer named exactly
+      // like the id remains supported; an unmapped sender is visibly unknown. Preserve the raw id
+      // because replyTo is checked against the archived envelope, not against this label.
+      let name: string | undefined;
+      try { name = peersFile === undefined ? undefined : peerName(readPeers(peersFile), e.from); }
+      catch (err) { console.error(`[inbox] peer names unavailable: ${say(err)}`); }
+      const label = name ?? e.from;
+      const identity = peersFile === undefined ? '' : name !== undefined ? `, from ${e.from}` : ', from unknown sender';
       // Journal first, archive second: a crash in between repeats the message rather than losing it.
-      emit({ source: `agent:${e.from}`, text: `(message ${e.id}${reply}) ${e.text}` });
+      emit({ source: `agent:${label}`, text: `(message ${e.id}${identity}${reply}) ${e.text}` });
       archive(dir, arrival.file, 'seen');
     };
     // This runs in a timer, where anything thrown ends the process: a file that vanished between

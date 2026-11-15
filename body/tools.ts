@@ -1,7 +1,8 @@
 import { work } from './work';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readPeers } from './peers';
 import { dirname, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
@@ -275,21 +276,9 @@ const send: Tool = {
     const rawReply = (args as Record<string, unknown>).replyTo;
     const replyTo = typeof rawReply === 'string' && rawReply !== '' ? rawReply : null;
 
-    let peers: Record<string, unknown> = {};
-    if (existsSync(ctx.peers)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(ctx.peers, 'utf8'));
-      } catch (err) {
-        throw new Error(`the peers file ${ctx.peers} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error(`the peers file ${ctx.peers} must hold one JSON object mapping peer names to inbox directories`);
-      }
-      peers = parsed as Record<string, unknown>;
-    }
-    const target = peers[to];
-    if (typeof target !== 'string') {
+    const peers = readPeers(ctx.peers);
+    const target = peers[to]?.inbox;
+    if (target === undefined) {
       throw new Error(`unknown peer "${to}". Known peers: ${Object.keys(peers).join(', ') || 'none'}`);
     }
 

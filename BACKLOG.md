@@ -24,8 +24,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 12. **Workspace watcher.** Notice when the person edits files in the repository. Better when: such an edit shows up as a stimulus without the person saying so.
 13. **Wake policy.** Not every stimulus deserves a full turn. Decide cheaply which ones do. Better when: the cost report shows less spent on turns that end in one line.
 
-20. **A peer has two names.** `send` addresses a peer by the name in `soul/peers.json`, but what that peer writes arrives as `[agent:<its own id>]`. Nothing connects the two, so telling which peer a message came from, or that a reply came from the one that was asked, is done by hand. Better when: an incoming message is shown under the name it is known by in `peers.json` when its sender is listed there, and marked as unknown when not.
-
 ## Robustness
 
 17. **File tools reach outside the workspace.** `read`, `write` and `edit` take any path, absolute or with `..`. The soul directory has to stay reachable; nothing else outside the workspace needs to be. Better when: a path outside the workspace and the soul directory is refused, with a test.
