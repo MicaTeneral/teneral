@@ -1,7 +1,7 @@
+import { FACT_KIND, known } from './known';
 import { fromOwner } from './owned';
 import type { JournalEvent } from './journal';
-import { FACT_KIND } from './known';
-import { EPISODE_KIND, MERGE_KIND } from './remembered';
+import { EPISODE_KIND, MERGE_KIND, remembered } from './remembered';
 import { asText } from './stemnote';
 
 // Recall is finding again what the journal holds: by words, with no model asked. Every event that
@@ -97,6 +97,23 @@ export function documentOf(e: JournalEvent): { kind: Kind; text: string } | null
   return found !== null && found.text.trim() !== '' ? found : null;
 }
 
+/**
+ * The memory notes that still stand as derivatives. Facts and episode memories use the same
+ * projections as the request's current knowledge and logbook. A wider memory is withdrawn only
+ * by its own id: a duplicate merge is not a replacement, and its original events are never
+ * withdrawn. Used at query time, not by changing the immutable journal.
+ */
+export function currentMemoryIds(events: JournalEvent[]): Set<string> {
+  // These are the same projections that decide what the agent is told now. Reusing them keeps
+  // malformed notes, replacement, withdrawal and re-remembering identical in every reader.
+  const held = known(events).facts.map((fact) => fact.id);
+  const told = remembered(events);
+  const withdrawnMerges = new Set(events.flatMap((event) => event.type === 'note' && event.kind === 'memory.withdraw.v1'
+    ? ((event.data as { ids?: unknown } | null)?.ids ?? []) : []).filter((id): id is string => typeof id === 'string'));
+  const validMerges = events.flatMap((event) => event.type === 'note' && event.kind === MERGE_KIND && !withdrawnMerges.has(event.id) && documentOf(event) !== null ? [event.id] : []);
+  return new Set([...held, ...[...told.memories.values()].map((memory) => memory.id), ...validMerges]);
+}
+
 /** One term found in one document. `doc` is the byte at which the document's line begins in the journal: its name, and where to read it. */
 export interface Match {
   term: string;
@@ -109,6 +126,8 @@ export interface Match {
 export interface Index {
   matches(terms: string[]): Match[];
   documents(): number;
+  /** The journal offsets of current memory derivatives. Undefined means no filter. */
+  current?: () => Set<number>;
 }
 
 export interface Hit {
@@ -133,7 +152,8 @@ export interface RecallOptions {
 export function recall(index: Index, question: string, options: RecallOptions = {}): Hit[] {
   const terms = queryTerms(question);
   if (terms.length === 0) return [];
-  const found = index.matches(terms);
+  const current = index.current?.();
+  const found = current === undefined ? index.matches(terms) : index.matches(terms).filter((match) => match.kind !== 'memory' || current.has(match.doc));
   const total = Math.max(1, index.documents());
   const holders = new Map<string, Set<number>>();
   for (const m of found) {
@@ -163,6 +183,7 @@ export function recall(index: Index, question: string, options: RecallOptions = 
 export function scanIndex(lines: () => { event: JournalEvent; off: number }[]): Index {
   let read: { doc: number; kind: Kind; terms: Map<string, number> }[] | null = null;
   let seen = -1;
+  let currentCache: { seen: number; offsets: Set<number> } | null = null;
   const load = (): NonNullable<typeof read> => {
     const now = lines();
     // Read again only when the journal has grown.
@@ -178,6 +199,14 @@ export function scanIndex(lines: () => { event: JournalEvent; off: number }[]): 
   };
   return {
     documents: () => load().length,
+    current() {
+      const now = lines();
+      if (currentCache?.seen === now.length) return currentCache.offsets;
+      const ids = currentMemoryIds(now.map((line) => line.event));
+      const offsets = new Set(now.filter((line) => ids.has(line.event.id)).map((line) => line.off));
+      currentCache = { seen: now.length, offsets };
+      return offsets;
+    },
     matches(terms) {
       const out: Match[] = [];
       for (const d of load()) for (const term of terms) {
