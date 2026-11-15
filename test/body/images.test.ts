@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IMAGE_CHARS, IMAGE_MAX_BYTES, imageStore, keepImage, rootOf, splitMarkers } from '../../body/images';
+import { IMAGE_CHARS, IMAGE_MAX_BYTES, imageRoute, imageStore, keepImage, refusedImages, rootOf, splitMarkers } from '../../body/images';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46]);
@@ -162,4 +162,18 @@ test('keepImage refuses, saying why, what is not an image, is too large, or is n
 test('an image is charged what a large one costs the model in tokens, at four characters a token', () => {
   // 2,500 patches at most, times 1.2, is 3,000 tokens (OpenAI's vision guide, patch-based models at high detail).
   expect(IMAGE_CHARS).toBe(Math.ceil(2500 * 1.2) * 4);
+});
+
+test('persistent image refusals are rebuilt per exact route and ignore malformed notes', () => {
+  const route = { provider: 'responses', baseUrl: 'https://example/v1', model: 'm' };
+  const name = 'a'.repeat(64) + '.png';
+  const events = [
+    { type: 'note', kind: 'image.refusal.v1', data: { route, images: [name, 'not-an-image', 4] } },
+    { type: 'note', kind: 'image.refusal.v1', data: { route: { ...route, model: 'other' }, images: ['b'.repeat(64) + '.png'] } },
+    { type: 'note', kind: 'other', data: { route, images: [name] } },
+    { type: 'note', kind: 'image.refusal.v1', data: null },
+  ];
+  expect([...refusedImages(events, route)]).toEqual([name]);
+  expect(refusedImages(events, { ...route, baseUrl: 'https://other/v1' }).size).toBe(0);
+  expect(imageRoute({ TENERAL_PROVIDER: 'p', TENERAL_BASE_URL: 'u', TENERAL_MODEL: 'm' })).toEqual({ provider: 'p', baseUrl: 'u', model: 'm' });
 });

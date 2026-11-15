@@ -347,6 +347,41 @@ test('a request refused because of its image is asked once more with a note in i
   expect(needsTurn(readEvents(s.journal))).toBe(false);
 });
 
+test('an image refusal survives later turns and a new loader, and is scoped to its model and route', async () => {
+  const route = { provider: 'responses', baseUrl: 'https://route.example/v1', model: 'vision-less' };
+  const s = withImage(async () => ({ text: 'seen without the image', toolCalls: [] }));
+  let calls = 0;
+  const provider: Provider = async (messages) => {
+    calls++;
+    if (messages.some(m => m.images)) throw new ProviderError('refused', 400, 'image_url unsupported');
+    return { text: 'done', toolCalls: [] };
+  };
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'another turn' });
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  expect(calls).toBe(3); // The initial retry once; neither later turn asks with the known image.
+  expect(readEvents(s.journal).filter(e => e.type === 'note' && e.kind === 'image.refusal.v1')).toHaveLength(1);
+
+  const root = dirname(dirname(s.journal));
+  const second = `memory/images/${'6'.repeat(64)}.png`;
+  writeFileSync(join(root, second), PNG_BYTES);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: `a different image\n[image: ${second}]` });
+  const beforeOther = calls;
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  expect(calls).toBe(beforeOther + 2);
+  const notes = readEvents(s.journal).filter(e => e.type === 'note' && e.kind === 'image.refusal.v1');
+  expect(notes).toHaveLength(2);
+
+  const freshSight = { load: imageStore(root) };
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'after restart' });
+  await runTurn({ ...s.deps, provider, sight: freshSight, imageRoute: route });
+  expect(calls).toBe(beforeOther + 3);
+
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'a different model' });
+  await runTurn({ ...s.deps, provider, sight: freshSight, imageRoute: { ...route, model: 'vision-capable' } });
+  expect(calls).toBe(beforeOther + 5);
+});
+
 test('a refusal that stays after the images are gone is passed on, and one about images without any in the request is not retried', async () => {
   let calls = 0;
   const always = new ProviderError('refused', 400, 'vision is not supported');

@@ -65,6 +65,8 @@ export interface Sight {
   max?: number;
   /** Set once the provider refused a request because of its images: every image becomes a note. */
   refused?: boolean;
+  /** Content names this model/route has already refused, including notes from earlier turns. */
+  refusedImages?: ReadonlySet<string>;
 }
 
 /** A place in the conversation where an image belongs: the message, and the path its marker named (null: one marker too many). */
@@ -101,7 +103,7 @@ function fillSlots(slots: Slot[], sight: Sight): void {
   slots.forEach(({ message, path }, i) => {
     const name = path?.split('/').at(-1) ?? '';
     const image = path === null ? `[image not available: more than ${IMAGES_PER_MESSAGE} images in one message]`
-      : sight.refused ? `[image not shown: the model or the route in use does not take images: ${name}]`
+      : sight.refused || sight.refusedImages?.has(name) ? `[image not shown: the model or the route in use does not take images: ${name}]`
       : i < earlier ? `[an image shown earlier: ${name}]`
       : sight.load(path);
     if (typeof image !== 'string') (message.images ??= []).push(image);

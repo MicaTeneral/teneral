@@ -2,6 +2,7 @@ import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, readEvents, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
+import { IMAGE_REFUSAL_KIND, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import type { Tool, ToolContext } from '../body/tools';
@@ -26,6 +27,8 @@ export interface TurnDeps {
   budget?: BudgetDecision;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
   sight?: Sight;
+  /** Provider identity for persistent image refusals. Omit only in isolated tests. */
+  imageRoute?: ImageRoute;
   /** Aborts when the owner interrupts this turn (body/main.ts). The turn then ends as 'interrupted'. */
   signal?: AbortSignal;
   /** How long a running tool gets to stop by itself after that, before the turn ends without it. Default: two seconds. */
@@ -79,6 +82,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   let shown = 0;
   // Set when the provider refused a request because of its images; holds for the rest of the turn.
   let blind = false;
+  const route = d.imageRoute;
+  const learned = route ? refusedImages(readEvents(d.journal), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
@@ -88,7 +93,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     let halved = false;
     let reply: Reply;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars });
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
         reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; } });
@@ -104,6 +109,14 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
         if (d.signal?.aborted) return interrupted();
         if (!blind && messages.some((m) => m.images !== undefined) && saysNoImages(err)) {
           // One image the model or the route cannot take must not hold up the conversation: asked again with a note in its place.
+          // The route and content names, never bytes or credentials, make this retry unnecessary in later turns and processes.
+          if (route) {
+            const images = [...new Set(messages.flatMap(m => m.images?.map(image => image.name) ?? []))];
+            if (!images.every(name => learned.has(name))) {
+              appendEvent(d.journal, d.gen, { type: 'note', kind: IMAGE_REFUSAL_KIND, data: { route, images } });
+              images.forEach(name => learned.add(name));
+            }
+          }
           blind = true;
         } else if (!halved && saysTooLong(err)) {
           // Characters are only an estimate of tokens. Half is tried once and kept for the rest of the turn.

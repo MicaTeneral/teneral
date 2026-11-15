@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { appendEvent, readEvents } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
 import { needsTurn } from '../brain/memory';
-import { DEFAULT_IMAGES, imageStore, rootOf } from './images';
+import { DEFAULT_IMAGES, imageRoute, imageStore, rootOf } from './images';
 import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
@@ -203,7 +203,7 @@ async function turn(): Promise<{ error: unknown } | null> {
   current = new AbortController();
   try {
     const outcome = await runTurn({
-      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, budget: budgetChoice,
+      journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),

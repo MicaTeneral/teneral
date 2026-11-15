@@ -29,6 +29,27 @@ export const DEFAULT_IMAGES = 4;
  */
 export const IMAGE_CHARS = 12_000;
 
+/** A provider route whose handling of an image was learned from a real refusal. No credentials. */
+export interface ImageRoute { provider: string; baseUrl: string; model: string }
+export const IMAGE_REFUSAL_KIND = 'image.refusal.v1';
+const IMAGE_NAME = /^[0-9a-f]{64}\.(?:png|jpg|jpeg|gif|webp)$/;
+
+export function imageRoute(env: NodeJS.ProcessEnv): ImageRoute {
+  return { provider: env.TENERAL_PROVIDER ?? '', baseUrl: env.TENERAL_BASE_URL ?? '', model: env.TENERAL_MODEL ?? '' };
+}
+
+/** Images this exact provider route has already refused, reconstructed from journal notes. */
+export function refusedImages(events: { type: string; kind?: unknown; data?: unknown }[], route: ImageRoute): Set<string> {
+  const refused = new Set<string>();
+  for (const event of events) {
+    if (event.type !== 'note' || event.kind !== IMAGE_REFUSAL_KIND || typeof event.data !== 'object' || event.data === null) continue;
+    const data = event.data as { route?: unknown; images?: unknown };
+    if (JSON.stringify(data.route) !== JSON.stringify(route) || !Array.isArray(data.images)) continue;
+    for (const name of data.images) if (typeof name === 'string' && IMAGE_NAME.test(name)) refused.add(name);
+  }
+  return refused;
+}
+
 const STORE = 'memory/images';
 const MARKER = /^\[image: (memory\/images\/[0-9a-f]{64}\.(?:png|jpg|jpeg|gif|webp))\]$/;
 
