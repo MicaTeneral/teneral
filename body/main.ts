@@ -1,10 +1,11 @@
 import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
-import { github, GITHUB_CURSOR_KIND, type GithubCursor } from './github';
+import { github, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
+import { hasToken } from '../species/github';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { appendEvent, readEvents } from '../brain/journal';
@@ -204,6 +205,15 @@ const sensors: Sensor[] = [
       appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
     },
   })),
+  ...(process.env.TENERAL_AUTH && hasToken(process.env.TENERAL_AUTH) ? [(emit: (s: Stimulus) => void) => {
+    const worker = githubNotificationPoller({
+      events: () => readEvents(journal),
+      token: () => existsSync(join(process.env.TENERAL_AUTH!, 'github-token')) ? readFileSync(join(process.env.TENERAL_AUTH!, 'github-token'), 'utf8') : '',
+      checkpoint: (cursor: GithubNotificationCursor) => appendEvent(journal, gen, { type: 'note', kind: GITHUB_NOTIFICATION_CURSOR_KIND, data: cursor }),
+    }, emit);
+    const timer = setTimeout(() => { void worker.poll(); setInterval(() => { void worker.poll(); }, 60_000); }, 60_000);
+    return () => { clearTimeout(timer); worker.stop(); };
+  }] : []),
   resumeWork(journal, gen, () => {
     if (working || quitting) return true;
     const events = readEvents(journal);

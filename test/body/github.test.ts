@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { GITHUB_CURSOR_KIND, githubPoller, githubRepository, type GithubCursor } from '../../body/github';
+import { GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, githubPoller, githubNotificationPoller, githubRepository, type GithubCursor, type GithubNotificationCursor } from '../../body/github';
 import type { JournalEvent } from '../../brain/journal';
 import type { Stimulus } from '../../body/sensors';
 
@@ -223,4 +223,49 @@ test('old cursor notes gain comment baselines without waking historical comments
   f.update([commit(1)], [issue(100, 1)], [comment(502, 1), comment(500, 1)], [comment(702, 2, true), comment(700, 2, true)]);
   await p.poll();
   expect(notices.map(n => n.text.split('\n')[0])).toEqual(['GitHub issue comment 502', 'GitHub review comment 702']);
+});
+
+test('account notifications baseline quietly, use the token only on GitHub, and recover versions across restart', async () => {
+  const events: JournalEvent[] = [];
+  let checkpoints = 0;
+  const token = 'private-test-token';
+  const headers: Record<string, string | undefined>[] = [];
+  const row = (id: string, updated: string) => ({ id, updated_at: updated, unread: true, reason: 'mention', repository: { full_name: 'RayforceDB/teneral' }, subject: { title: 'A discussion', type: 'Issue', url: 'https://api.github.com/repos/RayforceDB/teneral/issues/4' } });
+  let rows = [row('n1', '2026-01-01T00:00:00Z')];
+  const send = (async (url: string | URL | Request, init?: RequestInit) => {
+    const h = new Headers(init?.headers); headers.push({ origin: new URL(String(url)).origin, auth: h.get('authorization') ?? undefined });
+    return new Response(JSON.stringify(rows), { status: 200 });
+  }) as unknown as typeof fetch;
+  const options = { events: () => events, token: () => token, send, checkpoint: (cursor: GithubNotificationCursor) => { checkpoints++; events.push({ type: 'note', kind: GITHUB_NOTIFICATION_CURSOR_KIND, data: cursor, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }); } };
+  const notices: { source: string; text: string }[] = [];
+  const first = githubNotificationPoller(options, s => { notices.push(s); events.push({ type: 'stimulus', source: s.source, text: s.text, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }); });
+  await first.poll();
+  expect(notices).toHaveLength(0); expect(checkpoints).toBe(1);
+  rows = [row('n2', '2026-01-01T00:01:00Z'), ...rows];
+  await first.poll(); expect(notices).toHaveLength(1); expect(notices[0]!.text).toContain('GitHub notification n2'); expect(notices[0]!.text).not.toContain(token);
+  await first.poll(); expect(notices).toHaveLength(1);
+  const restarted = githubNotificationPoller(options, s => notices.push(s));
+  await restarted.poll(); expect(notices).toHaveLength(1);
+  rows = [row('n2', '2026-01-01T00:02:00Z'), ...rows];
+  await restarted.poll(); expect(notices).toHaveLength(2); expect(notices[1]!.text).toContain('2026-01-01T00:02:00Z');
+  expect(headers.every(h => h.origin === 'https://api.github.com' && h.auth === `Bearer ${token}`)).toBe(true);
+});
+
+test('account notification checkpoint stays behind a failed emit and survives restart', async () => {
+  let events: JournalEvent[] = [];
+  let checkpoint = 0;
+  const row = { id: 'n1', updated_at: '2026-01-01T00:00:00Z', unread: false, reason: 'subscribed', repository: { full_name: 'RayforceDB/teneral' }, subject: { title: 'Invitation', type: 'RepositoryInvitation', url: '' } };
+  const send = (async () => new Response(JSON.stringify([{ ...row, id: 'n2' }, row]), { status: 200 })) as unknown as typeof fetch;
+  const checkpointOf = (cursor: GithubNotificationCursor) => { checkpoint++; events = [...events, { type: 'note', kind: GITHUB_NOTIFICATION_CURSOR_KIND, data: cursor, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }]; };
+  const delivered = (s: { source: string; text: string }) => { events = [...events, { type: 'stimulus', source: s.source, text: s.text, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }]; };
+  const first = githubNotificationPoller({ events: () => events, token: () => 'never-log-this', send, checkpoint: checkpointOf }, delivered);
+  await first.poll(); expect(checkpoint).toBe(1); expect(events.filter(e => e.type === 'stimulus')).toHaveLength(0);
+  // Start after the baseline with a later event, so this does not repeat initial history.
+  const later = [{ ...row, id: 'n3', updated_at: '2026-01-01T00:01:00Z' }, ...[{ ...row, id: 'n2' }, row]];
+  const laterSend = (async () => new Response(JSON.stringify(later), { status: 200 })) as unknown as typeof fetch;
+  const failed = githubNotificationPoller({ events: () => events, token: () => 'never-log-this', send: laterSend, checkpoint: () => { throw new Error('checkpoint should not be called'); } }, s => { delivered(s); throw new Error('journal emit failed'); });
+  await failed.poll(); expect(checkpoint).toBe(1); expect(events.filter(e => e.type === 'stimulus')).toHaveLength(1);
+  const recovered = githubNotificationPoller({ events: () => events, token: () => 'never-log-this', send: laterSend, checkpoint: checkpointOf }, () => {});
+  await recovered.poll(); expect(checkpoint).toBe(2);
+  expect(events.filter(e => e.type === 'stimulus')).toHaveLength(1);
 });
