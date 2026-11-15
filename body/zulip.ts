@@ -34,13 +34,25 @@ function imagePaths(content: string): string[] {
   return [...content.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)]
     .map(m => m[2]!.replaceAll('&amp;', '&'))
     .concat([...content.matchAll(/<a\b[^>]*\bhref=(["'])([^"']+)\1/gi)].map(m => m[2]!.replaceAll('&amp;', '&')))
-    .filter(path => path.startsWith('/user_uploads/') && !path.startsWith('//'))
+    .filter(path => path.startsWith('/user_uploads/') && !path.startsWith('/user_uploads/thumbnail/') && !path.startsWith('//'))
     .slice(0, MAX_ATTACHMENTS);
+}
+async function renderedMessage(c: Credentials, id: number, content: string, send: typeof fetch): Promise<string> {
+  // Zulip omits attachment HTML when apply_markdown=false. Render only this verified owner's
+  // current message by its API id, never a sender- or content-supplied identifier.
+  if (!/\/user_uploads\//.test(content)) return '';
+  const rendered = await send(new URL(`/api/v1/messages/${id}`, c.site), {
+    headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
+    redirect: 'error', signal: AbortSignal.timeout(15_000),
+  });
+  if (!rendered.ok) return '';
+  const page = await rendered.json() as any;
+  return page.message && typeof page.message.content === 'string' ? page.message.content.slice(0, 100_000) : '';
 }
 async function attachments(c: Credentials, content: string, keep: Options['keepImage'], send: typeof fetch): Promise<string[]> {
   if (!keep) return [];
   const result: string[] = [];
-  for (const path of imagePaths(content)) {
+  for (const path of [...new Set(imagePaths(content))]) {
     const response = await send(new URL(path, c.site), {
       headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
       redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -135,7 +147,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         const verifiedOwner = o.ownerId !== undefined && m.sender_id === o.ownerId;
         // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
         // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
-        const images = verifiedOwner && o.keepImage ? await attachments(c, text(m.content, 100_000), o.keepImage, o.send ?? fetch) : [];
+        const images = verifiedOwner && o.keepImage ? await attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch) : [];
         emit({
           // Authority comes from this authenticated id comparison, not from message content.
           source: verifiedOwner ? OWNER_SOURCE : SOURCE,
