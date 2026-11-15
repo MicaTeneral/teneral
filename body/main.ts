@@ -25,6 +25,7 @@ import { sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
 import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
+import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 
 function env(name: string): string {
@@ -201,7 +202,7 @@ const sensors: Sensor[] = [
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
   }),
-  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: zulipOwnerId, keepImage: keepZulipImage }),
+  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
   // Reactions require an event queue; the existing message poll has no such events.
   // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
   emit => {
