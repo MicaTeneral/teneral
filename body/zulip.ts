@@ -197,7 +197,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       if (!cursor) {
         const registered = await request(c, '/api/v1/register', { method: 'POST', body: new URLSearchParams({
           event_types: JSON.stringify(['reaction']), fetch_event_types: JSON.stringify(['reaction']),
-          client_capabilities: JSON.stringify({ notification_setting_null: true }),
+          client_capabilities: JSON.stringify({ notification_settings_null: true }),
         }) });
         if (typeof registered.queue_id !== 'string' || !Number.isSafeInteger(registered.last_event_id) || registered.last_event_id < -1) throw new Error('Invalid Zulip queue');
         // The initial fetch is a baseline. If an older queue expired, never carry its event cursor over.

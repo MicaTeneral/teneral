@@ -186,6 +186,9 @@ test('Zulip reaction queue baselines history, emits add/remove, and checkpoints 
   expect(notices).toHaveLength(0);
   expect(registrations[0]).toContain('event_types');
   expect(registrations[0]).toContain('reaction');
+  const registration = new URLSearchParams(registrations[0]);
+  expect(JSON.parse(registration.get('client_capabilities')!)).toEqual({ notification_settings_null: true });
+  expect(JSON.parse(registration.get('event_types')!)).toEqual(['reaction']);
   expect(checkpoints).toEqual([{queueId:'q1',eventId:11,site:'https://example.test',email:'mica@test'}]);
   await p.poll();
   expect(notices).toHaveLength(2);
