@@ -428,6 +428,8 @@ test('an owner\'s message that ends with image markers becomes text without them
   expect(sight.asked).toEqual([`memory/images/${fileOf(1)}`, `memory/images/${fileOf(2, 'jpg')}`]);
   // A message that is only an image has no text at all.
   expect(buildMessages([said(marker(1))], 'S', undefined, fakeSight())[1]).toEqual({ role: 'user', content: null, images: [expect.anything()] });
+  // The Zulip sensor admits only uploads fetched under the API-verified owner identity.
+  expect(buildMessages([said(`Zulip private 12\nAPI-verified owner message.\n{}\n${marker(3)}`, 'owner:zulip')], 'S', undefined, fakeSight())[1]!.images).toHaveLength(1);
 });
 
 test('a marker from anyone but the owner is text, and no file is asked for', () => {

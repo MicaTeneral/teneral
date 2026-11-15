@@ -249,3 +249,35 @@ test('Zulip reaction queue retries a partial batch and does not checkpoint befor
   expect(notices).toBe(2); // first event re-read, suppressed from journal, second delivered
   expect(checkpoints.at(-1).eventId).toBe(2);
 });
+
+test('only verified owner uploads enter the image store; HTML and bytes stay bounded', async () => {
+  const notices: Stimulus[] = [], kept: Buffer[] = [], fetched: string[] = [];
+  const png = Buffer.from('89504e470d0a1a0a000000', 'hex');
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({user_id:99}));
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({messages: [
+      {id:40,sender_id:100,type:'private',content:'<p>look <a href="/user_uploads/1/a/pic.png">pic</a></p>'},
+      {id:41,sender_id:101,type:'private',content:'<img src="/user_uploads/1/a/outsider.png">'},
+    ]}));
+    fetched.push(url.pathname); return new Response(png);
+  }) as unknown as typeof fetch;
+  await zulipPoller({credentials,events:()=>[],send,ownerId:100,keepImage:async b=>{kept.push(b);return '[image: memory/images/'+('a'.repeat(64))+'.png]'}},s=>notices.push(s)).poll();
+  expect(fetched).toEqual(['/user_uploads/1/a/pic.png']);
+  expect(kept).toEqual([png]);
+  expect(notices[0].source).toBe('owner:zulip');
+  expect(notices[0].text).toEndWith('[image: memory/images/'+('a'.repeat(64))+'.png]');
+  expect(notices[1].text).not.toContain('[image:');
+});
+
+test('owner attachment failures do not lose the message or download untrusted files', async () => {
+  const notices: Stimulus[] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({user_id:99}));
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({messages:[{id:42,sender_id:100,type:'private',content:'<a href="/user_uploads/1/a/big.png">big</a>'}]}));
+    return new Response(new Uint8Array(10*1024*1024+1));
+  }) as unknown as typeof fetch;
+  let kept = 0;
+  await zulipPoller({credentials,events:()=>[],send,ownerId:100,keepImage:()=>{kept++;return ''}},s=>notices.push(s)).poll();
+  expect(kept).toBe(0); expect(notices).toHaveLength(1);
+  expect(notices[0].text).toContain('[Zulip image exceeds 10 MB]');
+});

@@ -4,12 +4,13 @@ import { research } from './research';
 import { github, GITHUB_CURSOR_KIND, type GithubCursor } from './github';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { appendEvent, readEvents } from '../brain/journal';
 import { contextWindow } from '../brain/providers';
 import { needsTurn } from '../brain/memory';
-import { DEFAULT_IMAGES, imageRoute, imageStore, rootOf } from './images';
+import { DEFAULT_IMAGES, imageRoute, imageStore, keepImage, rootOf } from './images';
 import { runTurn } from '../brain/loop';
 import { ProviderError, connect, type Provider } from '../brain/provider';
 import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdict, type FailureKind } from '../brain/retry';
@@ -66,6 +67,14 @@ const budgetChoice = decideBudget(readEvents(journal), contextWindow(process.env
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
 const sight = { load: imageStore(rootOf(journal)), max: /^\d+$/.test(imagesSet) ? Number(imagesSet) : DEFAULT_IMAGES };
+// Authenticated Zulip owner uploads enter the same content-addressed store as terminal images.
+// A temporary file is required only because keepImage performs the byte-level image validation.
+async function keepZulipImage(bytes: Buffer): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'mica-zulip-image-'));
+  const file = join(dir, 'upload');
+  try { writeFileSync(file, bytes); return keepImage(rootOf(journal), file).marker; }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+}
 const prompt = readFileSync(join(import.meta.dir, '..', 'brain', 'prompt.md'), 'utf8');
 const letter = readFileSync(join(import.meta.dir, '..', 'BIRTH.md'), 'utf8');
 const soulDir = env('TENERAL_SOUL');
@@ -192,7 +201,7 @@ const sensors: Sensor[] = [
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
   }),
-  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: zulipOwnerId }),
+  zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: zulipOwnerId, keepImage: keepZulipImage }),
   // Reactions require an event queue; the existing message poll has no such events.
   // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
   emit => {

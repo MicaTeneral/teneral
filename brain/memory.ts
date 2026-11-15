@@ -248,7 +248,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
     const e = events[i]!;
     if (e.type === 'stimulus') {
       const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
-      if (sight && e.source === 'terminal') takeMarkers(message, slots);
+      if (sight && (e.source === 'terminal' || e.source === 'owner:zulip')) takeMarkers(message, slots);
       out.push(message);
       origin.push(i);
     } else if (e.type === 'assistant') {
