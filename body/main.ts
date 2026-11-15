@@ -92,7 +92,7 @@ const githubRepository = process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'Rayfo
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past };
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);

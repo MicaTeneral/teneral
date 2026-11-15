@@ -1,9 +1,9 @@
 import { work } from './work';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { readPeers } from './peers';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
 import { appendEvent, readEvents } from '../brain/journal';
@@ -29,6 +29,8 @@ export interface ToolContext {
   inbox: string;
   /** JSON file mapping a peer's name to its inbox directory. Kept by the owner. */
   peers: string;
+  /** The only directory outside the candidate that read/write/edit may reach. */
+  soul: string;
   /** The agent's past, for the tools that ask it. body/main.ts opens it over the database when there is one; a context without it reads the journal through. */
   past?: Past;
 }
@@ -61,11 +63,35 @@ function params(properties: Record<string, string>): Record<string, unknown> {
   };
 }
 
+/** Resolve existing components without changing the filesystem; a missing suffix may still be created. */
+function realpathMissing(path: string): string {
+  const missing: string[] = [];
+  let found = path;
+  while (!existsSync(found)) {
+    const parent = dirname(found);
+    if (parent === found) throw new Error('path has no existing parent');
+    missing.unshift(found.slice(parent.length + 1));
+    found = parent;
+  }
+  return join(realpathSync(found), ...missing);
+}
+
+/** A tool path must resolve inside the candidate or the soul, following links as the filesystem will. */
+function toolPath(ctx: ToolContext, given: string): string {
+  const candidate = resolve(ctx.workspace, given);
+  const real = realpathMissing(candidate);
+  const inside = (path: string, root: string): boolean => path === root || path.startsWith(root + '/');
+  if (!inside(real, realpathSync(ctx.workspace)) && !inside(real, realpathSync(ctx.soul))) {
+    throw new Error('path is outside the workspace and soul');
+  }
+  return real;
+}
+
 const read: Tool = {
   idempotent: true,
-  spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace.', parameters: params({ path: 'File path' }) },
+  spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace; absolute paths are allowed only inside your soul directory.', parameters: params({ path: 'File path' }) },
   async run(args, ctx) {
-    return cap(readFileSync(resolve(ctx.workspace, str(args, 'path')), 'utf8'));
+    return cap(readFileSync(toolPath(ctx, str(args, 'path')), 'utf8'));
   },
 };
 
@@ -76,7 +102,7 @@ const write: Tool = {
     parameters: params({ path: 'File path', content: 'Full file content' }),
   },
   async run(args, ctx) {
-    const path = resolve(ctx.workspace, str(args, 'path'));
+    const path = toolPath(ctx, str(args, 'path'));
     const content = str(args, 'content');
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
@@ -91,7 +117,7 @@ const edit: Tool = {
     parameters: params({ path: 'File path', old: 'Exact text to replace', new: 'Replacement text' }),
   },
   async run(args, ctx) {
-    const path = resolve(ctx.workspace, str(args, 'path'));
+    const path = toolPath(ctx, str(args, 'path'));
     const old = str(args, 'old');
     const replacement = str(args, 'new');
     if (old === '') throw new Error('`old` is empty; give the exact text to replace');

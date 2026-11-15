@@ -23,8 +23,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Robustness
 
-17. **File tools reach outside the workspace.** `read`, `write` and `edit` take any path, absolute or with `..`. The soul directory has to stay reachable; nothing else outside the workspace needs to be. Better when: a path outside the workspace and the soul directory is refused, with a test.
-
 ## Tools
 
 23. **A browser.** Once the owner has put a browser in the image (see below), drive it over its DevTools WebSocket protocol, with no dependency: open a page, read its text, click, fill a field. What a page says is untrusted exactly as an inbox message is: it must be marked as such in what the model sees, and it must never be the reason for a mutation. A page watcher as a sensor comes after. Better when: a test opens a local page, reads it, clicks and fills a field through the tool, and the text that reaches the model carries the mark.

@@ -173,7 +173,7 @@ test('what the agent took on itself in a later turn is not part of what it knew 
 });
 
 const tool = (name: string) => TOOLS.find((t) => t.spec.name === name)!;
-const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json' });
+const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json', soul: '/tmp' });
 
 test('intend takes something on, done closes it by its mark', async () => {
   const ctx = context(journalOf([said('remind me')]));

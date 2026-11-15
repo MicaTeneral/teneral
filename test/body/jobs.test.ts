@@ -14,7 +14,7 @@ function tool(name: string) {
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'teneral-jobs-'));
-  return { dir, ctx: { workspace: dir, journal: join(dir, 'journal.jsonl'), gen: 'g1', mutationCommit: null, id: 'mica', inbox: join(dir, 'inbox'), peers: join(dir, 'peers.json') } };
+  return { dir, ctx: { workspace: dir, journal: join(dir, 'journal.jsonl'), gen: 'g1', mutationCommit: null, id: 'mica', inbox: join(dir, 'inbox'), peers: join(dir, 'peers.json'), soul: dir } };
 }
 
 const alive = (pid: number): boolean => {

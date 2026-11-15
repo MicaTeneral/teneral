@@ -11,7 +11,7 @@ import { appendEvent, readEvents } from '../../brain/journal';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp' };
   const seen: ChatMessage[][] = [];
   const provider: Provider = async (messages) => {
     seen.push(messages);
@@ -387,7 +387,7 @@ function withImage(provider: Provider) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), PNG_BYTES);
   appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: `what is this?\n[image: ${path}]` });
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp' };
   return { journal, path, deps: { journal, gen: 'g1', provider, tools: [echo], system: () => 'SYS', ctx, sight: { load: imageStore(root) } } };
 }
 

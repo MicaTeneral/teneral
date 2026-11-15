@@ -277,7 +277,7 @@ test('the timeline lists episodes in order with what is remembered of each, and 
 });
 
 const tool = (name: string) => TOOLS.find((t) => t.spec.name === name)!;
-const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json' });
+const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json', soul: '/tmp' });
 
 test('the recall tool gives what it found as events with their ids, and says so when it found nothing', async () => {
   const { mail, memory, journal } = life();
