@@ -2,12 +2,13 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runTurn } from '../../brain/loop';
+import { runTurn, journalSuffixReads } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
 import { decideBudget } from '../../body/adaptive-budget';
 import { appendEvent, readEvents } from '../../brain/journal';
+import { buildMessages } from '../../brain/memory';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');
@@ -98,6 +99,31 @@ test('a second cut-off remains marked and does not loop forever', async () => {
   expect(await runTurn(s.deps)).toBe('done');
   expect(s.seen).toHaveLength(2);
   expect(readEvents(s.journal).at(-1)).toMatchObject({ text: 'still half', toolCalls: [] });
+});
+
+test('later rounds parse only the journal suffix, with requests identical to a full reread', { timeout: 20_000 }, async () => {
+  const s = setup([
+    { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: { round: 1 } }] },
+    { text: '', toolCalls: [{ id: 'c2', name: 'echo', args: { round: 2 } }] },
+    { text: 'finished', toolCalls: [] },
+  ], [echo]);
+  for (let i = 0; i < 1000; i++) {
+    appendEvent(s.journal, 'g1', { type: 'note', kind: 'fixture.large.v1', data: { i, text: 'unchanged-prefix'.repeat(100) } });
+  }
+  journalSuffixReads.length = 0;
+  expect(await runTurn(s.deps)).toBe('done');
+  const reads = journalSuffixReads.filter(read => read.path === s.journal);
+  // Three requests and one final late-stimulus check. None reparses the unchanged prefix.
+  expect(reads).toHaveLength(4);
+  expect(reads.every(read => read.bytes < 2000)).toBe(true);
+  expect(reads[0]!.bytes).toBe(0);
+  const events = readEvents(s.journal);
+  const requests: ChatMessage[][] = [];
+  for (let end = 1002; end <= events.length - 1; end += 4) {
+    requests.push(buildMessages(events.slice(0, end), 'SYS', 200000));
+  }
+  expect(requests).toHaveLength(3);
+  expect(s.seen).toEqual(requests);
 });
 
 test('a tool that throws becomes a failed result the model can read', async () => {

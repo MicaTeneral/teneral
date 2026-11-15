@@ -1,6 +1,6 @@
 import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
-import { appendEvent, readEvents, type JournalEvent } from './journal';
+import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
@@ -45,6 +45,28 @@ const CUT_BY_OWNER =
 const NOT_RUN_FOR_OWNER = '[not started] Your owner interrupted this turn before this tool ran.';
 const LEFT = Symbol('left behind');
 
+/** For tests: count only incremental suffix reads, not the one full read at turn start. */
+export const journalSuffixReads: { path: string; bytes: number }[] = [];
+
+/** One turn's journal view. Only the small suffix added during the turn is reparsed. */
+function turnJournal(journal: string): { read: () => JournalEvent[]; refresh: () => void } {
+  let events = readEvents(journal);
+  let offset = journalSize(journal);
+  return {
+    read: () => events,
+    refresh: () => {
+      const size = journalSize(journal);
+      // A journal only grows. Replacing or truncating it falls back to the full reader.
+      if (size < offset) events = readEvents(journal);
+      else {
+        journalSuffixReads.push({ path: journal, bytes: size - offset });
+        events = events.concat(readEventsFrom(journal, offset));
+      }
+      offset = size;
+    },
+  };
+}
+
 /** Resolves `ms` after `signal` aborts, for a tool that does not stop when asked. `stop` ends the waiting. */
 function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEFT>; stop: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -58,8 +80,7 @@ function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEF
 }
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */
-function arrivedSince(journal: string, shown: number): boolean {
-  const events = readEvents(journal);
+function arrivedSince(events: JournalEvent[], shown: number): boolean {
   const accepted = acceptanceNotes(events);
   return events.slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id));
 }
@@ -88,11 +109,13 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   // A length-limited answer gets one continuation per turn. A second cut-off stays visibly marked.
   let continued = false;
   const route = d.imageRoute;
-  const learned = route ? refusedImages(readEvents(d.journal), route) : new Set<string>();
+  const journal = turnJournal(d.journal);
+  const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
-    // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
-    const events = readEvents(d.journal);
+    // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
+    journal.refresh();
+    const events = journal.read();
     shown = events.length;
     // Durable request boundary: a late stimulus before a finished reply must remain owed
     // even if this process dies before the extra round. Older readers ignore this note.
@@ -151,7 +174,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     }
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
-      if (arrivedSince(d.journal, shown)) continue;
+      journal.refresh();
+      if (arrivedSince(journal.read(), shown)) continue;
       // Queued work resumes through its sensor, never by replaying a final reply.
       return 'done';
     }
@@ -212,7 +236,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   }
   // The note below reads as a finished reply. Written over something the model never saw, it would
   // mark that as answered; without it the turn stays owed and the caller starts another.
-  if (arrivedSince(d.journal, shown)) return 'done';
+  journal.refresh();
+  if (arrivedSince(journal.read(), shown)) return 'done';
   appendEvent(d.journal, d.gen, { type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] });
   return 'done';
 }
