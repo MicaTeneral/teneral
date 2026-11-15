@@ -95,6 +95,17 @@ test('a stream with text only gives the text', () => {
   expect(readResponsesStream(`${stream.replaceAll('\n', '\r\n')}data: [DONE]\r\n\r\n`)).toEqual({ text: 'Hello', toolCalls: [] });
 });
 
+test('output text deltas are delivered in order, while the final reply remains whole', () => {
+  const deltas: string[] = [];
+  const reply = readResponsesStream(sse(CREATED,
+    { type: 'response.output_text.delta', delta: 'Hel' },
+    { type: 'response.output_text.delta', delta: 'lo' },
+    completed([message('Hello')]),
+  ), delta => deltas.push(delta));
+  expect(deltas).toEqual(['Hel', 'lo']);
+  expect(reply.text).toBe('Hello');
+});
+
 test('a stream with one call gives the call under its call_id, with parsed arguments, and reasoning items are left out', () => {
   const output = [REASONING, call(1, 'read', '{"path":"a.ts"}')];
   const reply = readResponsesStream(sse(CREATED, ...output.map((item) => ({ type: 'response.output_item.done', item })), completed(output)));

@@ -207,6 +207,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => console.log(`\n${t}\n`),
+      onDelta: (t) => console.log(t),
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
     });

@@ -16,6 +16,8 @@ export interface TurnDeps {
   system: () => string;
   ctx: ToolContext;
   onText?: (text: string) => void;
+  /** Incremental provider text; final `onText` is suppressed only for that reply. */
+  onDelta?: (delta: string) => void;
   /** Called with a tool's name just before it runs. */
   onTool?: (name: string) => void;
   maxRounds?: number;
@@ -92,11 +94,12 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     const system = d.system();
     let halved = false;
     let reply: Reply;
+    let streamed = false;
     for (;;) {
       const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars });
       try {
         let timing: { durationMs: number; firstByteMs: number | null } | undefined;
-        reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; } });
+        reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; }, onTextDelta: delta => { if (delta !== '') { d.onDelta?.(delta); streamed = true; } } });
         // What the provider charged, for the request-size chooser (body/adaptive-budget.ts).
         // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
         if (d.budget !== undefined) {
@@ -132,7 +135,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
       type: 'assistant', text: reply.text, toolCalls: reply.toolCalls,
       ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
     });
-    if (reply.text !== '') d.onText?.(reply.text);
+    if (reply.text !== '' && !streamed) d.onText?.(reply.text);
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
       if (arrivedSince(d.journal, shown)) continue;

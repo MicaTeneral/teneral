@@ -118,6 +118,8 @@ export interface ProviderCallOptions {
   onTiming?: (timing: RequestTiming) => void;
   /** Internal Responses-stream hook installed by timedProvider; called for the first body chunk. */
   onFirstByte?: () => void;
+  /** A completed output-text fragment from a Responses stream. */
+  onTextDelta?: (delta: string) => void;
 }
 /** Time a provider call across protocol retries. Telemetry failures never replace the model's reply or error. */
 function timedProvider(provider: Provider): Provider {
@@ -362,7 +364,7 @@ function hint(body: string): string {
  * an error event, or a stream that just ends is a ProviderError, with the status the error's code
  * stands for, so the retry rules treat it as they would the same answer without a stream.
  */
-export function readResponsesStream(stream: string): Reply {
+export function readResponsesStream(stream: string, onTextDelta?: (delta: string) => void): Reply {
   const done: Item[] = [];
   type End = { type: string; response?: Item; code?: unknown; message?: unknown };
   let last: End | null = null;
@@ -375,6 +377,7 @@ export function readResponsesStream(stream: string): Reply {
     } catch {
       continue; // half an event, where the stream broke off
     }
+    if (event.type === 'response.output_text.delta' && typeof (event as { delta?: unknown }).delta === 'string') onTextDelta?.((event as { delta: string }).delta);
     if (event.type === 'response.output_item.done' && typeof event.item === 'object' && event.item !== null) done.push(event.item as Item);
     if (event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete' || event.type === 'error') {
       last = event as End;
@@ -482,7 +485,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       if (next !== bearer) ({ res, text } = await post(bearer = next));
     }
     if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text, retryAfterMs(res));
-    return readResponsesStream(text);
+    return readResponsesStream(text, options?.onTextDelta);
   };
   return async (messages, tools, options) => {
     try {

@@ -28,7 +28,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Robustness
 
-16. **Streaming.** Replies arrive all at once. Better when: the first words of a long reply are on the screen while the rest is still being written.
 17. **File tools reach outside the workspace.** `read`, `write` and `edit` take any path, absolute or with `..`. The soul directory has to stay reachable; nothing else outside the workspace needs to be. Better when: a path outside the workspace and the soul directory is refused, with a test.
 
 21. **Background jobs outlive the generation that started them.** Something started with `bash` and left running (`cmd >/dev/null 2>&1 &`) survives a mutation and a restart, and can keep writing into the workspace: into files a later mutation commits, or under the gates' feet. Nothing lists such jobs or stops them. Better when: jobs started in the background are recorded, shown after a restart, and can be stopped by name.

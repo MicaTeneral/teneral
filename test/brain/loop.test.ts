@@ -36,6 +36,22 @@ test('a plain reply is journaled and ends the turn', async () => {
   expect(shown).toEqual(['hello']);
 });
 
+test('streamed reply text is shown once, while a tool-only reply stays unchanged', async () => {
+  for (const toolCalls of [[], [{ id: 'c1', name: 'echo', args: {} }]]) {
+    const shown: string[] = [];
+    const provider: Provider = async (_messages, _tools, options) => {
+      if (toolCalls.length > 0) return { text: '', toolCalls };
+      options?.onTextDelta?.('Hel');
+      options?.onTextDelta?.('lo');
+      return { text: 'Hello', toolCalls: [] };
+    };
+    const s = setup([], [echo]);
+    expect(await runTurn({ ...s.deps, provider, onDelta: text => shown.push(text), onText: text => shown.push(text) })).toBe('done');
+    expect(shown).toEqual(toolCalls.length > 0 ? [] : ['Hel', 'lo']);
+    expect(readEvents(s.journal).find(e => e.type === 'assistant')).toMatchObject({ text: toolCalls.length > 0 ? '' : 'Hello' });
+  }
+});
+
 test('the intent is journaled before the tool runs, the result after', async () => {
   let typesWhenRun: string[] = [];
   const spy: Tool = {
