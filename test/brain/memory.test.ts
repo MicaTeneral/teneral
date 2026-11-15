@@ -125,6 +125,18 @@ test('needsTurn', () => {
 });
 
 const intent = (callId: string) => ev({ type: 'tool.intent', callId, name: 'bash', args: {} });
+
+test('request boundaries preserve late work across a crash, but never repeat a reply that saw it', () => {
+  const first = said('first');
+  const boundary = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: first.id } });
+  const late = said('late');
+  const reply = replied('before the crash');
+  expect(needsTurn([first, boundary, late, reply])).toBe(true);
+  const secondBoundary = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: reply.id } });
+  expect(needsTurn([first, boundary, late, reply, secondBoundary, replied('answered late')])).toBe(false);
+  // A historical journal has no proof of a late event, so its completed replies stay complete.
+  expect(needsTurn([said('old'), replied('done'), ev({ type: 'note', kind: 'other', data: {} })])).toBe(false);
+});
 const result = (callId: string, output: string) => ev({ type: 'tool.result', callId, ok: true, output });
 const toolContents = (events: JournalEvent[]) => buildMessages(events, 'S').filter((m) => m.role === 'tool').map((m) => m.content);
 

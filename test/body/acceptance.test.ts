@@ -18,6 +18,8 @@ test('matching consent owes one turn, is visible, and does not loop after answer
  expect(needsTurn([...events,done()])).toBe(false);
  expect(needsTurn([...events,done(),accept()])).toBe(false);
  expect(acceptanceNotes(JSON.parse(JSON.stringify(events))).size).toBe(1);
+ const boundary=ev({type:'note',kind:'brain.shown.v1',data:{through:events[2].id}});
+ expect(needsTurn([...events,boundary,done()])).toBe(false);
 });
 test('unrelated, canceled, superseded and ordinary consent remains silent',()=>{
  expect(needsTurn([accept()])).toBe(false);

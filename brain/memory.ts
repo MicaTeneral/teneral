@@ -6,6 +6,7 @@ import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
 import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
+import { replyIsCurrent } from './shown';
 
 // How the stem's events read is in brain/stemnote.ts; it is given out from here as well, where it always was.
 export { stemNote };
@@ -325,7 +326,7 @@ export function needsTurn(journaled: JournalEvent[]): boolean {
   const events = standing(journaled);
   const accepted = acceptanceNotes(events);
   for (const e of events) {
-    if (e.type === 'assistant') afterReply = reply(e).calls.length > 0;
+    if (e.type === 'assistant') afterReply = reply(e).calls.length > 0 || !replyIsCurrent(events, e);
     // The owner ended that turn. What was unanswered stays so until something else arrives.
     else if (e.type === 'turn.interrupted') afterReply = false;
     else if (e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id)) afterReply = true;
