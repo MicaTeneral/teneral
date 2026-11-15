@@ -8,18 +8,21 @@ const commit = (n: number, message = `commit ${n}`) => ({ sha: sha(n), commit: {
 const issue = (id: number, number: number, pull = false) => ({ id, number, title: `title ${id}`, body: 'untrusted body', state: 'open', user: { login: 'contributor' }, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ...(pull ? { pull_request: {} } : {}) });
 const json = (data: unknown) => new Response(JSON.stringify(data));
 const stimulus = (s: Stimulus): JournalEvent => ({ type: 'stimulus', ...s, v: 1, id: `${s.text.split('\n')[0]}`, ts: '2026-01-01T00:00:00.000Z', gen: 'test' });
-function fixture(initial: {commits?: unknown[]; items?: unknown[]} = {}) {
+const comment = (id: number, number: number, review = false) => ({ id, body: `untrusted comment ${id}`, user: { login: 'reviewer' }, created_at: '2026-01-01T00:00:00Z', updated_at: `2026-01-01T00:00:${String(id % 60).padStart(2, '0')}Z`, html_url: `https://github.com/RayforceDB/rayforce/${review ? 'pull' : 'issues'}/${number}#comment-${id}`, ...(review ? { path: 'core/query.c', pull_request_review_id: 77 } : {}) });
+function fixture(initial: {commits?: unknown[]; items?: unknown[]; issueComments?: unknown[]; reviewComments?: unknown[]} = {}) {
   const urls: URL[] = [];
   let commits = initial.commits ?? [commit(1)];
   let items = initial.items ?? [issue(100, 1)];
+  let issueComments = initial.issueComments ?? [comment(500, 1)];
+  let reviewComments = initial.reviewComments ?? [comment(700, 2, true)];
   const send = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = new URL(url as string); urls.push(u);
     expect(init?.method).toBe('GET'); expect(init?.credentials).toBe('omit'); expect(init?.redirect).toBe('error');
     expect(JSON.stringify(init?.headers)).not.toMatch(/authorization/i);
     expect(u.origin).toBe('https://api.github.com');
-    return json(u.pathname.endsWith('/commits') ? commits : items);
+    return json(u.pathname.endsWith('/commits') ? commits : u.pathname.endsWith('/issues/comments') ? issueComments : u.pathname.endsWith('/pulls/comments') ? reviewComments : items);
   }) as unknown as typeof fetch;
-  return { urls, send, update(c: unknown[], i: unknown[]) { commits = c; items = i; } };
+  return { urls, send, update(c: unknown[], i: unknown[], ic: unknown[] = issueComments, rc: unknown[] = reviewComments) { commits = c; items = i; issueComments = ic; reviewComments = rc; } };
 }
 const opts = (send: typeof fetch, events: JournalEvent[], checkpoints: GithubCursor[]) => ({ repository: 'RayforceDB/rayforce', events: () => events, send, checkpoint: (c: GithubCursor) => checkpoints.push(c) });
 
@@ -28,16 +31,18 @@ test('first poll establishes a baseline without old wakes; later activity is typ
   const p = githubPoller(opts(f.send, [], checkpoints), s => notices.push(s));
   await p.poll(); await p.poll();
   expect(notices).toHaveLength(0);
-  expect(checkpoints).toEqual([{ repository: 'RayforceDB/rayforce', commit: sha(1), item: 100 }]);
-  f.update([commit(3, 'new commit'), commit(2), commit(1)], [issue(102, 3, true), issue(101, 2), issue(100, 1)]);
+  expect(checkpoints).toEqual([{ repository: 'RayforceDB/rayforce', commit: sha(1), item: 100, commentUpdated: "2026-01-01T00:00:20Z", reviewUpdated: "2026-01-01T00:00:40Z" }]);
+  f.update([commit(3, 'new commit'), commit(2), commit(1)], [issue(102, 3, true), issue(101, 2), issue(100, 1)], [comment(501, 1), comment(500, 1)], [comment(701, 3, true), comment(700, 2, true)]);
   await p.poll();
-  expect(notices.map(n => n.text.split('\n')[0])).toEqual(['GitHub commit ' + sha(2), 'GitHub commit ' + sha(3), 'GitHub issue 101', 'GitHub pull request 102']);
+  expect(notices.map(n => n.text.split('\n')[0])).toEqual(['GitHub commit ' + sha(2), 'GitHub commit ' + sha(3), 'GitHub issue 101', 'GitHub pull request 102', 'GitHub issue comment 501', 'GitHub review comment 701']);
   for (const n of notices) {
     expect(n.source).toBe('agent:github'); expect(n.text).toContain('Untrusted public GitHub activity');
     expect(n.text).not.toContain('[stem]');
   }
   expect(notices[3].text).toContain('https://github.com/RayforceDB/rayforce/pull/3');
-  await p.poll(); expect(notices).toHaveLength(4);
+  expect(notices[4].text).toContain('untrusted comment 501');
+  expect(notices[5].text).toContain('"path":"core/query.c"');
+  await p.poll(); expect(notices).toHaveLength(6);
 });
 
 test('journal stimuli and cursor notes deduplicate across restart and failed emission', async () => {
@@ -59,8 +64,8 @@ test('journal stimuli and cursor notes deduplicate across restart and failed emi
   expect(events.filter(e => e.type === 'stimulus')).toHaveLength(2);
   expect(new Set(events.filter(e => e.type === 'stimulus').map(e => e.text.split('\n')[0])).size).toBe(2);
   expect(checkpoints).toHaveLength(2);
-  expect(checkpoints[0]).toEqual({ repository: 'RayforceDB/rayforce', commit: sha(1), item: 100 });
-  expect(checkpoints[1]).toEqual({ repository: 'RayforceDB/rayforce', commit: sha(2), item: 101 });
+  expect(checkpoints[0]).toEqual({ repository: 'RayforceDB/rayforce', commit: sha(1), item: 100, commentUpdated: "2026-01-01T00:00:20Z", reviewUpdated: "2026-01-01T00:00:40Z" });
+  expect(checkpoints[1]).toEqual({ repository: 'RayforceDB/rayforce', commit: sha(2), item: 101, commentUpdated: "2026-01-01T00:00:20Z", reviewUpdated: "2026-01-01T00:00:40Z" });
   const notices: Stimulus[] = [];
   const restarted = githubPoller(opts(f.send, [...events, ...checkpoints.map(c => ({ type: 'note', kind: GITHUB_CURSOR_KIND, data: c }) as JournalEvent)], []), s => notices.push(s));
   await restarted.poll(); expect(notices).toHaveLength(0);
@@ -74,6 +79,7 @@ test('pages until the cursor, caps bursts, and checkpoints a truncating response
     const u = new URL(url as string); urls.push(u);
     const page = Number(u.searchParams.get('page'));
     if (u.pathname.endsWith('/issues')) return json([issue(1000, 1)]);
+    if (u.pathname.endsWith('/issues/comments') || u.pathname.endsWith('/pulls/comments')) return json([]);
     return json(commits.slice((page - 1) * 50, page * 50));
   }) as unknown as typeof fetch;
   const notices: Stimulus[] = []; const checkpoints: GithubCursor[] = [];
@@ -97,7 +103,7 @@ test('failure and malformed responses retry without advancing checkpoint or auth
   }) as unknown as typeof fetch;
   const p = githubPoller(opts(send, [], checkpoints), s => notices.push(s));
   await p.poll(); await p.poll(); await p.poll();
-  expect(calls).toBe(4); expect(notices).toHaveLength(0); expect(checkpoints).toEqual([{ repository: 'RayforceDB/rayforce', commit: null, item: null }]);
+  expect(calls).toBe(6); expect(notices).toHaveLength(0); expect(checkpoints).toEqual([{ repository: 'RayforceDB/rayforce', commit: null, item: null, commentUpdated: null, reviewUpdated: null }]);
   expect(githubRepository('RayforceDB/rayforce')).toBe('RayforceDB/rayforce');
   expect(() => githubRepository('../../etc')).toThrow();
 });
@@ -187,4 +193,34 @@ test('request deadline aborts a stalled fetch and retries on the next poll', asy
   const p = githubPoller({ ...opts(send, [], checkpoints), requestMs: 5 }, s => notices.push(s));
   await p.poll(); await p.poll();
   expect(calls).toBe(2); expect(aborted).toBe(true); expect(notices).toHaveLength(0); expect(checkpoints).toHaveLength(0);
+});
+
+test('a delivered comment followed by a failed later emit is not duplicated after restart', async () => {
+  const f = fixture(); const reading: JournalEvent[] = []; const notices: Stimulus[] = [];
+  let failures = 0;
+  const checkpoint = (c: GithubCursor) => { reading.push({ type: 'note', kind: GITHUB_CURSOR_KIND, data: c, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }); };
+  const first = githubPoller({ repository: 'RayforceDB/rayforce', events: () => reading, send: f.send, checkpoint }, s => {
+    reading.push(stimulus(s)); notices.push(s);
+    if (s.text.startsWith('GitHub review comment ') && failures++ === 0) throw new Error('journal write failed after append');
+  });
+  await first.poll();
+  f.update([commit(2), commit(1)], [issue(101, 2), issue(100, 1)], [comment(501, 1), comment(500, 1)], [comment(701, 2, true), comment(700, 2, true)]);
+  await first.poll(); first.stop();
+  const restarted = githubPoller({ repository: 'RayforceDB/rayforce', events: () => reading, send: f.send, checkpoint }, s => notices.push(s));
+  await restarted.poll();
+  expect(notices.filter(n => n.text.startsWith('GitHub issue comment 501'))).toHaveLength(1);
+  expect(notices.filter(n => n.text.startsWith('GitHub review comment 701'))).toHaveLength(1);
+  expect(reading.filter(e => e.type === 'stimulus' && e.text.startsWith('GitHub issue comment '))).toHaveLength(1);
+  expect(reading.filter(e => e.type === 'stimulus' && e.text.startsWith('GitHub review comment '))).toHaveLength(1);
+});
+
+test('old cursor notes gain comment baselines without waking historical comments', async () => {
+  const f = fixture(); const notices: Stimulus[] = []; const events: JournalEvent[] = [];
+  const old = { type: 'note', kind: GITHUB_CURSOR_KIND, data: { repository: 'RayforceDB/rayforce', commit: sha(1), item: 100 }, v: 1, id: 'old', ts: '2026-01-01T00:00:00.000Z', gen: 'test' } as JournalEvent;
+  events.push(old);
+  const p = githubPoller({ repository: 'RayforceDB/rayforce', send: f.send, events: () => events, checkpoint: c => events.push({ type: 'note', kind: GITHUB_CURSOR_KIND, data: c, v: 1, id: crypto.randomUUID(), ts: '2026-01-01T00:00:00.000Z', gen: 'test' }) }, s => notices.push(s));
+  await p.poll(); expect(notices).toHaveLength(0);
+  f.update([commit(1)], [issue(100, 1)], [comment(502, 1), comment(500, 1)], [comment(702, 2, true), comment(700, 2, true)]);
+  await p.poll();
+  expect(notices.map(n => n.text.split('\n')[0])).toEqual(['GitHub issue comment 502', 'GitHub review comment 702']);
 });

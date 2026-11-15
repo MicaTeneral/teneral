@@ -88,7 +88,8 @@ const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
 const zulipOwnerNumber = /^\d+$/.test(zulipOwnerSetting) ? Number(zulipOwnerSetting) : 0;
 const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber > 0 ? zulipOwnerNumber : undefined;
 // Public read-only repository activity. Empty disables it; no GitHub credential is read or sent.
-const githubRepository = process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce';
+// A comma-separated setting preserves the old single-repository configuration.
+const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce,RayforceDB/teneral').split(',').map(s => s.trim()).filter(Boolean);
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
@@ -191,18 +192,18 @@ const sensors: Sensor[] = [
     },
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
-  ...(githubRepository ? [github({
-    repository: githubRepository,
+  ...githubRepositories.map(repository => github({
+    repository,
     events: () => readEvents(journal),
     checkpoint: (cursor: GithubCursor) => {
       // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
-      // holds this checkpoint back. One note replaces both feed cursors atomically; a crash before
-      // it repeats the stimuli, whose ids suppress duplicates after restart.
-      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND);
+      // holds this checkpoint back. One note replaces all feed cursors for a repository atomically;
+      // a crash before it repeats stimuli, whose ids suppress duplicates after restart.
+      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND && typeof e.data === 'object' && e.data !== null && !Array.isArray(e.data) && 'repository' in e.data && e.data.repository === repository);
       if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
       appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
     },
-  })] : []),
+  })),
   resumeWork(journal, gen, () => {
     if (working || quitting) return true;
     const events = readEvents(journal);

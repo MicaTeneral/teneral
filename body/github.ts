@@ -15,6 +15,12 @@ export interface GithubCursor {
   commit: string | null;
   /** Github's stable issue/PR id at the last completed poll. */
   item: number | null;
+  /** Newest update time already collected; absent in older cursor notes. GitHub's comments
+   * endpoint is update-ordered. The same timestamp can occur on a later page, so the watermark
+   * is a page-stop boundary only; the stable id and updated_at pair suppress delivered comments.
+   */
+  commentUpdated?: string | null;
+  reviewUpdated?: string | null;
 }
 interface Options {
   repository: string;
@@ -30,6 +36,7 @@ interface Options {
 type Row = Record<string, unknown>;
 type Item = { id: number; number: number; pull: boolean; title: string; body: string; state: string; author: string; created: string; updated: string };
 type Commit = { sha: string; message: string; author: string };
+type Comment = { id: number; body: string; author: string; created: string; updated: string; url: string; number: number; path?: string; review?: number };
 
 export function githubRepository(value: string): string {
   const repository = value.trim();
@@ -52,11 +59,20 @@ function sha(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-f0-9]{40}$/.test(value)) throw new Error('Invalid GitHub commit');
   return value;
 }
+function timestamp(value: unknown): string {
+  const result = text(value, 40);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(result) || !Number.isFinite(Date.parse(result))) throw new Error('Invalid GitHub timestamp');
+  return result;
+}
 function cursorOf(value: unknown, repository: string): GithubCursor | null {
   try {
     const row = object(value);
     if (row.repository !== repository) return null;
-    return { repository, commit: row.commit === null ? null : sha(row.commit), item: row.item === null ? null : integer(row.item) };
+    return {
+      repository, commit: row.commit === null ? null : sha(row.commit), item: row.item === null ? null : integer(row.item),
+      ...(row.commentUpdated === undefined ? {} : { commentUpdated: row.commentUpdated === null ? null : timestamp(row.commentUpdated) }),
+      ...(row.reviewUpdated === undefined ? {} : { reviewUpdated: row.reviewUpdated === null ? null : timestamp(row.reviewUpdated) }),
+    };
   } catch { return null; }
 }
 
@@ -108,11 +124,13 @@ export function githubPoller(options: Options, emit: (s: Stimulus) => void) {
   const send = options.send ?? fetch;
   const seenCommits = new Set<string>();
   const seenItems = new Set<number>();
+  const seenIssueComments = new Set<string>();
+  const seenReviewComments = new Set<string>();
   let cursor: GithubCursor = { repository, commit: null, item: null };
   let lastCheckpoint = '';
   let stopped = false, busy = false, failed = false;
   function restore(): void {
-  for (const event of options.events()) {
+    for (const event of options.events()) {
     if (event.type === 'note' && event.kind === GITHUB_CURSOR_KIND) {
       const restored = cursorOf(event.data, repository);
       if (restored) { cursor = restored; lastCheckpoint = JSON.stringify(restored); }
@@ -130,6 +148,11 @@ export function githubPoller(options: Options, emit: (s: Stimulus) => void) {
       if (match) {
         const id = Number(match[1]);
         if (Number.isSafeInteger(id) && payload.id === id) seenItems.add(id);
+      }
+      match = /^GitHub (issue|review) comment ([1-9][0-9]*)$/.exec(first);
+      if (match) {
+        const id = Number(match[2]);
+        if (Number.isSafeInteger(id) && payload.id === id && typeof payload.updated === 'string') (match[1] === 'issue' ? seenIssueComments : seenReviewComments).add(`${id}:${payload.updated}`);
       }
     }
   }
@@ -197,9 +220,34 @@ export function githubPoller(options: Options, emit: (s: Stimulus) => void) {
       const newestItem = items[0]?.id ?? oldItem;
       const baselineItems = oldItem === null;
 
+      const commentFeeds = [
+        { field: 'commentUpdated' as const, endpoint: '/issues/comments', seen: seenIssueComments, kind: 'issue comment' },
+        { field: 'reviewUpdated' as const, endpoint: '/pulls/comments', seen: seenReviewComments, kind: 'review comment' },
+      ];
+      const collected: { field: 'commentUpdated' | 'reviewUpdated'; seen: Set<string>; kind: string; found: { rows: Row[]; truncated: boolean }; comments: Comment[]; newest: string | null; baseline: boolean }[] = [];
+      for (const feed of commentFeeds) {
+        const old = cursor[feed.field] ?? null;
+        const found = await list(`${base}${feed.endpoint}?sort=updated&direction=desc`, old, row => timestamp(row.updated_at));
+        const comments: Comment[] = found.rows.map(raw => {
+          const url = text(raw.html_url, 1000);
+          const match = /\/(?:issues|pull)\/([1-9][0-9]*)#/.exec(url);
+          if (!match) throw new Error('Invalid GitHub comment link');
+          return {
+            id: integer(raw.id), body: text(raw.body, 6000), author: text(object(raw.user ?? {}).login),
+            created: timestamp(raw.created_at), updated: timestamp(raw.updated_at), url, number: Number(match[1]),
+            ...(feed.field === 'reviewUpdated' ? { path: text(raw.path, 500), review: integer(raw.pull_request_review_id) } : {}),
+          };
+        });
+        // Cursor presence, not a null value, distinguishes an empty feed's established baseline
+        // from first contact. Existing v1 cursors have neither field and still baseline quietly.
+        const baseline = cursor[feed.field] === undefined;
+        if (baseline) for (const comment of comments) feed.seen.add(`${comment.id}:${comment.updated}`);
+        collected.push({ ...feed, found, comments, newest: comments[0]?.updated ?? old, baseline });
+      }
+
       // A burst beyond the collection window is acknowledged rather than silently presented as complete.
-      if (foundCommits.truncated || foundItems.truncated) {
-        notice('collection limit', `${Date.now()}`, { repository, commits: foundCommits.truncated, issues_or_pull_requests: foundItems.truncated, pages_per_feed: MAX_PAGES, page_size: PAGE_SIZE, detail: 'Older activity in this burst was not collected; the next poll starts from this checkpoint.' });
+      if (foundCommits.truncated || foundItems.truncated || collected.some(feed => feed.found.truncated)) {
+        notice('collection limit', `${Date.now()}`, { repository, commits: foundCommits.truncated, issues_or_pull_requests: foundItems.truncated, issue_comments: collected[0].found.truncated, review_comments: collected[1].found.truncated, pages_per_feed: MAX_PAGES, page_size: PAGE_SIZE, detail: 'Older activity in this burst was not collected; the next poll starts from this checkpoint.' });
       }
       // Oldest first within a batch. Initial contact is a baseline, not hundreds of historical wakes.
       if (!baselineCommits) {
@@ -217,16 +265,25 @@ export function githubPoller(options: Options, emit: (s: Stimulus) => void) {
           seenItems.add(item.id);
         }
       }
+      for (const feed of collected) {
+        if (!feed.baseline) for (const comment of feed.comments.reverse()) {
+          const identity = `${comment.id}:${comment.updated}`;
+          if (feed.seen.has(identity)) continue;
+          notice(feed.kind, comment.id, { repository, ...comment });
+          feed.seen.add(identity);
+        }
+      }
       // Written only after every emit returned. A failed emit leaves the prior checkpoint, while
       // seen journal stimuli suppress the already delivered prefix when the batch is retried.
-      checkpoint({ repository, commit: newestCommit, item: newestItem });
+      checkpoint({ repository, commit: newestCommit, item: newestItem, commentUpdated: collected[0].newest, reviewUpdated: collected[1].newest });
       failed = false;
     } catch {
       if (!failed && !stopped) console.error('[github] public activity poll failed; will retry. No response content logged.');
       failed = true;
     } finally {
       // The journal, not an in-memory success assumption, decides what a retry has already
-      // delivered. This covers a failed emit after the underlying append, and a failed checkpoint.
+      // delivered. In-process seen sets remain authoritative if a checkpoint append failed:
+      // restoring an older note must not erase a successfully emitted stimulus from memory.
       try { restore(); } catch { /* next poll retries; no partial cursor is published */ }
       busy = false;
     }
