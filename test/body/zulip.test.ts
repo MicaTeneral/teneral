@@ -152,3 +152,79 @@ test('identity failures preserve cursor; cache is reused and invalidated on cred
  await p.poll();await p.poll();expect(lookups).toBe(2);expect(reads).toBe(2);
  key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
 });
+
+import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND } from '../../body/zulip';
+
+test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
+  const notices: Stimulus[] = [];
+  const checkpoints: any[] = [];
+  const registrations: string[] = [];
+  let eventCalls = 0;
+  const send = (async (url: URL, init: RequestInit = {}) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({user_id:99}));
+    if (url.pathname === '/api/v1/register') {
+      registrations.push(String(init.body));
+      return new Response(JSON.stringify({queue_id:'q1',last_event_id:10}));
+    }
+    eventCalls++;
+    expect(url.searchParams.get('queue_id')).toBe('q1');
+    return new Response(JSON.stringify({events:eventCalls === 1 ? [
+      {id:11,type:'reaction',op:'add',message_id:7,user_id:42,emoji_name:'old',emoji_code:'1',reaction_type:'unicode_emoji'},
+    ] : [
+      {id:12,type:'reaction',op:'add',message_id:7,user_id:99,emoji_name:'self',emoji_code:'2',reaction_type:'unicode_emoji'},
+      {id:13,type:'reaction',op:'add',message_id:7,user_id:42,emoji_name:'wave',emoji_code:'1f44b',reaction_type:'unicode_emoji'},
+      {id:14,type:'message',id2:0},
+      {id:15,type:'reaction',op:'remove',message_id:7,user_id:42,emoji_name:'wave',emoji_code:'1f44b',reaction_type:'unicode_emoji'},
+    ]}));
+  }) as unknown as typeof fetch;
+  const events: JournalEvent[] = [];
+  const p = zulipReactionPoller({credentials, events:()=>events, send, checkpoint:c=>{
+    checkpoints.push(c);
+    events.push({type:'note',kind:ZULIP_QUEUE_CURSOR_KIND,data:c} as JournalEvent);
+  }}, s=>{ notices.push(s); events.push({type:'stimulus',...s} as JournalEvent); });
+  await p.poll();
+  expect(notices).toHaveLength(0);
+  expect(registrations[0]).toContain('event_types');
+  expect(registrations[0]).toContain('reaction');
+  expect(checkpoints).toEqual([{queueId:'q1',eventId:11,site:'https://example.test',email:'mica@test'}]);
+  await p.poll();
+  expect(notices).toHaveLength(2);
+  expect(notices.every(n=>n.source===ZULIP_REACTION_SOURCE)).toBe(true);
+  expect(notices[0].text).toContain('"op":"add"');
+  expect(notices[0].text).toContain('"message_id":7');
+  expect(notices[1].text).toContain('"op":"remove"');
+  expect(notices[0].text).toContain('not owner authority');
+  expect(checkpoints.at(-1).eventId).toBe(15);
+  // Restart from the journal cursor: no registration, no historical or duplicate wake.
+  const anchors: string[]=[];
+  const restartedSend=(async(url:URL)=>{
+    if(url.pathname==='/api/v1/users/me')return new Response(JSON.stringify({user_id:99}));
+    anchors.push(url.searchParams.get('last_event_id')!);
+    return new Response(JSON.stringify({events:[]}));
+  }) as unknown as typeof fetch;
+  await zulipReactionPoller({credentials,events:()=>events,send:restartedSend},()=>{throw Error('duplicate')}).poll();
+  expect(anchors).toEqual(['15']);
+});
+
+test('Zulip reaction queue retries a partial batch and does not checkpoint before emit returns', async () => {
+  const events: JournalEvent[]=[]; const checkpoints:any[]=[]; let batches=0; let notices=0;
+  const send=(async(url:URL)=>new Response(JSON.stringify(
+    url.pathname==='/api/v1/users/me'?{user_id:99}:
+    url.pathname==='/api/v1/register'?{queue_id:'q',last_event_id:0}:
+    {events:batches++===0?[]:[
+      {id:1,type:'reaction',op:'add',message_id:1,user_id:10,emoji_name:'a',emoji_code:'1',reaction_type:'unicode_emoji'},
+      {id:2,type:'reaction',op:'add',message_id:1,user_id:11,emoji_name:'b',emoji_code:'2',reaction_type:'unicode_emoji'},
+    ]},
+  ))) as unknown as typeof fetch;
+  const emit=(s:Stimulus)=>{
+    notices++;
+    events.push({type:'stimulus',...s} as JournalEvent);
+    if(notices===1) throw Error('journal failed after append');
+  };
+  const p=zulipReactionPoller({credentials,events:()=>events,send,checkpoint:c=>{checkpoints.push(c);events.push({type:'note',kind:ZULIP_QUEUE_CURSOR_KIND,data:c} as JournalEvent)}},emit);
+  await p.poll(); await p.poll();
+  expect(checkpoints).toHaveLength(1); // baseline only
+  await p.poll();
+  expect(notices).toBe(2); // first event re-read, suppressed from journal, second delivered
+  expect(checkpoints.at(-1).eventId).toBe(2);
+});

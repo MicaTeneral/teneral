@@ -23,7 +23,7 @@ import { libraryAt } from '../brain/ray';
 import { sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
-import { zulip, zulipCredentials } from './zulip';
+import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { TOOLS, type ToolContext } from './tools';
 
 function env(name: string): string {
@@ -193,6 +193,25 @@ const sensors: Sensor[] = [
     return needsTurn(events) || heldByInterrupt(events);
   }),
   zulip({ conversations: true, credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')), events: () => readEvents(journal), ownerId: zulipOwnerId }),
+  // Reactions require an event queue; the existing message poll has no such events.
+  // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
+  emit => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const reactions = zulipReactionPoller({
+      credentials: () => zulipCredentials(join(workspace, '..', 'mica-zulip.json')),
+      events: () => readEvents(journal),
+      checkpoint: (cursor: ZulipQueueCursor) => {
+        const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
+        if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
+        appendEvent(journal, gen, { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: cursor });
+      },
+    }, emit);
+    const start = setTimeout(() => {
+      void reactions.poll();
+      timer = setInterval(() => { void reactions.poll(); }, 30_000);
+    }, 60_000);
+    return () => { clearTimeout(start); if (timer) clearInterval(timer); reactions.stop(); };
+  },
   mail({ key: () => mailKey(process.env, join(workspace, '..', '..', '.env')), events: () => readEvents(journal) }),
 ];
 
