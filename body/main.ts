@@ -27,6 +27,7 @@ import { mail, mailKey } from './mail';
 import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
+import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -92,6 +93,11 @@ const githubRepository = process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'Rayfo
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
 const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), past };
+// A previous generation's process groups must not write into the candidate under the new gates.
+// Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
+const stoppedJobs = stopPreviousJobs(journal, gen);
+if (stoppedJobs.length > 0) console.error(`[jobs] stopped previous-generation groups: ${stoppedJobs.join(', ')}`);
+process.on('exit', () => stopCurrentJobs(journal, gen));
 // One-time import only: after this the journal is the live agenda, and the JSON file is never rewritten.
 try {
   const imported = importLegacyWork(journal, gen, join(ownerDir, '..', 'work.json'));

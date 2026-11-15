@@ -14,6 +14,7 @@ import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
+import { jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
 
 export interface ToolContext {
   /** The candidate worktree: the only copy of the code the agent edits. */
@@ -155,7 +156,7 @@ export function bashEnv(env: Record<string, string | undefined>): Record<string,
  * job, or one that left the group and so escaped the kill): the pipes get DRAIN_MS more, then reading stops.
  * When `signal` aborts (the owner interrupted the turn) the group is killed as at the limit, at once.
  */
-export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal): Promise<string> {
+export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal, track?: { journal: string; gen: string; name: string }): Promise<string> {
   if (signal?.aborted) return 'not run: interrupted by your owner before it started\n';
   const p = Bun.spawn(['bash', '-c', command], {
     cwd, env: bashEnv(process.env), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
@@ -199,20 +200,51 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
     : timedOut
     ? `timed out after ${timeoutMs / 1000}s and was killed`
     : p.exitCode === null ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
+  const tracked = track !== undefined && !timedOut && !interrupted
+    ? trackBackground(track.journal, track.gen, track.name, p.pid, cwd, command)
+    : null;
   const note = heldOpen && !timedOut && !interrupted
     ? '\n[something this command started is still running and holds its output open; it was left running, and what it prints from now on is not read]'
     : '';
-  return `${status}\n${output.text()}${note}`;
+  const job = tracked !== null ? `\n[background job ${tracked.name}; use jobs action=stop name=${tracked.name} to stop it after a restart]` : '';
+  return `${status}\n${output.text()}${note}${job}`;
 }
 
 const bash: Tool = {
   spec: {
     name: 'bash',
     description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped. It does not see your API key.',
-    parameters: params({ command: 'The command' }),
+    parameters: params({ command: 'The command', name: 'Optional stable job name (a-z, 0-9, dot, underscore, dash); returned and recorded when a process survives bash.' }),
   },
   async run(args, ctx, signal) {
-    return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal);
+    const name = jobName(typeof args === 'object' && args !== null ? (args as Record<string, unknown>).name as string | undefined : undefined);
+    const previous = jobHistory(readEvents(ctx.journal)).get(name);
+    if (previous !== undefined && jobStatus(previous) === 'running') throw new Error(`background job ${name} is already running`);
+    return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal, {
+      journal: ctx.journal, gen: ctx.gen, name,
+    });
+  },
+};
+
+const jobs: Tool = {
+  idempotent: true,
+  spec: {
+    name: 'jobs',
+    description: 'List surviving bash jobs, or stop one by its recorded name. Process identity is checked before signaling; processes that left their group cannot be managed by PGID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'stop'], description: 'list all known jobs, or stop one named job' },
+        name: { type: 'string', description: 'Required for stop; ignored for list' },
+      },
+      required: ['action'],
+    },
+  },
+  async run(args, ctx) {
+    const action = str(args, 'action');
+    if (action === 'list') return listJobs(readEvents(ctx.journal));
+    if (action === 'stop') return `${str(args, 'name')}: ${stopJob(ctx.journal, ctx.gen, str(args, 'name'))}`;
+    throw new Error('action must be list or stop');
   },
 };
 
@@ -554,4 +586,4 @@ const forget: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget];
+export const TOOLS: Tool[] = [read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget];
