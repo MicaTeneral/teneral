@@ -33,6 +33,8 @@ export interface ToolContext {
 
 export interface Tool {
   spec: ToolSpec;
+  /** Safe to invoke again with the same arguments after an interruption. */
+  idempotent?: boolean;
   /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (brain/loop.ts). */
   run(args: unknown, ctx: ToolContext, signal?: AbortSignal): Promise<string>;
 }
@@ -58,6 +60,7 @@ function params(properties: Record<string, string>): Record<string, unknown> {
 }
 
 const read: Tool = {
+  idempotent: true,
   spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace.', parameters: params({ path: 'File path' }) },
   async run(args, ctx) {
     return cap(readFileSync(resolve(ctx.workspace, str(args, 'path')), 'utf8'));

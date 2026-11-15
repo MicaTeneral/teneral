@@ -28,7 +28,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Robustness
 
-14. **Idempotent tools.** A tool interrupted mid-run is only reported, never repeated. Add a way for a tool to declare itself safe to repeat. Better when: an interrupted `read` is simply run again.
 15. **Provider limits.** A failed turn is tried again after 10 s, 1 min, 5 min and then every 15 min (`brain/retry.ts`); only a request the provider refuses outright, or as too long even at half the budget, is given up on, after three tries, with a `[not from the model]` note in the journal. A rate-limit answer is waited out like any other failure, and the time the provider says to wait is not read. Better when: after a rate-limit answer the next attempt comes when the provider said it would be accepted.
 16. **Streaming.** Replies arrive all at once. Better when: the first words of a long reply are on the screen while the rest is still being written.
 17. **File tools reach outside the workspace.** `read`, `write` and `edit` take any path, absolute or with `..`. The soul directory has to stay reachable; nothing else outside the workspace needs to be. Better when: a path outside the workspace and the soul directory is refused, with a test.

@@ -171,6 +171,11 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
           void Promise.resolve(running).catch(() => {});
           output = 'It did not stop when asked and was left behind: it may still be running.';
         } else output = String(result);
+        if (d.signal?.aborted && result !== LEFT && tool.idempotent) {
+          // Only a tool that explicitly promises this may be repeated. The owner still stops the turn;
+          // the retry just completes a read whose first attempt was cut short, with no signal attached.
+          output = String(await tool.run(call.args, d.ctx));
+        }
       } catch (err) {
         ok = false;
         output = `error: ${err instanceof Error ? err.message : String(err)}`;

@@ -478,6 +478,29 @@ test('interrupted while a tool runs: the tool is told, its result says so, the c
   expect(needsTurn(events)).toBe(false);
 });
 
+test('an interrupted idempotent read is retried once without the aborted signal', async () => {
+  let calls = 0;
+  const read: Tool = {
+    idempotent: true,
+    spec: { name: 'read', description: '', parameters: {} },
+    run: async (_args, _ctx, signal) => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
+        return 'partial';
+      }
+      expect(signal).toBeUndefined();
+      return 'complete';
+    },
+  };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'read', args: { path: 'x' } }] }], [read]);
+  const controller = new AbortController();
+  const result = runTurn({ ...s.deps, signal: controller.signal, onTool: () => setTimeout(() => controller.abort(), 10) });
+  expect(await result).toBe('interrupted');
+  expect(calls).toBe(2);
+  expect(readEvents(s.journal).filter(e => e.type === 'tool.result')[0]).toMatchObject({ ok: false, output: expect.stringContaining('complete') });
+});
+
 test('a tool that does not stop when asked is left behind after a moment, and what it does later disturbs nothing', async () => {
   let finish: (text: string) => void = () => {};
   let fail: (err: Error) => void = () => {};
