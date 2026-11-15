@@ -21,7 +21,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Sensors
 
-11. **The `to` of an incoming message is never checked.** Anything valid dropped into the inbox is shown, whoever it was addressed to. Better when: a message for someone else is set aside, or shown with a note that it was not addressed to this individual.
 12. **Workspace watcher.** Notice when the person edits files in the repository. Better when: such an edit shows up as a stimulus without the person saying so.
 13. **Wake policy.** Not every stimulus deserves a full turn. Decide cheaply which ones do. Better when: the cost report shows less spent on turns that end in one line.
 

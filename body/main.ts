@@ -174,7 +174,7 @@ const sensors: Sensor[] = [
       return offered(known(events), Date.now(), idleTicks(events), reportAsk(events, Date.now(), reportHours * 3_600_000));
     },
   ),
-  inbox(inboxDir),
+  inbox(inboxDir, ctx.id),
   ...(githubRepository ? [github({
     repository: githubRepository,
     events: () => readEvents(journal),

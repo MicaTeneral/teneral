@@ -100,7 +100,7 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true, a
 }
 
 /** Messages other agents and programs dropped into this agent's inbox directory. */
-export function inbox(dir: string, intervalMs = 2000): Sensor {
+export function inbox(dir: string, id: string, intervalMs = 2000): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, one that was journaled but cannot be moved would be emitted on every poll.
@@ -110,6 +110,11 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
       const e = arrival.envelope;
       if (e === null) {
         console.error(`[inbox] set aside ${arrival.file}: ${arrival.reason}`);
+        archive(dir, arrival.file, 'rejected');
+        return;
+      }
+      if (e.to !== id) {
+        console.error(`[inbox] set aside ${arrival.file}: addressed to ${e.to}, not ${id}`);
         archive(dir, arrival.file, 'rejected');
         return;
       }
