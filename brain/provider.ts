@@ -72,6 +72,18 @@ function withExtras(reply: Reply, usage: Usage | undefined, reasoning: string | 
 const dataUrl = (image: Image): string => `data:${image.mime};base64,${image.data}`;
 const names = (images: Image[]): string => images.map((image) => image.name).join(', ');
 
+/** Adjacent stimuli remain distinguishable, but endpoints see one user turn rather than a role sequence some reject. */
+function joinedStimuli(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const message of messages) {
+    const previous = out.at(-1);
+    if (previous?.role !== 'user' || message.role !== 'user') { out.push(message); continue; }
+    const text = [previous.content, message.content].filter((part): part is string => typeof part === 'string' && part !== '').join('\n\n[next stimulus]\n\n');
+    out[out.length - 1] = { ...previous, content: text || null, images: [...(previous.images ?? []), ...(message.images ?? [])] };
+  }
+  return out;
+}
+
 /**
  * The list as chat-completions takes it. A user message with images becomes text and `image_url`
  * parts. A tool message may hold only text there, so what `look` returned follows as a user
@@ -85,7 +97,7 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
     if (held.length > 0) out.push({ role: 'user', content: [{ type: 'text', text: `[the result of look, as an image: ${names(held)}]` }, ...held.map(part)] });
     held = [];
   };
-  for (const m of messages) {
+  for (const m of joinedStimuli(messages)) {
     if (m.role !== 'tool') flush();
     const { images, ...rest } = m;
     if (!images || images.length === 0) out.push(rest);
@@ -290,7 +302,7 @@ export function toResponsesInput(messages: ChatMessage[], namespace?: string): {
   const system: string[] = [];
   const input: Item[] = [];
   const part = (image: Image): Item => ({ type: 'input_image', image_url: dataUrl(image) });
-  for (const m of messages) {
+  for (const m of joinedStimuli(messages)) {
     if (m.role === 'system') {
       if (m.content) system.push(m.content);
     } else if (m.role === 'tool') {

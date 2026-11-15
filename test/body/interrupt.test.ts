@@ -113,7 +113,8 @@ test('interrupted while it waits for the model: the request is dropped at the pr
   await l.until('the reply', () => l.types().at(-1) === 'assistant');
   expect(l.asked).toHaveLength(2);
   const shown = l.asked[1]!.messages.map((m) => String(m.content));
-  expect(shown.slice(-3).map((text) => text.slice(0, 50))).toEqual(['think about this for a long time', '[interrupted] Your owner interrupted your turn her', 'never mind, say hello']);
+  expect(shown.at(-1)?.startsWith('think about this for a long time\n\n[next stimulus]\n\n[interrupted] Your owner interrupted your turn here.')).toBe(true);
+  expect(shown.at(-1)?.endsWith('\n\n[next stimulus]\n\nnever mind, say hello')).toBe(true);
   expect(l.stderr()).toContain('[interrupted]');
   expect(l.stderr()).not.toContain('[turn failed]');
   expect(l.stderr()).not.toContain('[retry]');
@@ -152,7 +153,7 @@ test('interrupted while bash runs: the command, its child and its grandchild are
   // And it goes on from there when spoken to: both calls are shown answered, then the interruption.
   tell(l.owner, 'what happened?');
   await l.until('the reply', () => l.types().at(-1) === 'assistant');
-  expect(l.asked[1]!.messages.map((m) => m.role).slice(-5)).toEqual(['assistant', 'tool', 'tool', 'user', 'user']);
+  expect(l.asked[1]!.messages.map((m) => m.role).slice(-4)).toEqual(['assistant', 'tool', 'tool', 'user']);
 }, 30_000);
 
 test('an interrupt while nothing is owed is dropped, also one left from before this process: neither stops the turn that comes after', async () => {

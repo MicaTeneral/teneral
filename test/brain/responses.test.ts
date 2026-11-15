@@ -51,6 +51,13 @@ test('no item is a system message and none carries an id', () => {
   expect(toResponsesInput([...CONVERSATION, { role: 'system', content: 'MORE' }]).instructions).toBe('SYSTEM\n\nMORE');
 });
 
+test('adjacent user stimuli become one ordered, explicitly separated input item', () => {
+  expect(toResponsesInput([
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+  ]).input).toEqual([{ role: 'user', content: 'first\n\n[next stimulus]\n\nsecond' }]);
+});
+
 test('with a namespace, replayed calls name it, as the calls the model made did', () => {
   const calls = toResponsesInput(CONVERSATION, 'teneral').input.filter((item) => item.type === 'function_call');
   expect(calls).toHaveLength(3);
@@ -362,8 +369,8 @@ test('an image beside a user message is an input_image part after the text; alon
       { type: 'input_text', text: 'what is this?' },
       { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
       { type: 'input_image', image_url: 'data:image/jpeg;base64,BBBB' },
+      { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
     ] },
-    { role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] },
   ]);
   expect(JSON.stringify(input)).not.toContain('"images"');
 });

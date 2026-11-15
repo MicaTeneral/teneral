@@ -29,6 +29,18 @@ test('sends the model, messages and tools, and returns the text', async () => {
   expect(sent.tools).toEqual([{ type: 'function', function: { name: 'read', description: 'd', parameters: { type: 'object' } } }]);
 });
 
+test('adjacent user messages are joined without losing their order or boundaries', () => {
+  expect(toChatMessages([
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+    { role: 'user', content: 'third' },
+    { role: 'assistant', content: 'answer' },
+  ])).toEqual([
+    { role: 'user', content: 'first\n\n[next stimulus]\n\nsecond\n\n[next stimulus]\n\nthird' },
+    { role: 'assistant', content: 'answer' },
+  ]);
+});
+
 test('parses tool calls and their JSON arguments', async () => {
   const provider = openAiProvider({
     ...cfg,
@@ -218,8 +230,8 @@ test('a message without images goes on the wire as it is; one with images become
       { type: 'text', text: 'what is this?' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
       { type: 'image_url', image_url: { url: 'data:image/webp;base64,BBBB' } },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
     ] },
-    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
   ]);
   expect(seen.init!.body as string).not.toContain('"images"');
 });
