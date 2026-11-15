@@ -320,7 +320,7 @@ for (;;) {
       streak.count = 0;
       continue;
     }
-    const delay = retryDelayMs(failures);
+    const delay = retryDelayMs(failures, error instanceof ProviderError ? error.retryAfterMs : null);
     const ownerWrote = ownerArrived !== before;
     const note = {
       type: 'note' as const,

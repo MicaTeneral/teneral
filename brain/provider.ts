@@ -163,13 +163,27 @@ export class ProviderError extends Error {
   readonly status: number | null;
   /** What the provider said, as far as it was read. */
   readonly body: string;
+  /** Retry-After, when the provider supplied one; milliseconds from the error's creation. */
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, status: number | null, body = '') {
+  constructor(message: string, status: number | null, body = '', retryAfterMs: number | null = null) {
     super(message);
     this.name = 'ProviderError';
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+export function retryAfterMs(res: Response, now = Date.now()): number | null {
+  const value = res.headers.get('retry-after')?.trim();
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && /^\d+(?:\.\d+)?$/.test(value)) return Math.max(0, seconds * 1000);
+  // Date.parse accepts implementation-specific strings; HTTP dates are the only date form here.
+  if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
 }
 
 /** What a call is rejected with when its caller cancelled it (`options.signal`). Not a failure of the provider: nothing is to be tried again. */
@@ -246,7 +260,7 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
       throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
     }
-    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text);
+    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text, retryAfterMs(res));
     let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
     try {
       parsed = JSON.parse(text);
@@ -467,7 +481,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       const next = await token(bearer);
       if (next !== bearer) ({ res, text } = await post(bearer = next));
     }
-    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text);
+    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text, retryAfterMs(res));
     return readResponsesStream(text);
   };
   return async (messages, tools, options) => {

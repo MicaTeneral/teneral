@@ -7,9 +7,10 @@ const DELAYS_MS = [10_000, 60_000, 300_000, 900_000];
  * How long to wait before trying again after `failures` failed turns in a row.
  * Short at first, since most failures pass by themselves; long later, so a provider that is down is not hammered.
  */
-export function retryDelayMs(failures: number): number {
+export function retryDelayMs(failures: number, retryAfterMs: number | null = null): number {
   const step = Number.isFinite(failures) ? Math.max(1, Math.floor(failures)) : DELAYS_MS.length;
-  return DELAYS_MS[Math.min(step, DELAYS_MS.length) - 1]!;
+  const normal = DELAYS_MS[Math.min(step, DELAYS_MS.length) - 1]!;
+  return retryAfterMs !== null && Number.isFinite(retryAfterMs) ? Math.max(normal, retryAfterMs) : normal;
 }
 
 export function describeDelay(ms: number): string {
