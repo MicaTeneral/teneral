@@ -36,7 +36,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 21. **Background jobs outlive the generation that started them.** Something started with `bash` and left running (`cmd >/dev/null 2>&1 &`) survives a mutation and a restart, and can keep writing into the workspace: into files a later mutation commits, or under the gates' feet. Nothing lists such jobs or stops them. Better when: jobs started in the background are recorded, shown after a restart, and can be stopped by name.
 
-22. **A rollback note reads badly.** `stemNote` in `brain/memory.ts` puts the stem's reason in the middle of a sentence, and the reason now ends with the failed generation's stderr, so the note runs `... Its stderr ended with: <stderr> and was rolled back.` Better when: the note says what happened and where things stand first, and gives the stderr last, on lines of its own, with a test.
 
 ## Tools
 

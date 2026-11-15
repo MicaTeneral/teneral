@@ -26,8 +26,15 @@ export function stemNote(e: JournalEvent): string | null {
   switch (e.type) {
     case 'generation.promoted':
       return `[stem] Your mutation was accepted. You are now running generation ${e.commit} (before: ${e.previous}).`;
-    case 'generation.rolledback':
-      return `[stem] Generation ${e.commit} ${brief(e.reason)} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.`;
+    case 'generation.rolledback': {
+      // A failed generation's stderr is at the end of the reason. Keep it out of the middle of
+      // the sentence: first what happened and what is running now, then the evidence, unchanged.
+      const reason = brief(e.reason);
+      const split = reason.indexOf('\nIts stderr ended with: ');
+      const why = split < 0 ? reason : reason.slice(0, split);
+      const detail = split < 0 ? '' : reason.slice(split + 1).replace('Its stderr ended with: ', 'Its stderr ended with:\n');
+      return `[stem] Generation ${e.commit} ${why} and was rolled back. You are running ${e.to} again. Your workspace still holds the code that failed.${detail ? `\n${detail}` : ''}`;
+    }
     default:
       return null;
   }

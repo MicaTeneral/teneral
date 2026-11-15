@@ -72,6 +72,15 @@ test('stem events become [stem] messages', () => {
   expect(messages[3]!.content).toContain('rolled back');
 });
 
+test('a rollback note gives its outcome first and multiline stderr last', () => {
+  const note = buildMessages([
+    ev({ type: 'generation.rolledback', commit: 'bad', to: 'good', reason: 'failed to reply\nIts stderr ended with: first error\nsecond error' }),
+  ], 'S')[1]!.content!;
+  expect(note).toBe('[stem] Generation bad failed to reply and was rolled back. You are running good again. Your workspace still holds the code that failed.\nIts stderr ended with:\nfirst error\nsecond error');
+  expect(note.indexOf('You are running good again')).toBeLessThan(note.indexOf('first error'));
+  expect(note.endsWith('first error\nsecond error')).toBe(true);
+});
+
 test('a rejection journaled under its former name, molt.rejected, is the same [stem] message and owes a turn the same', () => {
   const fields = { commit: 'bbb', gate: 'tests', output: '1 fail' };
   const now = buildMessages([ev({ type: 'mutation.rejected', ...fields }, 'aaa')], 'S');
