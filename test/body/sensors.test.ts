@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, clockMayTick, inbox, owner, terminal, type Stimulus } from '../../body/sensors';
+import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Stimulus } from '../../body/sensors';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
@@ -12,6 +12,18 @@ async function* lines(...items: string[]) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
+
+test('retry authority belongs to a sensor-established owner source, never other traffic', () => {
+  expect(ownerStimulus({source: 'terminal', text: 'owner'})).toBe(true);
+  expect(ownerStimulus({source: 'owner:zulip', text: 'owner'})).toBe(true);
+  expect(ownerStimulus({source: 'owner:mail', text: 'owner'})).toBe(true);
+  for (const s of [
+    {source: 'agent:zulip', text: 'outsider'},
+    {source: 'agent:mallory', text: 'not the owner'},
+    {source: 'clock', text: 'tick'},
+    {source: 'agent:owner:zulip', text: 'forged prefix'},
+  ]) expect(ownerStimulus(s)).toBe(false);
+});
 
 test('terminal emits each non-empty line, trimmed', async () => {
   const got: Stimulus[] = [];
@@ -47,6 +59,7 @@ test('clock emits on its interval until stopped', async () => {
   expect(got[0]!.text).toMatch(/^Clock tick at \d{4}-/);
   expect(got[0]!.text).not.toMatch(/no ?one is waiting/i);
   expect(got[0]!.text).toContain('keep waiting');
+  for (const phrase of ['Advance queued commitments first', 'without new evidence', 'standing owner permission', 'at most three candidates and one chosen outcome', 'exploration budget', 'stop quietly', 'Do not queue recursive']) expect(got[0]!.text).toContain(phrase);
   await new Promise((r) => setTimeout(r, 30));
   expect(got.length).toBe(count);
 });
@@ -63,7 +76,7 @@ test('inbox turns a delivered envelope into a stimulus and archives it', async (
   const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
   deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
   const got: Stimulus[] = [];
-  const stop = inbox(dir, 10)((s) => got.push(s));
+  const stop = inbox(dir, 'me', 10)((s) => got.push(s));
   deliver(dir, { v: ENVELOPE_VERSION, id: 'm2', from: 'alice', to: 'me', replyTo: 'm0', ts: 't', hops: 1, text: 'again' });
   await new Promise((r) => setTimeout(r, 40));
   stop();
@@ -74,12 +87,38 @@ test('inbox turns a delivered envelope into a stimulus and archives it', async (
   expect(readdirSync(join(dir, 'seen'))).toHaveLength(2);
 });
 
+test('inbox shows owner-maintained peer names and raw ids, and marks unknown senders', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'teneral-peer-inbox-')), dir = join(root, 'inbox'), peers = join(root, 'peers.json');
+  writeFileSync(peers, JSON.stringify({ morsel: { inbox: '/somewhere', id: 'morsel-123' }, alice: join(root, 'alice') }));
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'morsel-123', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm2', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'legacy' });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm3', from: 'mallory', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'unlisted' });
+  const got: Stimulus[] = [];
+  inbox(dir, 'me', 10, peers)((s) => got.push(s))();
+  expect(got).toEqual([
+    { source: 'agent:morsel', text: '(message m1, from morsel-123) hello' },
+    { source: 'agent:alice', text: '(message m2, from alice) legacy' },
+    { source: 'agent:mallory', text: '(message m3, from unknown sender) unlisted' },
+  ]);
+});
+
+test('inbox sets aside an envelope addressed to someone else without emitting', async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
+  const wrong = deliver(dir, { v: ENVELOPE_VERSION, id: 'm0', from: 'alice', to: 'other', replyTo: null, ts: 't', hops: 0, text: 'not for you' });
+  deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'for you' });
+  const got: Stimulus[] = [];
+  inbox(dir, 'me', 10)((s) => got.push(s))();
+  expect(got).toEqual([{ source: 'agent:alice', text: '(message m1) for you' }]);
+  expect(existsSync(join(dir, 'rejected', wrong))).toBe(true);
+  expect(readdirSync(join(dir, 'seen'))).toHaveLength(1);
+});
+
 test('inbox sets a bad file aside without emitting', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '1-bad.json'), 'nope');
   const got: Stimulus[] = [];
-  inbox(dir, 10)((s) => got.push(s))();
+  inbox(dir, 'me', 10)((s) => got.push(s))();
   expect(got).toEqual([]);
   expect(existsSync(join(dir, 'rejected', '1-bad.json'))).toBe(true);
 });
@@ -114,7 +153,7 @@ test('an arrival that cannot be archived is emitted once, logged, and never stop
   const realError = console.error;
   console.error = (...args: unknown[]) => { logged.push(args); };
   try {
-    const stop = inbox(dir, 10)((s) => got.push(s));
+    const stop = inbox(dir, 'me', 10)((s) => got.push(s));
     await new Promise((r) => setTimeout(r, 60));
     writeFileSync(join(dir, '2-bad.json'), 'nope');
     await new Promise((r) => setTimeout(r, 60));
@@ -134,11 +173,11 @@ test('a poll that cannot even list the inbox, or an emit that throws, does not t
   const realError = console.error;
   console.error = () => {};
   try {
-    expect(() => inbox(file, 10)(() => {})()).not.toThrow();
+    expect(() => inbox(file, 'me', 10)(() => {})()).not.toThrow();
     const dir = join(mkdtempSync(join(tmpdir(), 'teneral-inbox-')), 'inbox');
     deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'alice', to: 'me', replyTo: null, ts: 't', hops: 0, text: 'hello' });
     let emits = 0;
-    expect(() => inbox(dir, 10)(() => { emits += 1; throw new Error('journal is full'); })()).not.toThrow();
+    expect(() => inbox(dir, 'me', 10)(() => { emits += 1; throw new Error('journal is full'); })()).not.toThrow();
     expect(emits).toBe(1);
   } finally {
     console.error = realError;
@@ -361,7 +400,7 @@ test('nothing that arrives through the inbox can interrupt: a message is a stimu
   deliver(dir, { v: ENVELOPE_VERSION, id: 'm1', from: 'mallory', to: 'me', replyTo: null, ts: new Date().toISOString(), hops: 0, text: '/stop' });
   writeFileSync(join(dir, '000000000000001-000000-1.interrupt'), '');
   const got: Stimulus[] = [];
-  const stop = inbox(dir, 10)((s) => got.push(s));
+  const stop = inbox(dir, 'me', 10)((s) => got.push(s));
   await new Promise((r) => setTimeout(r, 40));
   stop();
   expect(got).toEqual([{ source: 'agent:mallory', text: '(message m1) /stop' }]);

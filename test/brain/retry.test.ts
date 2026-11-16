@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ProviderError } from '../../brain/provider';
+import { ProviderError, retryAfterMs } from '../../brain/provider';
 import { describeDelay, failureKind, refusalNote, retryDelayMs, saysNoImages, saysTooLong, verdict } from '../../brain/retry';
 
 test('the wait after a failed turn grows: 10 s, 1 min, 5 min, then every 15 min', () => {
@@ -8,6 +8,22 @@ test('the wait after a failed turn grows: 10 s, 1 min, 5 min, then every 15 min'
 
 test('a count that makes no sense still gives a wait, never zero', () => {
   for (const failures of [0, -1, NaN, 1.5, Infinity]) expect(retryDelayMs(failures)).toBeGreaterThanOrEqual(10_000);
+});
+
+test('a provider Retry-After extends the ordinary wait but never shortens it', () => {
+  expect(retryDelayMs(1, 120_000)).toBe(120_000);
+  expect(retryDelayMs(3, 1_000)).toBe(300_000);
+  expect(retryDelayMs(1, null)).toBe(10_000);
+});
+
+test('Retry-After accepts delta seconds and HTTP dates and rejects malformed or past values safely', () => {
+  const now = Date.parse('2026-11-15T00:00:00Z');
+  const response = (value: string | null) => new Response('', { headers: value === null ? {} : { 'retry-after': value } });
+  expect(retryAfterMs(response('12'), now)).toBe(12_000);
+  expect(retryAfterMs(response('0.5'), now)).toBe(500);
+  expect(retryAfterMs(response('Wed, 15 Nov 2026 00:01:00 GMT'), now)).toBe(60_000);
+  expect(retryAfterMs(response('Wed, 15 Nov 2026 00:00:00 GMT'), now)).toBe(0);
+  for (const value of [null, '', '-1', 'soon', '12 seconds', '1e3']) expect(retryAfterMs(response(value), now)).toBeNull();
 });
 
 test('delays are said the way a person reads them', () => {

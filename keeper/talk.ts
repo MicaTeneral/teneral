@@ -368,6 +368,7 @@ export async function talk(o: TalkOptions): Promise<number> {
         // The owner's word to the stem: never a line for the agent, also in a client that cannot take it.
         else if (text === '/approve' || text.startsWith('/approve ')) approveCommit(text);
         else if (text === '/stop') stop();
+        else if (text === '/heart') { if (send(text)) o.note('(one agenda pulse requested)'); }
         // The commands this client has, from the table both clients read (keeper/commands.ts).
         else if (text === '/help') for (const row of ['The commands here; every other line goes to the agent as your words:', ...helpRows('plain')]) o.note(row);
         else if (!answered(text)) send(text);

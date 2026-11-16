@@ -29,6 +29,8 @@ export interface Usage {
   input: number;
   output: number;
   cached?: number;
+  /** Image tokens inside input, only when the provider itemizes them. Older readers ignore this optional field. */
+  images?: number;
 }
 
 export type BrainEvent =

@@ -52,6 +52,26 @@ test('the agent looks ahead only once enough has been remembered since it last d
   expect(reflectionDue([...events, ev({ type: 'note', kind: REFLECTION_KIND, data: {} })])).toBe(false);
 });
 
+test('an idle agenda with no own ideas gets a bounded look ahead, and a fresh look is not repeated', () => {
+  const tick = () => ev({ type: 'stimulus', source: 'clock', text: 'Clock tick.' }, LONG);
+  const idle = () => [tick(), ev({ type: 'assistant', text: 'Everything waits.', toolCalls: [] })];
+  const waiting = intention('Wait for an external answer', { work: { status: 'waiting', next: 'Wait.', attempts: 0, resumeAt: 0 } });
+  const events = [...idle(), ...idle(), ...idle(), waiting];
+  expect(idleTicks(events)).toBe(PASSED_TICKS);
+  expect(reflectionDue(events)).toBe(true);
+
+  const looked = ev({ type: 'note', kind: REFLECTION_KIND, data: {} });
+  expect(reflectionDue([...events, looked])).toBe(false);
+  // The look is an idle wake; ticks after it must reach the threshold again.
+  expect(reflectionDue([...events, looked, ...idle(), ...idle(), ...idle()])).toBe(true);
+
+  // New memories keep the old trigger even when an existing own idea is open. With only waiting
+  // commitments there is no own idea to advance, so the idle path remains available.
+  expect(reflectionDue([...events, looked, intention('An open own idea', { origin: 'own' })])).toBe(false);
+  const remembered = Array.from({ length: REFLECT_EVERY }, () => ev({ type: 'note', kind: EPISODE_KIND, data: { outcome: 'done' } }));
+  expect(reflectionDue([...events, looked, ...remembered, intention('An open own idea', { origin: 'own' })])).toBe(true);
+});
+
 test('what it sets down when it looks ahead becomes intentions of its own, questions for its owner, and closes what is settled', async () => {
   const taken = intention('Send the owner the weekly deploy report');
   const events = [...life(REFLECT_EVERY), taken];
@@ -204,6 +224,18 @@ test('ticks that end with nothing done are counted, and after a few a tick offer
   expect(offered(held, NOW, PASSED_TICKS)).toContain('you passed over several times, and they stay on it');
   // It comes round again.
   expect(first(PASSED_TICKS * 2)).toBe('Thing number 2');
+
+  // A wall of old waits must not hide work that is ready now.
+  const waiting = Array.from({ length: 5 }, (_, i) => intention(`Waiting for dependency ${i}`, {
+    work: { status: 'waiting', next: 'Wait for the named dependency.', attempts: 0, resumeAt: 0 },
+  }));
+  const ready = intention('Ready work behind the waits', {
+    work: { status: 'queued', next: 'Do the concrete next step.', attempts: 0, resumeAt: 0 },
+  });
+  const text = offered(known([...waiting, ready]), NOW);
+  expect(text).toContain('I');
+  expect(text).toContain('Ready work behind the waits');
+  expect(text).not.toContain('Waiting for dependency 0');
 });
 
 test('what time of its own costs is the tokens of the turns a tick woke, over the last day', () => {
@@ -217,14 +249,38 @@ test('what time of its own costs is the tokens of the turns a tick woke, over th
   expect(ownSpend(events, NOW)).toBe(2200);
 });
 
-test('an idea closed as done in a generation that was then rolled back is counted as undone', () => {
+test('an idea closed as done in a generation that was then rolled back counts as dropped, and once', () => {
   const idea = intention('Make the deploy retry by itself', { origin: 'own' });
   const kept = intention('Tidy the old logs away', { origin: 'own' });
   const closed = (i: JournalEvent, gen: string): JournalEvent => ({ ...ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: i.id, how: 'mutated' } }), gen });
   const events = [idea, kept, closed(idea, 'bad1'), closed(kept, 'good1'), ev({ type: 'generation.rolledback', commit: 'bad1', to: 'good0', reason: 'crashed' })];
-  const m = initiative(events);
-  expect(m.own).toEqual({ done: 2, dropped: 0, open: 0, undone: 1 });
-  expect(initiativeText(m)).toContain('2 were done (1 of them in a generation that was then rolled back)');
+  const discarded = intention('No longer worth doing', { origin: 'own' });
+  const explicitlyDropped = { ...ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: discarded.id, how: 'not worth it', ended: 'dropped' } }), gen: 'bad1' };
+  const later = ev({ type: 'generation.rolledback', commit: 'bad1', to: 'good0', reason: 'crashed again' });
+  const m = initiative([...events, discarded, explicitlyDropped, later]);
+  expect(m.own).toEqual({ done: 1, dropped: 2, open: 0, undone: 1 });
+  expect(initiativeText(m)).toContain('1 were done, 2 given up (1 because their generation was rolled back)');
+});
+
+test('a report covers only the agent\'s own ideas, not delegated work or an inherited scheduler pause', () => {
+  clock = NOW - 3 * DAY;
+  const taken = intention('Merge the requested species update');
+  const own = intention('Reduce repeated correction questions', { origin: 'own' });
+  const paused = intention('A delegated task paused by the work scheduler', { work: { status: 'waiting', next: 'owner answer', attempts: 3, resumeAt: 0 } });
+  const delegated = [ev({ type: 'stimulus', source: 'work', text: `Resume ${known([taken]).intentions[0]!.mark}, the previously recorded owner-authorized task. Task: Merge the requested species update` }), ev({ type: 'assistant', text: '', toolCalls: [{ id: 't', name: 'bash', args: {} }] })];
+  const pausedTick = [ev({ type: 'stimulus', source: 'clock', text: 'tick' }), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'w', name: 'work', args: { task: 'A delegated task paused by the work scheduler', next: 'report pause' } }] })];
+  expect(reportAsk([taken, paused, ...delegated, ...pausedTick], NOW)).toBe('');
+
+  const mark = known([own]).intentions[0]!.mark;
+  const ownText = (own as { data: { text: string } }).data.text;
+  const resumed = ev({ type: 'stimulus', source: 'work', text: `Resume ${mark}, the previously recorded owner-authorized task. This scheduler reminder is not new authorization. Task: ${ownText}` });
+  const ownWork = ev({ type: 'assistant', text: '', toolCalls: [{ id: 'o', name: 'bash', args: {} }] });
+  const done = ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: own.id, how: 'fewer repeated questions' } });
+  const ask = reportAsk([taken, paused, own, ...delegated, ...pausedTick, resumed, ownWork, done], NOW);
+  expect(ask).toContain('- done: Reduce repeated correction questions');
+  expect(ask).toContain('Steps of work in time of your own: 1.');
+  expect(ask).not.toContain('Merge the requested species update');
+  expect(ask).not.toContain('delegated task paused');
 });
 
 test('once a day, when there is something to tell, a tick asks for one message to the owner, and its mark is what counts', () => {
@@ -246,7 +302,17 @@ test('once a day, when there is something to tell, a tick asks for one message t
   expect(reportAsk([...events, sent], NOW + 3_600_000)).toBe('');
   expect(reportAsk([...events, sent], NOW + 2 * DAY)).toBe('');
   const more = [ev({ type: 'stimulus', source: 'clock', text: 'tick' }, DAY), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'd', name: 'bash', args: {} }] })];
-  expect(reportAsk([...events, sent, ...more], NOW + 2 * DAY)).toContain('since 2026-11-10 12:00 UTC');
+  // An unattributed bash call alone is not initiative to report; a new idea of the agent's own is.
+  const fresh = intention('Check the deploy retry once a week', { origin: 'own' });
+  const later = reportAsk([...events, sent, ...more, fresh], NOW + 2 * DAY);
+  expect(later).toContain('since 2026-11-10 12:00 UTC');
+  expect(later).toContain('Check the deploy retry once a week');
+  // A done record whose generation was rolled back is still told, without pretending it survived.
+  const failed = { ...ev({ type: 'note', kind: 'memory.intention.done.v1', data: { intention: idea.id, how: 'then it broke' } }), gen: 'bad1' };
+  const rolledBack = ev({ type: 'generation.rolledback', commit: 'bad1', to: 'good1', reason: 'crashed' });
+  const undoneReport = reportAsk([idea, unsure, ...work, failed, rolledBack], NOW);
+  expect(undoneReport).toContain('- done (that generation was rolled back): Make the deploy retry by itself');
+  expect(undoneReport).not.toContain('New ideas of your own:');
   // Nothing done and nothing new is nothing to tell; and the owner can turn it off.
   expect(reportAsk([unsure], NOW)).toBe('');
   expect(reportAsk(events, NOW, 0)).toBe('');

@@ -7,7 +7,7 @@
  * This is an allowlist on purpose: a file nobody thought to list (a new config file, a new
  * top-level file) asks for the owner's word by default.
  */
-export const FREE: readonly string[] = ['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md'];
+export const FREE: readonly string[] = ['body/', 'brain/', 'heart/', 'test/body/', 'test/brain/', 'test/heart/', 'BACKLOG.md'];
 
 /**
  * Paths inside the free directories that wait for the owner's approval all the same: the form of

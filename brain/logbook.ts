@@ -1,10 +1,11 @@
 import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
-import { IMAGE_CHARS } from '../body/images';
+import { imageChars } from '../body/images';
 import { episodes, type Episode } from './episodes';
 import { health, healthNote } from './health';
 import { known, knownText } from './known';
 import { pinned } from './owned';
+import { lessonText } from './lessons';
 import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
@@ -26,9 +27,9 @@ import { remembered, type Memory, type Merge, type QuarantineData, type Remember
 // So the part shown as it happened is held near a size chosen for that, far below the model's
 // limit, and what is older is in the logbook, where an episode takes a few lines.
 
-/** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
+/** What a message counts for against the budget. Image dimensions, not encoded byte length, set its vision cost. */
 export function sizeOf(m: ChatMessage): number {
-  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
+  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images ?? []).reduce((sum, image) => sum + imageChars(image), 0);
 }
 
 /** Episodes are swapped for their memories in steps of this share of the room. Each step moves where a request first differs from the one before. */
@@ -207,7 +208,7 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   const last = events.at(-1)?.ts ?? '';
   // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
   const ill = healthNote(health(events, Date.parse(last) || 0), MEMORY_MARK);
-  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
+  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
   const knowing: ChatMessage[] = held === '' ? [] : [{ role: 'user', content: held }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
   const all = remembered(events);

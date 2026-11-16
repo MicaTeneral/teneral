@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
-import { FACT_KIND, known } from '../../brain/known';
+import { FACT_KIND, INTENTION_KIND, WORK_KIND, known } from '../../brain/known';
 import { buildMessages, needsTurn } from '../../brain/memory';
 import { BACK_KIND, PIN_KIND, UNPIN_KIND, WITHDRAW_KIND, fromOwner, noteOf, parseWord, pinned, standing, withdrawn } from '../../brain/owned';
 import { journalPast, timeline } from '../../brain/past';
@@ -155,11 +155,25 @@ test('records of the stem made in a stretch that is taken back stay: what was do
 test('/memory shows how the memory stands, with a mark for everything the owner can lay a hand on', () => {
   const { notes, events } = life();
   const fact = note(FACT_KIND, { text: 'The owner is in Lisbon', source: 'owner', episode: 'e' });
-  const lines = memoryCommand([...events, fact], '', Date.parse('2026-11-11T02:00:00Z')).lines;
+  const intention = note(INTENTION_KIND, { text: 'Check the migration result' });
+  const checkpoint = note(WORK_KIND, { intention: intention.id, work: { status: 'queued', next: 'Read the receipt', attempts: 1, resumeAt: 0, evidence: 'Focused checks passed' } });
+  const all = [...events, fact, intention, checkpoint];
+  const lines = memoryCommand(all, '', Date.parse('2026-11-11T02:00:00Z')).lines;
   expect(lines[0]).toStartWith('Memory is well. 2 episodes remembered');
   expect(lines).toContain(`  ${markOf(notes[0]!.id)}  2026-11-11 00:01  done    The first thing`);
   expect(lines.join('\n')).toContain(`${known([fact]).facts[0]!.mark}  [owner] The owner is in Lisbon`);
+  expect(lines.join('\n')).toContain(`${known(all).intentions[0]!.mark}  owed`);
+  expect(lines.join('\n')).toContain('queued: Read the receipt');
   expect(lines.join('\n')).toContain('/memory back [n]');
+});
+
+test('the owner page loads in a fresh process despite the agenda/health import cycle', () => {
+  const run = Bun.spawnSync([
+    process.execPath, '--eval',
+    'import { memoryCommand } from "./keeper/memory.ts"; const answer = memoryCommand([], "", 0); if (answer.lines.length === 0) process.exit(1);',
+  ], { cwd: join(import.meta.dir, '..', '..'), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+  expect(run.stderr.toString()).toBe('');
+  expect(run.exitCode).toBe(0);
 });
 
 test('/memory pin names a stretch by a memory\'s mark, or the one going on, and refuses what would not fit', () => {

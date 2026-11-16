@@ -1,3 +1,4 @@
+import { cacheProbe, type CacheProbe } from "../body/cache-probe";
 import { beat, follower, rest, type Pulse } from './pulse';
 import type { ToolCall, Usage } from './journal';
 import { CHATGPT_USAGE_URL, providerFor, userAgent } from './providers';
@@ -37,6 +38,10 @@ export interface Reply {
   usage?: Usage;
   /** A summary of the model's reasoning, when the provider gives one. For the owner's terminal: it is journaled and never sent back. */
   reasoning?: string;
+  /** The output budget stopped this reply. It needs a continuation, not tools from a partial call. */
+  cutOff?: boolean;
+  /** A provider-delivered call retained for the continuation, never executed before it is whole. */
+  partialCalls?: ToolCall[];
 }
 
 /** The longest reasoning summary that is journaled. */
@@ -57,8 +62,10 @@ function readUsage(raw: unknown): Usage | undefined {
   const input = count(u.prompt_tokens ?? u.input_tokens);
   const output = count(u.completion_tokens ?? u.output_tokens);
   if (input === undefined || output === undefined) return undefined;
-  const cached = count(((u.prompt_tokens_details ?? u.input_tokens_details) as { cached_tokens?: unknown } | null | undefined)?.cached_tokens);
-  return cached === undefined ? { input, output } : { input, output, cached };
+  const details = (u.prompt_tokens_details ?? u.input_tokens_details) as { cached_tokens?: unknown; image_tokens?: unknown } | null | undefined;
+  const cached = count(details?.cached_tokens);
+  const images = count(details?.image_tokens);
+  return { input, output, ...(cached === undefined ? {} : { cached }), ...(images === undefined ? {} : { images }) };
 }
 
 /** A reply without the keys it has nothing for. */
@@ -70,6 +77,18 @@ function withExtras(reply: Reply, usage: Usage | undefined, reasoning: string | 
 
 const dataUrl = (image: Image): string => `data:${image.mime};base64,${image.data}`;
 const names = (images: Image[]): string => images.map((image) => image.name).join(', ');
+
+/** Adjacent stimuli remain distinguishable, but endpoints see one user turn rather than a role sequence some reject. */
+function joinedStimuli(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const message of messages) {
+    const previous = out.at(-1);
+    if (previous?.role !== 'user' || message.role !== 'user') { out.push(message); continue; }
+    const text = [previous.content, message.content].filter((part): part is string => typeof part === 'string' && part !== '').join('\n\n[next stimulus]\n\n');
+    out[out.length - 1] = { ...previous, content: text || null, images: [...(previous.images ?? []), ...(message.images ?? [])] };
+  }
+  return out;
+}
 
 /**
  * The list as chat-completions takes it. A user message with images becomes text and `image_url`
@@ -84,7 +103,7 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
     if (held.length > 0) out.push({ role: 'user', content: [{ type: 'text', text: `[the result of look, as an image: ${names(held)}]` }, ...held.map(part)] });
     held = [];
   };
-  for (const m of messages) {
+  for (const m of joinedStimuli(messages)) {
     if (m.role !== 'tool') flush();
     const { images, ...rest } = m;
     if (!images || images.length === 0) out.push(rest);
@@ -97,7 +116,39 @@ export function toChatMessages(messages: ChatMessage[]): unknown[] {
   return out;
 }
 
-export interface ProviderCallOptions { signal?: AbortSignal }
+export interface RequestTiming { durationMs: number; firstByteMs: number | null }
+export interface ProviderCallOptions {
+  signal?: AbortSignal;
+  maxOutputTokens?: number;
+  onCacheProbe?: (data: CacheProbe) => void;
+  onTiming?: (timing: RequestTiming) => void;
+  /** Internal Responses-stream hook installed by timedProvider; called for the first body chunk. */
+  onFirstByte?: () => void;
+  /** A completed output-text fragment from a Responses stream. */
+  onTextDelta?: (delta: string) => void;
+}
+/** Time a provider call across protocol retries. Telemetry failures never replace the model's reply or error. */
+function timedProvider(provider: Provider): Provider {
+  return async (messages, tools, options) => {
+    if (options?.onTiming === undefined) return provider(messages, tools, options);
+    const started = performance.now();
+    let firstByteMs: number | null = null;
+    let reported = false;
+    const finish = (): void => {
+      if (reported) return;
+      reported = true;
+      try { options.onTiming?.({ durationMs: Math.round(performance.now() - started), firstByteMs }); } catch { /* telemetry only */ }
+    };
+    const instrumented: ProviderCallOptions = { ...options, onFirstByte: () => { if (firstByteMs === null) firstByteMs = Math.round(performance.now() - started); } };
+    try { return await provider(messages, tools, instrumented); } finally { finish(); }
+  };
+}
+function outputLimit(options?: ProviderCallOptions): number | undefined {
+  const value = options?.maxOutputTokens;
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 32768))
+    throw new Error("maxOutputTokens must be an integer from 1 to 32768");
+  return value;
+}
 export type Provider = (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions) => Promise<Reply>;
 
 export interface ProviderConfig {
@@ -120,13 +171,27 @@ export class ProviderError extends Error {
   readonly status: number | null;
   /** What the provider said, as far as it was read. */
   readonly body: string;
+  /** Retry-After, when the provider supplied one; milliseconds from the error's creation. */
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, status: number | null, body = '') {
+  constructor(message: string, status: number | null, body = '', retryAfterMs: number | null = null) {
     super(message);
     this.name = 'ProviderError';
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+export function retryAfterMs(res: Response, now = Date.now()): number | null {
+  const value = res.headers.get('retry-after')?.trim();
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && /^\d+(?:\.\d+)?$/.test(value)) return Math.max(0, seconds * 1000);
+  // Date.parse accepts implementation-specific strings; HTTP dates are the only date form here.
+  if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
 }
 
 /** What a call is rejected with when its caller cancelled it (`options.signal`). Not a failure of the provider: nothing is to be tried again. */
@@ -181,7 +246,9 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
   return async (messages, tools, options) => {
     // Cancelled before it began: nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
+    const limit = outputLimit(options);
     const body: Record<string, unknown> = { model: cfg.model, messages: toChatMessages(messages) };
+    if (limit !== undefined) body.max_completion_tokens = limit;
     if (tools.length > 0) body.tools = tools.map((t) => ({ type: 'function', function: t }));
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
@@ -201,18 +268,24 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
       if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
       throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
     }
-    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text);
-    let parsed: { choices?: { message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
+    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}`, res.status, text, retryAfterMs(res));
+    let parsed: { choices?: { finish_reason?: unknown; message?: { content?: WireContent; tool_calls?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[]; usage?: unknown } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
       throw new ProviderError(`provider reply is not JSON: ${text.slice(0, 2000)}`, res.status, text);
     }
-    const message = parsed?.choices?.[0]?.message;
+    const choice = parsed?.choices?.[0];
+    const message = choice?.message;
     if (!message) throw new ProviderError(`provider reply has no message: ${text.slice(0, 2000)}`, res.status, text);
     // Endpoints that show a model's reasoning do it under one of two names; neither is in the protocol itself.
     const reasoning = tidyReasoning(message.reasoning_content) ?? tidyReasoning(message.reasoning);
-    return withExtras({ text: contentText(message.content), toolCalls: readCalls(message.tool_calls) }, readUsage(parsed?.usage), reasoning);
+    const cutOff = choice?.finish_reason === 'length';
+    const content = contentText(message.content);
+    return withExtras({
+      text: cutOff ? `${content}${content === '' ? '' : '\n'}[this reply was cut off by the provider: length]` : content,
+      toolCalls: cutOff ? [] : readCalls(message.tool_calls), ...(cutOff ? { cutOff, partialCalls: readCalls(message.tool_calls) } : {}),
+    }, readUsage(parsed?.usage), reasoning);
   };
 }
 
@@ -225,6 +298,10 @@ export function openAiProvider(cfg: ProviderConfig): Provider {
 // Only the summary of the reasoning is asked for and read, for the owner to see.
 
 export interface ResponsesConfig {
+  /** ChatGPT session affinity, our own identity; absent on API-key routes. */
+  sessionId?: string;
+  /** Stable per-individual routing hint. */
+  cacheKey?: string;
   /** Where requests go; asked before each one. */
   baseUrl: () => string;
   /** The bearer token. Asked for before each request, and once more, naming the token refused, after a 401. */
@@ -253,7 +330,7 @@ export function toResponsesInput(messages: ChatMessage[], namespace?: string): {
   const system: string[] = [];
   const input: Item[] = [];
   const part = (image: Image): Item => ({ type: 'input_image', image_url: dataUrl(image) });
-  for (const m of messages) {
+  for (const m of joinedStimuli(messages)) {
     if (m.role === 'system') {
       if (m.content) system.push(m.content);
     } else if (m.role === 'tool') {
@@ -299,7 +376,7 @@ function hint(body: string): string {
  * an error event, or a stream that just ends is a ProviderError, with the status the error's code
  * stands for, so the retry rules treat it as they would the same answer without a stream.
  */
-export function readResponsesStream(stream: string): Reply {
+export function readResponsesStream(stream: string, onTextDelta?: (delta: string) => void): Reply {
   const done: Item[] = [];
   type End = { type: string; response?: Item; code?: unknown; message?: unknown };
   let last: End | null = null;
@@ -312,6 +389,7 @@ export function readResponsesStream(stream: string): Reply {
     } catch {
       continue; // half an event, where the stream broke off
     }
+    if (event.type === 'response.output_text.delta' && typeof (event as { delta?: unknown }).delta === 'string') onTextDelta?.((event as { delta: string }).delta);
     if (event.type === 'response.output_item.done' && typeof event.item === 'object' && event.item !== null) done.push(event.item as Item);
     if (event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete' || event.type === 'error') {
       last = event as End;
@@ -327,17 +405,20 @@ export function readResponsesStream(stream: string): Reply {
   const sent = last.response?.output;
   const output = (Array.isArray(sent) && sent.length > 0 ? sent as Item[] : done).filter((item) => item.status !== 'in_progress' && item.status !== 'incomplete');
   let text = output.filter((item) => item.type === 'message').map((item) => contentText(item.content as WireContent)).join('');
+  let cutOff = false;
   if (last.type === 'response.incomplete') {
     const reason = (last.response?.incomplete_details as { reason?: unknown } | undefined)?.reason;
     text += `${text === '' ? '' : '\n'}[this reply was cut off by the provider: ${String(reason ?? 'no reason given')}]`;
+    cutOff = reason === 'max_output_tokens';
   }
   const calls = output.filter((item) => item.type === 'function_call');
   // A reasoning item carries its summary as a list of `summary_text` parts; one item per stretch of reasoning.
   const summaries = output.filter((item) => item.type === 'reasoning').map((item) => contentText(
     Array.isArray(item.summary) ? item.summary.flatMap((s: unknown) => [s, { text: '\n\n' }]) : null,
   ));
+  const parsedCalls = readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } })));
   return withExtras(
-    { text, toolCalls: readCalls(calls.map((c) => ({ id: c.call_id, function: { name: c.name, arguments: c.arguments } }))) },
+    { text, toolCalls: cutOff ? [] : parsedCalls, ...(cutOff ? { cutOff, partialCalls: parsedCalls } : {}) },
     readUsage(last.response?.usage), tidyReasoning(summaries.join('')),
   );
 }
@@ -348,6 +429,7 @@ function saysNoSummary(err: unknown): boolean {
 }
 
 export function responsesProvider(cfg: ResponsesConfig): Provider {
+  const probe = cacheProbe();
   const send = cfg.fetch ?? fetch;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const token = async (rejected?: string): Promise<string> => {
@@ -363,8 +445,11 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
   const once = async (messages: ChatMessage[], tools: ToolSpec[], options?: ProviderCallOptions): Promise<Reply> => {
     // Cancelled before it began, or between the two tries below: no token is asked for and nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
+    const limit = outputLimit(options);
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
+    if (limit !== undefined) body.max_output_tokens = limit;
+    if (cfg.cacheKey) body.prompt_cache_key = cfg.cacheKey;
     if (instructions !== '') body.instructions = instructions;
     if (tools.length > 0) body.tools = toResponsesTools(tools, cfg.namespace);
     // Without this the reasoning comes back with no summary at all. `auto` is the most detailed one the model has.
@@ -376,11 +461,12 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       try {
         // Cancelled while the token was fetched or renewed: the request is not made.
         if (options?.signal?.aborted) throw cancelled();
+        if (options?.onCacheProbe) options.onCacheProbe(probe(body));
         say({ asked, step: 'asked', received: 0 });
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
           // The user agent is teneral's own name and version (brain/providers.ts): the truth about who is asking.
-          headers: { 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
+          headers: { ...(cfg.sessionId ? { 'session-id': cfg.sessionId } : {}), 'content-type': 'application/json', accept: 'text/event-stream', authorization: `Bearer ${bearer}`, 'user-agent': userAgent() },
           body: JSON.stringify(body),
           signal,
         });
@@ -390,6 +476,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         const decoder = new TextDecoder();
         let text = '';
         for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          options?.onFirstByte?.();
           const piece = decoder.decode(chunk, { stream: true });
           text += piece;
           feed(piece);
@@ -412,8 +499,8 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
       const next = await token(bearer);
       if (next !== bearer) ({ res, text } = await post(bearer = next));
     }
-    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text);
-    return readResponsesStream(text);
+    if (!res.ok) throw new ProviderError(`provider answered ${res.status}: ${text.slice(0, 2000)}.${hint(text)}`, res.status, text, retryAfterMs(res));
+    return readResponsesStream(text, options?.onTextDelta);
   };
   return async (messages, tools, options) => {
     try {
@@ -448,15 +535,16 @@ export function connect(env: Record<string, string | undefined>, send?: typeof f
   };
   const entry = providerFor(env.TENERAL_PROVIDER);
   const model = need('TENERAL_MODEL');
-  if (entry.wire === 'chat') return openAiProvider({ baseUrl: need('TENERAL_BASE_URL'), apiKey: need('TENERAL_API_KEY'), model, fetch: send });
+  if (entry.wire === 'chat') return timedProvider(openAiProvider({ baseUrl: need('TENERAL_BASE_URL'), apiKey: need('TENERAL_API_KEY'), model, fetch: send }));
+  const cacheKey = env.TENERAL_ID;
   const namespace = entry.tools === 'namespace' ? 'teneral' : undefined;
   if (entry.auth === 'key' || env.TENERAL_API_KEY) {
     const baseUrl = need('TENERAL_BASE_URL');
     const key = need('TENERAL_API_KEY');
-    return responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, fetch: send });
+    return timedProvider(responsesProvider({ baseUrl: () => baseUrl, token: async () => key, model, namespace, cacheKey, fetch: send }));
   }
   const dir = need('TENERAL_AUTH');
-  return responsesProvider({
-    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, fetch: send,
-  });
+  return timedProvider(responsesProvider({
+    baseUrl: () => apiBase(dir, entry.id), token: (rejected) => accessToken(dir, { id: entry.id, rejected }), model, namespace, cacheKey, sessionId: env.TENERAL_ID, fetch: send,
+  }));
 }

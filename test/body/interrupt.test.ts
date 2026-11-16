@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
+import { known } from '../../brain/known';
+import { standing } from '../../brain/owned';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
+import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
 
 // The body as the stem starts it, `bun body/main.ts`, with a stand-in for the model on a local
@@ -15,8 +18,11 @@ const ROOT = join(import.meta.dir, '..', '..');
 interface Asked { messages: { role: string; content: unknown }[]; aborted: boolean }
 type Answer = (n: number, asked: Asked) => Response | Promise<Response>;
 
-const says = (text: string, calls: { id: string; command: string }[] = []): Response => Response.json({
-  choices: [{ message: { content: text, tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: c.command }) } })) } }],
+const reply = (message: Record<string, unknown>): Response => Response.json({ choices: [{ message }] });
+const tool = (id: string, name: string, args: Record<string, unknown>) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+
+const says = (text: string, calls: { id: string; command: string }[] = []): Response => reply({
+  content: text, tool_calls: calls.map(c => tool(c.id, 'bash', { command: c.command })),
 });
 /** An answer that never comes. */
 const never = (): Promise<Response> => new Promise(() => {});
@@ -27,14 +33,30 @@ afterEach(() => {
 });
 
 /** A life that has already said its first words and is at rest, unless `seed` says otherwise. */
-function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
+function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => void) | boolean, lookAfterEveryTurn = false) {
+  const seed = typeof seedOrLook === 'function' ? seedOrLook : undefined;
+  if (typeof seedOrLook === 'boolean') lookAfterEveryTurn = seedOrLook;
+  // Do not add an `undefined` argument before the flag: Bun's TS transform can drop the last one.
   const dir = mkdtempSync(join(tmpdir(), 'teneral-interrupt-'));
   const journal = join(dir, 'memory', 'journal.jsonl');
   const owner = join(dir, 'owner');
   const workspace = join(dir, 'workspace');
   mkdirSync(workspace, { recursive: true });
-  appendEvent(journal, 'g0', { type: 'stimulus', source: 'birth', text: 'Hello.' });
-  appendEvent(journal, 'g0', { type: 'assistant', text: 'Hello. I am here.', toolCalls: [] });
+  mkdirSync(join(dir, 'soul'), { recursive: true });
+  writeFileSync(join(dir, 'soul', 'identity.md'), '# Test agent\n');
+  // mutate requires a real commit descending from the running generation, even in this fixture.
+  for (const args of [
+    ['init', '-q'], ['config', 'user.name', 'test'], ['config', 'user.email', 'test@localhost'],
+    ['commit', '--allow-empty', '-q', '-m', 'running generation'],
+    ['commit', '--allow-empty', '-q', '-m', 'candidate'],
+  ]) {
+    const run = Bun.spawnSync(['git', ...args], { cwd: workspace });
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString());
+  }
+  const history = Bun.spawnSync(['git', 'log', '--format=%H', '--reverse'], { cwd: workspace }).stdout.toString().trim().split('\n');
+  const commit = history[0]!;
+  appendEvent(journal, commit, { type: 'stimulus', source: 'birth', text: 'Hello.' });
+  appendEvent(journal, commit, { type: 'assistant', text: 'Hello. I am here.', toolCalls: [] });
   seed?.(journal, owner);
   const asked: Asked[] = [];
   const server = Bun.serve({
@@ -54,29 +76,35 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
     cwd: dir,
     env: {
       PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
-      TENERAL_GEN: 'g1', TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
+      TENERAL_GEN: commit, TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
+      ...(lookAfterEveryTurn ? { TENERAL_REFLECT_AFTER_TURN: '1' } : { TENERAL_REFLECT_AFTER_TURN: '0' }),
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
+      // This test is about interruption, not trimming. Keep enough room after the real composed
+      // prompt and tool specifications to show the interrupted exchange on the next request.
+      TENERAL_CONTEXT_CHARS: '100000',
     },
-    stdin: 'ignore', stdout: 'ignore', stderr: 'pipe',
+    // Keep the foreground terminal channel available: these tests also type /quit into it.
+    stdin: process.env.MICA_TEST_BACKGROUND === '1' ? 'ignore' : 'pipe', stdout: 'ignore', stderr: 'pipe',
   });
   let stderr = '';
   void (async () => {
     const decoder = new TextDecoder();
     for await (const chunk of body.stderr) stderr += decoder.decode(chunk, { stream: true });
   })().catch(() => {});
-  ends.push(() => { body.kill('SIGKILL'); void server.stop(true); });
+  // Close the input as well as killing: a foreground stdin reader may own the PTY/pipe.
+  ends.push(() => { body.stdin?.end(); body.kill('SIGKILL'); void server.stop(true); });
   const events = (): JournalEvent[] => readEvents(journal);
   const types = (): string[] => events().slice(2).map((e) => e.type);
   /** Wait until `seen` holds, or fail saying what there was instead. */
-  const until = async (what: string, seen: () => boolean, ms = 10_000): Promise<void> => {
+  const until = async (what: string, seen: () => boolean, ms = 7_000): Promise<void> => {
     for (const began = Date.now(); Date.now() - began < ms;) {
       if (seen()) return;
       await Bun.sleep(15);
     }
-    throw new Error(`never happened: ${what}\njournal: ${types().join(', ')}\nasked: ${asked.length}\nstderr: ${stderr}`);
+    throw new Error(`never happened: ${what}\njournal: ${JSON.stringify(events().slice(-12).map(e => ({ type: e.type, source: (e as { source?: unknown }).source, text: (e as { text?: unknown }).text, kind: (e as { kind?: unknown }).kind, data: (e as { data?: unknown }).data })))}\nasked: ${asked.length}\nexit: ${body.exitCode}\nstderr: ${stderr}`);
   };
-  return { dir, journal, owner, workspace, asked, body, events, types, until, stderr: () => stderr };
+  return { dir, journal, owner, workspace, asked, body, events, types, until, lookAfterEveryTurn, stderr: () => stderr };
 }
 
 const alive = (pid: number): boolean => {
@@ -87,6 +115,158 @@ const alive = (pid: number): boolean => {
     return false;
   }
 };
+
+test('a terminal line read during a mutation turn is answered before generation hand-off', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const l = life(async (n, asked) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('m1', 'mutate', { motive: 'test hand-off' })] });
+    if (n === 2) { await hold; return says('Mutation requested.'); }
+    expect(asked.messages.some(m => m.role === 'user' && m.content === 'keep my late line')).toBe(true);
+    return says('Kept.');
+  });
+  // Never release the provider if an assertion or timeout fails.
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin!.write('start\n');
+  await l.until('mutation requested', () => l.asked.length === 2);
+  l.body.stdin!.write('keep my late line\n');
+  await l.until('the line is journaled', () => l.events().some(e => e.type === 'stimulus' && e.source === 'terminal' && e.text === 'keep my late line'));
+  release();
+  await l.until('the late-line answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Kept.'));
+  const exit = await Promise.race([l.body.exited, Bun.sleep(1000).then(() => 'still running' as const)]);
+  expect(exit).toBe(75);
+  expect(l.events().filter(e => e.type === 'mutation.requested')).toHaveLength(1);
+  expect(needsTurn(l.events())).toBe(false);
+}, 10_000);
+
+test('a reply that records a waiting dependency still gets one bounded look ahead', async () => {
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
+      task: 'Finish the repository change', status: 'waiting', next: 'Wait for the existing check.',
+      outcome: 'The change is merged.', evidence: 'The check is running.',
+    })] });
+    if (n === 2) return says('Waiting for the check.');
+    if (n === 3) return reply({ content: 'Nothing' });
+    return never();
+  }, undefined, true);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'finish the repository change');
+  await l.until('the dependency answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Waiting for the check.'));
+  await l.until('the bounded look ahead despite open waiting work', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
+  await l.until('one bounded follow-up for the existing waiting work', () => l.asked.length === 4);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(l.events().find(e => e.type === 'stimulus' && e.source === 'clock')).toMatchObject({ text: expect.stringContaining('Wait for the existing check.') });
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(4);
+}, 10_000);
+
+test('closing the last ready commitment reflects and wakes new work immediately', async () => {
+  let mark = '';
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('d1', 'done', { intention: mark, how: 'Finished.' })] });
+    if (n === 2) return says('Fixed.');
+    if (n === 3) return reply({ content: 'Agenda:\n- [] The next ready commitment.' });
+    if (n === 4) return reply({ content: '', tool_calls: [tool('d2', 'done', { intention: known(standing(readEvents(l.journal))).intentions.find(i => i.text === 'The next ready commitment.')!.mark, how: 'Finished.' })] });
+    if (n === 5) return says('Continuing.');
+    return never();
+  }, (journal) => {
+    const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The first ready commitment.', origin: 'own', episode: 'fixture' } });
+    mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+  }, true);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'start');
+  await l.until('the reply that completes the first commitment', () => l.asked.length === 2 || l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
+  await l.until('the immediate reflection', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
+  await l.until('the immediate agenda turn', () => l.asked.length === 5);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(5);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+}, 10_000);
+
+test('a reflection that needs an owner decision gets its question turn immediately', async () => {
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
+      task: 'The existing answer', status: 'waiting', next: 'Wait for the owner.',
+      outcome: 'The owner answers.', evidence: 'The dependency is recorded.',
+    })] });
+    if (n === 2) return says('Waiting.');
+    if (n === 3) return reply({ content: 'Ask:\n- [] May I publish the prepared correction?' });
+    if (n === 4) return says('I3dbfbe44: may I publish the prepared correction?');
+    return never();
+  }, undefined, true);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'record the dependency');
+  await l.until('the reflection produces a question', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { origin?: unknown }).origin === 'ask' && (e.data as { text?: unknown }).text === 'May I publish the prepared correction?'));
+  await l.until('the pulse asks the new question', () => l.events().some(e => e.type === 'assistant' && e.text.startsWith('I3dbfbe44:')));
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'terminal')).toHaveLength(1);
+  expect(known(standing(readEvents(l.journal))).intentions.some(i => i.origin === 'ask' && i.put !== undefined)).toBe(true);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(4);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+}, 10_000);
+
+test('a /heart line during a turn waits for its reply and then takes the agenda turn', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const l = life(async n => {
+    if (n === 1) { await hold; return says('Finished first.'); }
+    if (n === 2) return says('Pulse answered.');
+    return never();
+  });
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'start');
+  await l.until('the running request', () => l.asked.length === 1);
+  tell(l.owner, '/heart');
+  await Bun.sleep(80);
+  expect(l.asked).toHaveLength(1);
+  expect(l.asked[0]!.aborted).toBe(false);
+  expect(l.events().some(e => e.type === 'stimulus' && e.text === '/heart')).toBe(false);
+  release();
+  await l.until('the pulse reply', () => l.events().some(e => e.type === 'assistant' && e.text === 'Pulse answered.'));
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(l.asked).toHaveLength(2);
+}, 10_000);
+
+test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {
+  const l = life(() => never());
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin!.write('think for a long time\n');
+  await l.until('the request', () => l.asked.length === 1);
+  const pressed = Date.now();
+  l.body.stdin!.write('/quit\n');
+  const exited = await l.body.exited;
+  expect(exited).toBe(0);
+  expect(Date.now() - pressed).toBeLessThan(2000);
+  expect(l.types()).toContain('turn.interrupted');
+  expect(l.asked[0]!.aborted).toBe(true);
+  expect(needsTurn(l.events())).toBe(false);
+}, 10_000);
+
+test('foreground /quit while bash runs reports every tool call, kills its tree and exits', async () => {
+  const command = 'echo begun; sleep 303 & echo $! > quit-child.pid; wait';
+  const l = life(() => says('I will wait.', [{ id: 'q1', command }, { id: 'q2', command: 'touch quit-second-ran' }]));
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin!.write('sleep\n');
+  await l.until('the command under way', () => existsSync(join(l.workspace, 'quit-child.pid')));
+  const child = Number(readFileSync(join(l.workspace, 'quit-child.pid'), 'utf8'));
+  const pressed = Date.now();
+  l.body.stdin!.write('/quit\n');
+  expect(await l.body.exited).toBe(0);
+  expect(Date.now() - pressed).toBeLessThan(2000);
+  expect(alive(child)).toBe(false);
+  const results = l.events().flatMap(e => e.type === 'tool.result' ? [e] : []);
+  expect(results).toHaveLength(2);
+  expect(results[0]).toMatchObject({ callId: 'q1', ok: false });
+  expect(results[0]!.output).toContain('[interrupted]');
+  expect(results[1]).toMatchObject({ callId: 'q2', ok: false, output: '[not started] Your owner interrupted this turn before this tool ran.' });
+  expect(l.types().at(-1)).toBe('turn.interrupted');
+  expect(existsSync(join(l.workspace, 'quit-second-ran'))).toBe(false);
+}, 10_000);
 
 test('interrupted while it waits for the model: the request is dropped at the provider, the journal says so, and the body waits without asking again', async () => {
   const l = life((n) => (n === 1 ? never() : says('Stopped before I had begun. What now?')));
@@ -109,7 +289,8 @@ test('interrupted while it waits for the model: the request is dropped at the pr
   await l.until('the reply', () => l.types().at(-1) === 'assistant');
   expect(l.asked).toHaveLength(2);
   const shown = l.asked[1]!.messages.map((m) => String(m.content));
-  expect(shown.slice(-3).map((text) => text.slice(0, 50))).toEqual(['think about this for a long time', '[interrupted] Your owner interrupted your turn her', 'never mind, say hello']);
+  expect(shown.at(-1)?.startsWith('think about this for a long time\n\n[next stimulus]\n\n[interrupted] Your owner interrupted your turn here.')).toBe(true);
+  expect(shown.at(-1)?.endsWith('\n\n[next stimulus]\n\nnever mind, say hello')).toBe(true);
   expect(l.stderr()).toContain('[interrupted]');
   expect(l.stderr()).not.toContain('[turn failed]');
   expect(l.stderr()).not.toContain('[retry]');
@@ -135,7 +316,7 @@ test('interrupted while bash runs: the command, its child and its grandchild are
   await l.until('the interruption', () => l.types().includes('turn.interrupted'));
   expect(Date.now() - pressed).toBeLessThan(3000);
   await l.until('the processes gone', () => pids.every((p) => !alive(p)), 3000);
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.result', 'turn.interrupted']);
+  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.result', 'turn.interrupted']);
   const results = l.events().flatMap((e) => (e.type === 'tool.result' ? [e] : []));
   expect(results[0]).toMatchObject({ callId: 'c1', ok: false });
   expect(results[0]!.output).toMatch(/^\[interrupted\] Your owner interrupted this turn while this tool was running\..*\ninterrupted by your owner and killed, with everything it started\nbegun\n$/s);
@@ -148,7 +329,7 @@ test('interrupted while bash runs: the command, its child and its grandchild are
   // And it goes on from there when spoken to: both calls are shown answered, then the interruption.
   tell(l.owner, 'what happened?');
   await l.until('the reply', () => l.types().at(-1) === 'assistant');
-  expect(l.asked[1]!.messages.map((m) => m.role).slice(-5)).toEqual(['assistant', 'tool', 'tool', 'user', 'user']);
+  expect(l.asked[1]!.messages.map((m) => m.role).slice(-4)).toEqual(['assistant', 'tool', 'tool', 'user']);
 }, 30_000);
 
 test('an interrupt while nothing is owed is dropped, also one left from before this process: neither stops the turn that comes after', async () => {
@@ -158,17 +339,50 @@ test('an interrupt while nothing is owed is dropped, also one left from before t
     tell(owner, 'are you there?');
   });
   await l.until('the reply to the line that waited', () => l.types().at(-1) === 'assistant');
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'assistant']);
+  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant']);
   // At rest now.
   interrupt(l.owner);
   await l.until('the interrupt taken', () => readdirSync(l.owner).length === 0);
   await Bun.sleep(400);
-  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'assistant']);
+  expect(l.types()).toEqual(['generation.ready', 'stimulus', 'note', 'note', 'assistant']);
   tell(l.owner, 'and now?');
-  await l.until('the second reply', () => l.types().length === 7 && l.types().at(-1) === 'assistant');
+  await l.until('the second reply', () => l.types().length === 9 && l.types().at(-1) === 'assistant');
   expect(l.types()).not.toContain('turn.interrupted');
   expect(l.asked).toHaveLength(2);
   expect(l.asked.some((a) => a.aborted)).toBe(false);
+}, 30_000);
+
+test('an outsider arriving during a failed turn does not hurry the retry; the next owner line does', async () => {
+  let fail: (() => void) | undefined;
+  const first = new Promise<Response>((resolve) => {
+    fail = () => resolve(new Response('upstream is down', { status: 503 }));
+  });
+  const l = life((n) => n === 1 ? first : says(' answered after the owner wrote'));
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'hello?');
+  await l.until('the first request', () => l.asked.length === 1);
+  deliver(join(l.dir, 'inbox'), {
+    v: ENVELOPE_VERSION, id: 'background-1', from: 'other', to: 'test', replyTo: null,
+    ts: new Date().toISOString(), hops: 0, text: 'background traffic',
+  });
+  await l.until('the outsider is journaled', () => l.events().some(e => e.type === 'stimulus' && e.source === 'agent:other'));
+  fail!();
+  await l.until('the failed turn is waiting', () => l.stderr().includes('[retry] 1 in a row'));
+  const failure = l.events().findLast(e => e.type === 'note' && e.kind === 'turn.failed');
+  expect(failure?.type).toBe('note');
+  if (failure?.type === 'note') expect(typeof (failure.data as {retryAt?: unknown}).retryAt).toBe('string');
+  deliver(join(l.dir, 'inbox'), {
+    v: ENVELOPE_VERSION, id: 'background-2', from: 'other', to: 'test', replyTo: null,
+    ts: new Date().toISOString(), hops: 0, text: 'traffic during the retry wait',
+  });
+  await l.until('the wait is interrupted by an outsider', () => l.events().some(e => e.type === 'stimulus' && e.source === 'agent:other' && e.text.includes('background-2')));
+  await Bun.sleep(500);
+  expect(l.asked).toHaveLength(1);
+  expect(l.stderr()).not.toContain('something arrived meanwhile');
+  tell(l.owner, 'try now');
+  await l.until('the owner shortens the wait', () => l.asked.length === 2);
+  await l.until('the reply', () => l.types().at(-1) === 'assistant');
+  expect(l.body.exitCode).toBeNull();
 }, 30_000);
 
 test('interrupted while it waits to try a failed turn again: the turn is given up, and the body neither retries nor exits', async () => {

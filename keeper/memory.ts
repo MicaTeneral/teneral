@@ -54,7 +54,7 @@ function page(events: JournalEvent[], now: number): string[] {
   const asks = held.intentions.filter((i) => i.waits);
   if (todo.length > 0) {
     lines.push('', "Agenda, in the order a clock tick offers it (owed: taken on for someone; own: the agent's idea; yes: an idea you allowed):");
-    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin !== 'own' ? 'owed' : i.allowed === undefined ? 'own ' : `yes (${i.allowedIn ?? '?'})`}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}`));
+    lines.push(...todo.map((i) => `  ${i.mark}  ${i.origin !== 'own' ? 'owed' : i.allowed === undefined ? 'own ' : `yes (${i.allowedIn ?? '?'})`}${i.due === undefined ? '' : `  due ${i.due}`}  ${brief(i.text, 90)}${i.work === undefined ? '' : `\n           ${i.work.status}: ${brief(i.work.next, 110)}`}`));
   }
   const mine = asks.filter((i) => i.to === undefined);
   const others = asks.filter((i) => i.to !== undefined);

@@ -79,6 +79,7 @@ export function follower(asked: string, say: (pulse: Omit<Pulse, 'at'>) => void)
     rest += piece;
     const lines = rest.split('\n');
     rest = lines.pop() ?? '';
+    let recognized = false;
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
       let event: { type?: unknown; delta?: unknown } | null = null;
@@ -91,7 +92,11 @@ export function follower(asked: string, say: (pulse: Omit<Pulse, 'at'>) => void)
       if (next !== step) tail = '';
       step = next;
       if (next !== 'calling') tail = (tail + delta).slice(-TAIL_CHARS * 2);
+      // One network chunk may contain an entire exchange. Report every parsed transition;
+      // emitting only after the chunk would hide reasoning and writing behind its last call.
+      say({ asked, step, received, ...(tail === '' ? {} : { tail }) });
+      recognized = true;
     }
-    say({ asked, step, received, ...(tail === '' ? {} : { tail }) });
+    if (!recognized) say({ asked, step, received, ...(tail === '' ? {} : { tail }) });
   };
 }

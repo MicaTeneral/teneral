@@ -626,7 +626,7 @@ test('smoke: run for a sign-in provider, the body is told the provider, handed a
 function ownRepo(): { dir: string; seed: string } {
   const here = join(import.meta.dir, '..', '..');
   const { dir } = makeRepo({});
-  for (const name of ['body', 'brain', 'stem', 'immune', 'species', 'keeper', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
+  for (const name of ['body', 'brain', 'heart', 'stem', 'immune', 'species', 'keeper', 'BIRTH.md', 'package.json']) cpSync(join(here, name), join(dir, name), { recursive: true });
   // A lineage that pins organs runs these tests too, in its gates. Its body is smoked here with the organs the
   // gate run was given: the copy is shown the same cache. Run by hand with nothing given, it is smoked without them.
   const given = process.env.TENERAL_ORGANS;

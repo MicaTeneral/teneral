@@ -1,8 +1,9 @@
+import { acceptanceNotes } from '../body/acceptance';
 import type { JournalEvent } from './journal';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
 import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
-import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
+import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
 import { replyIsCurrent } from './shown';
@@ -65,6 +66,8 @@ export interface Sight {
   max?: number;
   /** Set once the provider refused a request because of its images: every image becomes a note. */
   refused?: boolean;
+  /** Content names this model/route has already refused, including notes from earlier turns. */
+  refusedImages?: ReadonlySet<string>;
 }
 
 /** A place in the conversation where an image belongs: the message, and the path its marker named (null: one marker too many). */
@@ -101,7 +104,7 @@ function fillSlots(slots: Slot[], sight: Sight): void {
   slots.forEach(({ message, path }, i) => {
     const name = path?.split('/').at(-1) ?? '';
     const image = path === null ? `[image not available: more than ${IMAGES_PER_MESSAGE} images in one message]`
-      : sight.refused ? `[image not shown: the model or the route in use does not take images: ${name}]`
+      : sight.refused || sight.refusedImages?.has(name) ? `[image not shown: the model or the route in use does not take images: ${name}]`
       : i < earlier ? `[an image shown earlier: ${name}]`
       : sight.load(path);
     if (typeof image !== 'string') (message.images ??= []).push(image);
@@ -113,6 +116,8 @@ function fillSlots(slots: Slot[], sight: Sight): void {
   // No provider takes an empty text part; a message that is only images has no text at all. A tool's result is always text, if empty.
   for (const { message } of slots) if (message.content === '' && message.role === 'user') message.content = null;
 }
+
+  /** Characters the state of the work in hand may take at the end of a request. */
 
 const TOO_LARGE =
   '[context] The last exchange was too large to show and was dropped. Look at the current state before going on.';
@@ -146,7 +151,7 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
     const room = budgetChars - messages.slice(newest + 1).reduce((sum, m) => sum + size(m), 0);
     const m = messages[newest]!;
     // Only its text can be cut; its images count in full.
-    const text = room - (m.images?.length ?? 0) * IMAGE_CHARS;
+    const text = room - (m.images ?? []).reduce((sum, image) => sum + imageChars(image), 0);
     if (size(m) > room && text >= CLIP_MIN) messages[newest] = { ...m, content: clip(m.content ?? '', text - CLIP_NOTE) };
   }
   // What stands before the first user message can never be sent, so it is not counted as something to make room for.
@@ -171,6 +176,8 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
  */
 const LATE =
   '[context] Something arrived while you were writing your last reply; it is shown above, before that reply. Respond to it now.';
+const CONTINUE =
+  '[context] Your previous reply was cut off by the provider\'s output limit. Continue exactly where it stopped; do not repeat the fragment or call tools from an unfinished call.';
 
 const isPlainReply = (m: ChatMessage | undefined): m is ChatMessage => m?.role === 'assistant' && m.tool_calls === undefined;
 
@@ -220,7 +227,12 @@ export interface View extends Sizes {
 export function buildMessages(journaled: JournalEvent[], system: string, budgetChars = DEFAULT_BUDGET, sight?: Sight, view: View = {}): ChatMessage[] {
   const { ask } = view;
   // Without what the owner took back (brain/owned.ts): that is in the journal and in no request.
+  // Acceptance is derived from that same view. Stem records deliberately survive a take-back:
+  // forgetting the conversation does not cancel a candidate or consent that really happened.
   const events = standing(journaled);
+  const last = events.at(-1);
+  const continuation = last?.type === 'assistant' && reply(last).text.includes('[this reply was cut off by the provider:');
+  const accepted = acceptanceNotes(events);
   const out: ChatMessage[] = [];
   // For each message, the position in `events` of the event it was made from: what brain/logbook.ts cuts by.
   const origin: number[] = [];
@@ -241,7 +253,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
     const e = events[i]!;
     if (e.type === 'stimulus') {
       const message: ChatMessage = { role: 'user', content: stimulusText(e.source, e.text) };
-      if (sight && e.source === 'terminal') takeMarkers(message, slots);
+      if (sight && (e.source === 'terminal' || e.source === 'owner:zulip')) takeMarkers(message, slots);
       out.push(message);
       origin.push(i);
     } else if (e.type === 'assistant') {
@@ -264,6 +276,13 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
       }
       const { results, started } = answers(events, i);
       const wire: WireToolCall[] = [];
+      if (continuation && i === events.length - 1) {
+        // A truncated call cannot be executed. Omit it entirely: neither protocol can replay
+        // it without a fabricated result. The visible fragment is enough to continue.
+        if (content !== null) out.push({ role: 'assistant', content });
+        origin.push(i);
+        continue;
+      }
       const answered: ChatMessage[] = [];
       for (const call of calls) {
         const c = (typeof call === 'object' && call !== null ? call : {}) as { id?: unknown; name?: unknown; args?: unknown };
@@ -284,7 +303,7 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
       out.push({ role: 'user', content: STOPPED });
       origin.push(i);
     } else {
-      const note = stemNote(e) ?? backNote(e, MEMORY_MARK);
+      const note = stemNote(e) ?? accepted.get(e.id) ?? backNote(e, MEMORY_MARK);
       if (note !== null) {
         out.push({ role: 'user', content: note });
         origin.push(i);
@@ -295,8 +314,8 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   if (ask !== undefined) {
     out.push({ role: 'user', content: ask });
     origin.push(events.length);
-  } else if (isPlainReply(out.at(-1))) {
-    out.push({ role: 'user', content: LATE });
+  } else if (continuation || isPlainReply(out.at(-1))) {
+    out.push({ role: 'user', content: continuation ? CONTINUE : LATE });
     origin.push(events.length);
   }
   if (sight) fillSlots(slots, sight);
@@ -307,19 +326,21 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
   // What was remembered and no longer fits as it happened is shown as memories; the rest is cut to fit as before.
   const { head, seam, start } = logbook(events, out, origin, room, view);
   const taken = head.reduce((sum, m) => sum + size(m), 0);
-  return [{ role: 'system', content: prompt }, ...head, ...fit(seam === null ? out : [seam, ...out.slice(start)], room - taken)];
+  const fitted = fit(seam === null ? out : [seam, ...out.slice(start)], room - taken);
+  return [{ role: 'system', content: prompt }, ...head, ...fitted];
 }
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
 export function needsTurn(journaled: JournalEvent[]): boolean {
   let afterReply = false;
-  // What the owner took back asks for nothing any more.
+  // What the owner took back asks for nothing any more. Derive acceptance from that same view.
   const events = standing(journaled);
+  const accepted = acceptanceNotes(events);
   for (const e of events) {
     if (e.type === 'assistant') afterReply = reply(e).calls.length > 0 || !replyIsCurrent(events, e);
     // The owner ended that turn. What was unanswered stays so until something else arrives.
     else if (e.type === 'turn.interrupted') afterReply = false;
-    else if (e.type === 'stimulus' || stemNote(e) !== null) afterReply = true;
+    else if (e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id)) afterReply = true;
   }
   return afterReply;
 }

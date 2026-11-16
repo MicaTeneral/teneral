@@ -55,7 +55,7 @@ test('ask: a commit that changes the stem waits at gate approval, undecided, wit
   const next = change(work, { 'stem/k.ts': 'export const k = 2;\n', 'stem/new.ts': 'export const n = 1;\n', 'package.json': '{}\n', 'body/a.ts': 'export const a = 2;\n' });
   const r = await gate(work, seed, next, { mode: 'ask' });
   expect(r).toMatchObject({ ok: false, gate: 'approval', undecided: true });
-  expect(r.output.split('\n')[0]).toBe('this commit changes 3 paths outside `body/`, `brain/`, `test/body/`, `test/brain/`, `BACKLOG.md`: package.json, stem/k.ts, stem/new.ts');
+  expect(r.output.split('\n')[0]).toBe('this commit changes 3 paths outside `body/`, `brain/`, `heart/`, `test/body/`, `test/brain/`, `test/heart/`, `BACKLOG.md`: package.json, stem/k.ts, stem/new.ts');
   expect(r.output).toContain(`./one approve ${next.slice(0, 12)}`);
   expect(r.output).toContain('/approve in ./one talk');
   expect(r.output).toContain('ask again for this same commit');

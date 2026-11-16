@@ -62,16 +62,16 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
     '    /approve [commit]  approve the mutation the agent asked about, or the comm…',
     '    /tools             show or hide what each tool call returned',
     '    /generations       the generations this individual has lived in',
-    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 13`,
+    ` Tab completes · Enter runs · Esc closes · Up/Down choose${' '.repeat(15)}1 of 14`,
   ]);
   // The cursor the owner sees is still in the box, after the slash.
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 5 });
   // Down past the sixth: the list moves with the choice. Up from the first goes to the last.
   s.type(DOWN.repeat(7));
   expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/plain', '/usage']);
-  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 13$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 14$/);
   s.type(UP.repeat(8));
-  expect(listed(s)).toEqual(['/offers', '/plain', '/usage', '/memory', '/reasoning', '[/quit]']);
+  expect(listed(s)).toEqual(['/plain', '/usage', '/heart', '/memory', '/reasoning', '[/quit]']);
   s.type(DOWN);
   expect(listed(s).slice(0, 2)).toEqual(['[/help]', '/image']);
   s.type(`${CTRL_N}${CTRL_N}${CTRL_P}`);
@@ -82,10 +82,11 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   expect(rows(s.live()).slice(4)).toEqual([
     '  ▸ /help     the keys and commands',
     '    /history  print the earlier conversation that was read from the journal',
+    '    /heart    give the agenda one pulse now',
     ' Tab completes · Enter runs · Esc closes · Up/Down choose',
   ]);
   s.type(DOWN);
-  expect(listed(s)).toEqual(['/help', '[/history]']);
+  expect(listed(s)).toEqual(['/help', '[/history]', '/heart']);
   s.type('i');
   expect(listed(s)).toEqual(['[/history]']);
   // A letter no command goes on with: no list, and the footer is back.
@@ -177,14 +178,14 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   expect(s.app.closed).toBe(true);
 });
 
-test('every command in the table is carried out by the client, and none is sent to the agent', () => {
+test('every command in the table is carried out by the client; /heart alone is an owner pulse for the body', () => {
   for (const c of COMMANDS) {
     const s = stage(90, 40);
     settled(s);
     s.type(`${c.name}${takes(c) === 'required' ? ' 0000000' : ''}${ENTER}`);
     expect(typed(s)).toEqual(c.name === '/quit' ? [] : ['›']);
     expect(flowed(s)).not.toContain('is not a command here');
-    expect(channel(s)).toEqual([]);
+    expect(channel(s)).toEqual(c.name === '/heart' ? [['.txt', '/heart']] : []);
     expect(s.app.closed).toBe(c.name === '/quit');
   }
 });
@@ -242,10 +243,10 @@ test('Esc with the list open while the agent rests closes it without a word; Esc
   s.term.type('\x1b');
   s.term.type('[B');
   await Bun.sleep(120);
-  expect(listed(s)).toEqual(['/help', '[/history]']);
+  expect(listed(s)).toEqual(['/help', '[/history]', '/heart']);
   // A lone ESC is the key once nothing followed it.
   s.term.type('\x1b');
-  expect(listed(s)).toEqual(['/help', '[/history]']);
+  expect(listed(s)).toEqual(['/help', '[/history]', '/heart']);
   await Bun.sleep(120);
   expect(listed(s)).toEqual([]);
   expect(typed(s)).toEqual(['› /h']);
@@ -262,7 +263,7 @@ test('a path, a slash later in the line, two slashes and a text of several lines
   s.clock.at = 1300;
   // A path typed by hand: the list is there for its first letters only, as long as some command begins so.
   s.type('/h');
-  expect(listed(s)).toEqual(['[/help]', '/history']);
+  expect(listed(s)).toEqual(['[/help]', '/history', '/heart']);
   s.type('o');
   expect(listed(s)).toEqual([]);
   s.type('me/owner/notes.txt');
@@ -300,7 +301,7 @@ test('a path, a slash later in the line, two slashes and a text of several lines
   expect(s.all()).not.toMatch(/── teneral talk|is not a command/);
   // Part of a name pasted on one line is the same as typed.
   s.type(PASTE('/he'));
-  expect(listed(s)).toEqual(['[/help]']);
+  expect(listed(s)).toEqual(['[/help]', '/heart']);
 });
 
 test('a line from the history that looks like a command is shown as it is and not offered a list, so Up and Down still walk the history through it', () => {
@@ -415,7 +416,7 @@ test('at 40, 80 and 120 columns the list fits the width, its rows cut with a mar
     const live = rows(s.live());
     expect(listed(s)).toEqual(['[/help]', '/image', '/stop', '/approve', '/tools', '/generations']);
     for (const row of live) expect([...row].length).toBeLessThanOrEqual(cols - 1);
-    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 13$/);
+    expect(live.at(-1)).toMatch(/^ Tab completes · Enter runs.* {3,}1 of 14$/);
     expect(live[7]).toBe(cols === 40 ? '    /approve [commit]  approve the mut…' : cols === 80 ? '    /approve [commit]  approve the mutation the agent asked about, or the comm…' : '    /approve [commit]  approve the mutation the agent asked about, or the commit or offer named');
     s.type(`a${TAB}`);
     expect(typed(s)).toEqual(['› /approve']);
@@ -477,12 +478,13 @@ test('on a low screen fewer commands are shown and the list still follows the ch
   expect(s.app.closed).toBe(true);
 });
 
-test('with images attached the list stands under the box that holds them, and a command run leaves them attached', () => {
+test('with images attached the list stands under the box that holds them, and a command run leaves them attached', async () => {
   const s = stage(90, 30);
   settled(s);
   const file = join(s.p.root, 'plan.png');
   writeFileSync(file, png(640, 480));
   s.type(`/image ${file}${ENTER}`);
+  await s.ready();
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1 · png · 640×480 · \d+ B\]$/), '›']);
   s.type('/to');
   expectFrame('commands-with-image-90x30', s.all());
@@ -505,9 +507,10 @@ test('a locale that is not UTF-8 gets the list in ASCII', () => {
   settled(s);
   s.type('/h');
   expect(s.live()).toMatch(/^[\x20-\x7e\n]*$/);
-  expect(rows(s.live()).slice(-3)).toEqual([
+  expect(rows(s.live()).slice(-4)).toEqual([
     '  > /help     the keys and commands',
     '    /history  print the earlier conversation that was read from the journal',
+    '    /heart    give the agenda one pulse now',
     ' Tab completes | Enter runs | Esc closes | Up/Down choose',
   ]);
 });

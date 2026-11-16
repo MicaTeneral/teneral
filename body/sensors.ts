@@ -1,18 +1,24 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { archive, collect, type Arrival } from './envelope';
+import { peerName, readPeers } from './peers';
 import type { JournalEvent } from '../brain/journal';
+import { fromOwner } from '../brain/owned';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
 
 export interface Stimulus {
   /**
    * Which sensor produced it, and with that whose word it is. 'terminal' is the owner, shown to the model as plain user text.
-   * A sensor of any other channel names its source `owner:<channel>` for a message it has made sure is the owner's, and only
-   * for that: the channel itself must vouch for the sender, and the sender must be who the owner said they are there. Everything
-   * else it hears gets a name of its own, and is someone else's word however it is signed. See `fromOwner` in brain/owned.ts.
+   * A sensor of any other channel names its source `owner:<channel>` only after authenticating the configured owner there.
+   * Everything else gets its own source and remains someone else's word however it is signed. See `fromOwner` in brain/owned.ts.
    */
   source: string;
   text: string;
+}
+
+/** Only a source the body itself established as the owner's may hurry a failed-turn retry. */
+export function ownerStimulus(s: Stimulus): boolean {
+  return fromOwner(s.source);
 }
 
 /** Start sensing; call `emit` for each stimulus; return a function that stops it. */
@@ -55,6 +61,20 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
   return events.slice(newest + 1).some((later) => later.type === 'turn.interrupted' || (later.type === 'assistant' && !(later.toolCalls?.length > 0)));
 }
 
+export function clockText(date: Date): string {
+  return `Clock tick at ${date.toISOString()}. Your owner has not written since their last message. ` +
+    'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
+    'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks.';
+}
+
+/** Exact routine heartbeat, not any clock stimulus carrying a substantive query. */
+export function routineClock(text: string): boolean {
+  const timestamp = /^Clock tick at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\. Your owner has not written since their last message\./.exec(text)?.[1];
+  if (!timestamp) return false;
+  const date = new Date(timestamp);
+  return !Number.isNaN(date.getTime()) && text === clockText(date);
+}
+
 /**
  * A tick every `intervalMs`, so the agent gets time of its own. 0, or anything that is not a positive number, turns it off.
  * `mayTick` is asked before each one; body/main.ts passes `clockMayTick` over the journal and the soul.
@@ -74,19 +94,14 @@ export function clock(intervalMs: number, mayTick: () => boolean = () => true, a
       } catch {
         return;
       }
-      emit({
-        source: 'clock',
-        text: `Clock tick at ${new Date().toISOString()}. Your owner has not written since their last message. ` +
-          `If the work you were on waits for an answer from them, keep waiting for it and say so in one line; do not start something instead of it. ` +
-          `Questions you hold for them are not that kind of waiting. ${todo}`,
-      });
+      emit({ source: 'clock', text: `${clockText(new Date())} ${todo}` });
     }, Math.min(intervalMs, TIMER_MAX_MS));
     return () => clearInterval(timer);
   };
 }
 
 /** Messages other agents and programs dropped into this agent's inbox directory. */
-export function inbox(dir: string, intervalMs = 2000): Sensor {
+export function inbox(dir: string, id: string, intervalMs = 2000, peersFile?: string): Sensor {
   return (emit) => {
     const say = (err: unknown): string => (err instanceof Error ? err.message : String(err));
     // Files that failed in this process. Without this, one that was journaled but cannot be moved would be emitted on every poll.
@@ -99,9 +114,22 @@ export function inbox(dir: string, intervalMs = 2000): Sensor {
         archive(dir, arrival.file, 'rejected');
         return;
       }
+      if (e.to !== id) {
+        console.error(`[inbox] set aside ${arrival.file}: addressed to ${e.to}, not ${id}`);
+        archive(dir, arrival.file, 'rejected');
+        return;
+      }
       const reply = e.replyTo === null ? '' : `, in reply to ${e.replyTo}`;
+      // The name is display metadata, never sender authentication. A legacy peer named exactly
+      // like the id remains supported; an unmapped sender is visibly unknown. Preserve the raw id
+      // because replyTo is checked against the archived envelope, not against this label.
+      let name: string | undefined;
+      try { name = peersFile === undefined ? undefined : peerName(readPeers(peersFile), e.from); }
+      catch (err) { console.error(`[inbox] peer names unavailable: ${say(err)}`); }
+      const label = name ?? e.from;
+      const identity = peersFile === undefined ? '' : name !== undefined ? `, from ${e.from}` : ', from unknown sender';
       // Journal first, archive second: a crash in between repeats the message rather than losing it.
-      emit({ source: `agent:${e.from}`, text: `(message ${e.id}${reply}) ${e.text}` });
+      emit({ source: `agent:${label}`, text: `(message ${e.id}${identity}${reply}) ${e.text}` });
       archive(dir, arrival.file, 'seen');
     };
     // This runs in a timer, where anything thrown ends the process: a file that vanished between

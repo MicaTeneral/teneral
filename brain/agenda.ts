@@ -56,6 +56,15 @@ export function toAsk(held: Known, now: number): Intention[] {
 /** After this many ticks in a row in which nothing was done, a tick offers the next lines of the agenda instead of the same first ones. */
 export const PASSED_TICKS = 3;
 
+/** Whether a wake is time of the agent's own: a clock tick, or a reminder of a commitment the agent itself proposed. */
+export function ownWake(source: string, text: string, held: Pick<Known, 'intentions' | 'closed'>): boolean {
+  if (source === 'clock') return true;
+  if (source !== 'work') return false;
+  const mark = /^Resume (I[0-9a-zA-Z]{4,12})\b/.exec(text)?.[1];
+  const item = mark === undefined ? undefined : [...held.intentions, ...held.closed].find((i) => i.mark === mark);
+  return item?.origin === 'own' && (item.unsure !== true || item.allowed !== undefined);
+}
+
 /**
  * How many of the latest clock ticks in a row ended with nothing done: no tool was called between
  * the tick and whatever arrived next. A tick still being answered is not counted.
@@ -88,10 +97,7 @@ export function idleTicks(events: JournalEvent[]): number {
  * what is never done, or asking for what is always refused.
  */
 export interface Initiative {
-  /**
-   * Ideas of its own that needed no word: carried out, given up, still open. `undone` are those of the done whose record was
-   * written by a generation the stem later rolled back: the one outcome of an idea that the journal knows for certain.
-   */
+  /** Ideas of its own that needed no word: carried out, given up, still open. `undone` is the subset of `dropped` whose done record was written by a generation the stem later rolled back. */
   own: { done: number; dropped: number; open: number; undone: number };
   /** Ideas it was not sure of: the owner said yes, said no, has not answered. */
   asked: { yes: number; no: number; waiting: number };
@@ -108,10 +114,13 @@ export function initiative(events: JournalEvent[]): Initiative {
   const sure = (i: Intention): boolean => i.origin === 'own' && (i.unsure !== true || i.allowed !== undefined);
   const rolledBack = new Map<string, string>();
   for (const e of events) if (e.type === 'generation.rolledback') rolledBack.set(e.commit, e.ts);
+  // Only an actual done record can be undone; a dropped idea must not become a fresh cancellation on every later rollback.
   const undone = (i: Intention): boolean => i.ended === 'done' && i.endedGen !== undefined && (rolledBack.get(i.endedGen) ?? '') > (i.endedAt ?? '');
+  const wasDone = (i: Intention): boolean => sure(i) && i.ended === 'done' && !undone(i);
+  const wasDropped = (i: Intention): boolean => sure(i) && (i.ended === 'dropped' || undone(i));
   return {
     own: {
-      done: count((i) => sure(i) && i.ended === 'done'), dropped: count((i) => sure(i) && i.ended === 'dropped'),
+      done: count(wasDone), dropped: count(wasDropped),
       open: count((i) => sure(i) && i.ended === undefined), undone: count((i) => sure(i) && undone(i)),
     },
     asked: { yes: count((i) => i.unsure === true && i.allowed !== undefined), no: count((i) => i.ended === 'refused'), waiting: count((i) => i.unsure === true && i.waits && i.ended === undefined) },
@@ -124,7 +133,7 @@ export function initiative(events: JournalEvent[]): Initiative {
 export function initiativeText(m: Initiative): string {
   const parts: string[] = [];
   if (m.own.done + m.own.dropped + m.own.open > 0) {
-    parts.push(`of your own ideas ${m.own.done} were done${m.own.undone > 0 ? ` (${m.own.undone} of them in a generation that was then rolled back)` : ''}, ${m.own.dropped} given up, ${m.own.open} are open`);
+    parts.push(`of your own ideas ${m.own.done} were done, ${m.own.dropped} given up${m.own.undone > 0 ? ` (${m.own.undone} because their generation was rolled back)` : ''}, ${m.own.open} are open`);
   }
   if (m.asked.yes + m.asked.no + m.asked.waiting > 0) parts.push(`of the ideas you asked your owner about, ${m.asked.yes} got a yes, ${m.asked.no} a no, ${m.asked.waiting} wait`);
   if (m.questions.answered + m.questions.waiting > 0) parts.push(`of your questions ${m.questions.answered} were answered, ${m.questions.waiting} wait`);
@@ -146,16 +155,25 @@ export function ownSpend(events: JournalEvent[], now: number): number {
   return spent;
 }
 
-/** Whether it is time to look ahead: enough has been remembered since the last time. */
+/** Whether it is time to look ahead: enough memories, or an idle agenda with no own idea to carry it. */
 export function reflectionDue(events: JournalEvent[]): boolean {
   let since = 0;
+  let last = '';
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.type !== 'note') continue;
-    if (e.kind === REFLECTION_KIND) break;
+    if (e.kind === REFLECTION_KIND) {
+      last = e.ts;
+      break;
+    }
     if (e.kind === EPISODE_KIND && (e.data as { outcome?: unknown } | null)?.outcome !== 'quiet') since += 1;
   }
-  return since >= REFLECT_EVERY;
+  if (since >= REFLECT_EVERY) return true;
+  if (known(events).intentions.some((i) => i.origin === 'own' && !i.waits)) return false;
+  // Only idle ticks since the last look can make another one due. That look itself, or a reflection
+  // reached through new memories, is a fresh boundary: three new idle ticks are needed, not a loop.
+  const idle = idleTicks(events.filter((e) => e.ts > last));
+  return idle >= PASSED_TICKS;
 }
 
 /** What the agent is asked, after everything a turn would show it. */
@@ -236,10 +254,11 @@ export function parseLook(reply: string): Looked | { problem: string } {
 /**
  * Looks ahead once, when it is time: asks the agent what follows from what it remembers, and
  * journals what it sets down. Whatever comes of it, a record that it looked is journaled, so that
- * a model that will not answer in form is not asked again and again.
+ * a model that will not answer in form is not asked again and again. `now` is used once when the
+ * last ready commitment closes; its reflection record is still the cooldown boundary.
  */
-export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
-  if (!reflectionDue(events)) return 'nothing';
+export async function reflect(d: SleepDeps, events: JournalEvent[], now = false): Promise<Slept> {
+  if (!now && !reflectionDue(events)) return 'nothing';
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
   let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events))), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
@@ -298,25 +317,64 @@ const LISTED = 8;
  */
 export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS): string {
   if (!(everyMs > 0)) return '';
+  const held = known(events);
   let last = '';
   let worked = 0;
+  let pending = 0;
   let own = false;
+  const ownIdea = new Set<string>();
+  const ownItems = [...held.intentions, ...held.closed].filter((i) => i.origin === 'own' && (i.unsure !== true || i.allowed !== undefined));
+  const rolledBack = new Set<string>();
   for (const e of events) {
-    if (e.type === 'stimulus') own = e.source === 'clock';
+    if (e.type === 'stimulus') {
+      // A work reminder already names whose commitment it is. A clock tick only creates the
+      // possibility of initiative: its tools count when they name or close an idea of the agent's own.
+      own = e.source === 'work' && ownWake(e.source, e.text, held);
+      pending = 0;
+      continue;
+    }
+    // A done record a later generation undid is reportable work, but not a surviving success.
+    if (e.type === 'generation.rolledback' && !rolledBack.has(e.commit)) {
+      rolledBack.add(e.commit);
+      for (const i of [...held.intentions, ...held.closed]) {
+        if (i.origin === 'own' && i.ended === 'done' && i.endedGen === e.commit && (i.endedAt ?? '') < e.ts) ownIdea.add(i.id);
+      }
+      continue;
+    }
+    if (e.type === 'note' && e.kind === DONE_KIND && typeof e.data === 'object' && e.data !== null) {
+      const id = (e.data as { intention?: unknown }).intention;
+      const item = typeof id === 'string' ? held.closed.find((i) => i.id === id) : undefined;
+      if (item?.origin === 'own' && (item.unsure !== true || item.allowed !== undefined)) {
+        ownIdea.add(item.id);
+        // In a clock turn the tools alone cannot say whose work they advanced. A closure names the
+        // idea and settles that attribution; until then the steps remain only pending.
+        worked += pending;
+        pending = 0;
+      }
+      continue;
+    }
     if (e.type !== 'assistant') continue;
     const calls = Array.isArray(e.toolCalls) && e.toolCalls.length > 0;
-    if (REPORT_MARK.test(`${e.text}\n${calls ? JSON.stringify(e.toolCalls) : ''}`)) {
+    const words = `${e.text}\n${calls ? JSON.stringify(e.toolCalls) : ''}`;
+    if (REPORT_MARK.test(words)) {
       last = e.ts;
       worked = 0;
+      pending = 0;
     } else if (own && calls) worked += 1;
+    else if (calls) {
+      pending += 1;
+      if (ownItems.some((i) => words.includes(i.mark) || words.includes(i.id) || words.includes(i.text))) {
+        worked += pending;
+        pending = 0;
+      }
+    }
   }
   if (last !== '' && now - Date.parse(last) < everyMs) return '';
-  // Never told before: of the last week, not of a whole life.
+  // Never told before: of the last week, not of a whole life. Only the agent's own initiative, never delegated tasks.
   const since = last !== '' ? last : new Date(now - 7 * DAY_MS).toISOString();
-  const held = known(events);
   const brief = (text: string): string => (text.length > 120 ? `${text.slice(0, 119)}…` : text).replace(/\s+/g, ' ');
-  const ended = held.closed.filter((i) => (i.endedAt ?? '') > since && i.origin !== 'ask').slice(-LISTED).map((i) => `- ${i.ended}: ${brief(i.text)}`);
-  const added = held.intentions.filter((i) => i.at > since && i.origin === 'own' && !i.waits).slice(-LISTED).map((i) => `- ${i.mark} ${brief(i.text)}`);
+  const ended = [...held.intentions, ...held.closed].filter((i) => i.ended !== undefined && (i.endedAt ?? '') > since && ownIdea.has(i.id)).slice(-LISTED).map((i) => `- ${i.ended}${rolledBack.has(i.endedGen ?? '') ? ' (that generation was rolled back)' : ''}: ${brief(i.text)}`);
+  const added = held.intentions.filter((i) => i.at > since && i.origin === 'own' && !i.waits && !ownIdea.has(i.id)).slice(-LISTED).map((i) => `- ${i.mark} ${brief(i.text)}`);
   const waiting = held.intentions.filter((i) => i.waits && i.to === undefined).slice(-LISTED).map((i) => `- ${i.mark} ${brief(i.text)}`);
   if (ended.length + added.length === 0 && worked === 0) return '';
   const day = new Date(now).toISOString().slice(0, 10).replaceAll('-', '');
@@ -339,11 +397,15 @@ export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS)
  */
 export function offered(held: Known, now: number, idle = 0, report = ''): string {
   const today = new Date(now).toISOString().slice(0, 10);
-  const whole = agenda(held, today);
+  const listed = agenda(held, today);
+  // Ready work comes before waits. Otherwise a full page of dependencies can hide the one commitment
+  // that can actually advance, leaving the agent silent while the scheduler waits behind it.
+  const whole = listed.filter((i) => i.work?.status !== 'waiting');
   // What was offered and passed over several ticks running gives way to what stands after it, so that nothing behind
   // a line that cannot be acted on waits for ever. What is due keeps its place; the rest comes round again in turn.
   const come = whole.filter((i) => i.due !== undefined && i.due <= today);
   const rest = whole.filter((i) => !come.includes(i));
+  const waiting = listed.filter((i) => i.work?.status === 'waiting' && !i.waits);
   const turn = rest.length <= OFFERED ? 0 : (Math.floor(idle / PASSED_TICKS) * OFFERED) % rest.length;
   const todo = [...come, ...rest.slice(turn), ...rest.slice(0, turn)];
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
@@ -359,7 +421,10 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'What you say in your reply here your owner reads when they next come to you, and no one else does. A reminder is one line, not the case made again. '
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
-  if (todo.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda. If something is worth doing now all the same, do it; if not, say so in one line.`;
+  if (todo.length === 0) {
+    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; if not, say so in one line.`;
+    return `${report}${ask}One bounded follow-up for existing waiting commitments, with their concrete next step or dependency:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nNext/dependency: ${i.work?.next ?? ''}`).join('\n')}\nCheck whether the dependency still holds before waiting again; do not retry an external action without checking its receipt or new evidence. If nothing can be advanced, leave the concrete dependency recorded.`;
+  }
   const rows = todo.slice(0, OFFERED).map((i) => {
     const why = i.due !== undefined && i.due <= today ? `[due ${i.due}, which has come] ` : i.origin === 'own' ? '[your own idea] ' : '';
     return `${i.mark} ${why}${line(i.text)}`;

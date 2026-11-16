@@ -1,5 +1,8 @@
-import { appendEvent, readEvents, type JournalEvent } from './journal';
+import { acceptanceNotes } from "../body/acceptance";
+import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
+import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
+import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
@@ -14,6 +17,8 @@ export interface TurnDeps {
   system: () => string;
   ctx: ToolContext;
   onText?: (text: string) => void;
+  /** Incremental provider text; final `onText` is suppressed only for that reply. */
+  onDelta?: (delta: string) => void;
   /** Called with a tool's name just before it runs. */
   onTool?: (name: string) => void;
   maxRounds?: number;
@@ -21,8 +26,12 @@ export interface TurnDeps {
   budgetChars?: number;
   /** Characters of the conversation shown as it happened; what is older is shown as memories. Default: brain/logbook.ts. */
   tailChars?: number;
+  /** The budget chooser's state: set at turn start from the journal's measurements, journaled when it changes. */
+  budget?: BudgetDecision;
   /** How images are loaded and how many go in a request. Without it, no image is ever sent. */
   sight?: Sight;
+  /** Provider identity for persistent image refusals. Omit only in isolated tests. */
+  imageRoute?: ImageRoute;
   /** Aborts when the owner interrupts this turn (body/main.ts). The turn then ends as 'interrupted'. */
   signal?: AbortSignal;
   /** How long a running tool gets to stop by itself after that, before the turn ends without it. Default: two seconds. */
@@ -35,6 +44,28 @@ const CUT_BY_OWNER =
   '[interrupted] Your owner interrupted this turn while this tool was running. It may have partly run. Check the current state before repeating it.';
 const NOT_RUN_FOR_OWNER = '[not started] Your owner interrupted this turn before this tool ran.';
 const LEFT = Symbol('left behind');
+
+/** For tests: count only incremental suffix reads, not the one full read at turn start. */
+export const journalSuffixReads: { path: string; bytes: number }[] = [];
+
+/** One turn's journal view. Only the small suffix added during the turn is reparsed. */
+function turnJournal(journal: string): { read: () => JournalEvent[]; refresh: () => void } {
+  let events = readEvents(journal);
+  let offset = journalSize(journal);
+  return {
+    read: () => events,
+    refresh: () => {
+      const size = journalSize(journal);
+      // A journal only grows. Replacing or truncating it falls back to the full reader.
+      if (size < offset) events = readEvents(journal);
+      else {
+        journalSuffixReads.push({ path: journal, bytes: size - offset });
+        events = events.concat(readEventsFrom(journal, offset));
+      }
+      offset = size;
+    },
+  };
+}
 
 /** Resolves `ms` after `signal` aborts, for a tool that does not stop when asked. `stop` ends the waiting. */
 function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEFT>; stop: () => void } {
@@ -49,8 +80,9 @@ function leftBehind(signal: AbortSignal, ms: number): { gone: Promise<typeof LEF
 }
 
 /** Whether anything that calls for a reply was journaled after the first `shown` events. */
-function arrivedSince(journal: string, shown: number): boolean {
-  return readEvents(journal).slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || stemNote(e) !== null);
+function arrivedSince(events: JournalEvent[], shown: number): boolean {
+  const accepted = acceptanceNotes(events);
+  return events.slice(shown).some((e: JournalEvent) => e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id));
 }
 
 /**
@@ -69,49 +101,84 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   };
   const specs = d.tools.map((t) => t.spec);
   const specsSize = JSON.stringify(specs).length;
-  let budget = d.budgetChars ?? DEFAULT_BUDGET;
+  let budget = d.budget?.budgetChars ?? d.budgetChars ?? DEFAULT_BUDGET;
   // How much of the journal the model has been shown. The journal only grows, so everything past this is new to it.
   let shown = 0;
   // Set when the provider refused a request because of its images; holds for the rest of the turn.
   let blind = false;
+  // A length-limited answer gets one continuation per turn. A second cut-off stays visibly marked.
+  let continued = false;
+  const route = d.imageRoute;
+  const journal = turnJournal(d.journal);
+  const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
-    // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
-    const events = readEvents(d.journal);
+    // A sensor may have journaled a stimulus while a tool ran; read only that new suffix.
+    journal.refresh();
+    const events = journal.read();
     shown = events.length;
-    // A reply may be followed by a stimulus that arrived while it was being made. This
-    // boundary keeps that stimulus owed if the process dies before its extra round.
-    appendEvent(d.journal, d.gen, { type: 'note', kind: SHOWN_KIND, data: { through: events.at(-1)?.id ?? null } });
+    // Durable request boundary: a late stimulus before a finished reply must remain owed
+    // even if this process dies before the extra round. Older readers ignore this note.
+    appendEvent(d.journal, d.gen, { type: 'note', kind: SHOWN_KIND, data: { through: events.at(-1)?.id ?? null, ...(continued ? { continued: true } : {}) } });
     const system = d.system();
     let halved = false;
     let reply: Reply;
+    let streamed = false;
     for (;;) {
-      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind }, { tailChars: d.tailChars });
+      const messages = buildMessages(events, system, budget - specsSize, d.sight && { ...d.sight, refused: blind, refusedImages: learned }, { tailChars: d.tailChars });
       try {
-        reply = await d.provider(messages, specs, d.signal && { signal: d.signal });
+        let timing: { durationMs: number; firstByteMs: number | null } | undefined;
+        reply = await d.provider(messages, specs, { signal: d.signal, onCacheProbe: data => { appendEvent(d.journal, d.gen, { type: "note", kind: "cache.probe.v1", data: { ...data } }); }, onTiming: data => { timing = data; }, onTextDelta: delta => { if (delta !== '') { d.onDelta?.(delta); streamed = true; } } });
+        // What the provider charged, for the request-size chooser (body/adaptive-budget.ts).
+        // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
+        if (d.budget !== undefined) {
+          const chars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+          const images = messages.flatMap(m => m.images ?? []);
+          const estimatedImageTokens = images.reduce((sum, image) => sum + imageChars(image) / 4, 0);
+          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, ...(images.length > 0 ? { estimatedImageTokens } : {}), ...(reply.usage?.images === undefined ? {} : { imageTokens: reply.usage.images }), budget: d.budget.budgetChars, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
+        }
         break;
       } catch (err) {
         // Whatever the provider threw once the owner had interrupted, it is not a failure, and is not answered by asking again.
         if (d.signal?.aborted) return interrupted();
         if (!blind && messages.some((m) => m.images !== undefined) && saysNoImages(err)) {
           // One image the model or the route cannot take must not hold up the conversation: asked again with a note in its place.
+          // The route and content names, never bytes or credentials, make this retry unnecessary in later turns and processes.
+          if (route) {
+            const images = [...new Set(messages.flatMap(m => m.images?.map(image => image.name) ?? []))];
+            if (!images.every(name => learned.has(name))) {
+              appendEvent(d.journal, d.gen, { type: 'note', kind: IMAGE_REFUSAL_KIND, data: { route, images } });
+              images.forEach(name => learned.add(name));
+            }
+          }
           blind = true;
         } else if (!halved && saysTooLong(err)) {
           // Characters are only an estimate of tokens. Half is tried once and kept for the rest of the turn.
           budget = Math.floor(budget / 2);
           halved = true;
+          // Same gate as the decision/sent notes: only a chooser in play records measurements.
+          if (d.budget !== undefined) appendEvent(d.journal, d.gen, { type: 'note', kind: REFUSED_KIND, data: { chars: budget + specsSize } });
         } else throw err;
       }
     }
     // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
+    const journaledCalls = reply.cutOff === true && reply.partialCalls !== undefined ? reply.partialCalls : reply.toolCalls;
     appendEvent(d.journal, d.gen, {
-      type: 'assistant', text: reply.text, toolCalls: reply.toolCalls,
+      type: 'assistant', text: reply.text, toolCalls: journaledCalls,
       ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
     });
-    if (reply.text !== '') d.onText?.(reply.text);
+    if (reply.text !== '' && !streamed) d.onText?.(reply.text);
+    if (reply.cutOff === true && !continued && round + 1 < (d.maxRounds ?? 50)) {
+      // The fragment is in the next request. No tool call from a cut-off reply was run.
+      // The request boundary makes the continuation owed across a crash between these calls.
+      continued = true;
+      continue;
+    }
     if (reply.toolCalls.length === 0) {
       // Something that arrived while the model was answering was not in what it saw; it gets a round of its own.
-      if (arrivedSince(d.journal, shown)) continue;
+      journal.refresh();
+      if (arrivedSince(journal.read(), shown)) continue;
+      // Queued work resumes through its sensor, never by replaying a final reply.
       return 'done';
     }
 
@@ -146,6 +213,11 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
           void Promise.resolve(running).catch(() => {});
           output = 'It did not stop when asked and was left behind: it may still be running.';
         } else output = String(result);
+        if (d.signal?.aborted && result !== LEFT && tool.idempotent) {
+          // Only a tool that explicitly promises this may be repeated. The owner still stops the turn;
+          // the retry just completes a read whose first attempt was cut short, with no signal attached.
+          output = String(await tool.run(call.args, d.ctx));
+        }
       } catch (err) {
         ok = false;
         output = `error: ${err instanceof Error ? err.message : String(err)}`;
@@ -166,7 +238,8 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   }
   // The note below reads as a finished reply. Written over something the model never saw, it would
   // mark that as answered; without it the turn stays owed and the caller starts another.
-  if (arrivedSince(d.journal, shown)) return 'done';
+  journal.refresh();
+  if (arrivedSince(journal.read(), shown)) return 'done';
   appendEvent(d.journal, d.gen, { type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] });
   return 'done';
 }

@@ -6,6 +6,8 @@ const free = [
   'brain/loop.ts',
   'test/brain/loop.test.ts',
   'body/deep/x.ts',
+  'heart/coordinator.ts',
+  'test/heart/coordinator.test.ts',
   'test/body/loop.test.ts',
   'BACKLOG.md',
   'body/é.ts',
@@ -50,7 +52,7 @@ const protectedPaths = [
 ];
 
 test('the allowlist is the agent, its tests and its notes', () => {
-  expect(FREE).toEqual(['body/', 'brain/', 'test/body/', 'test/brain/', 'BACKLOG.md']);
+  expect(FREE).toEqual(['body/', 'brain/', 'heart/', 'test/body/', 'test/brain/', 'test/heart/', 'BACKLOG.md']);
 });
 
 test('the form of memory is held for the owner inside the brain, and nothing else there is', () => {

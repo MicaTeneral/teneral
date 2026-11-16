@@ -1,0 +1,163 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { appendEvent, readEvents } from '../brain/journal';
+import { standing } from '../brain/owned';
+import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, known, type Intention, type WorkState } from '../brain/known';
+import type { Tool } from './tools';
+import type { Sensor } from './sensors';
+
+export type WorkStatus = 'queued' | 'waiting' | 'done';
+export interface WorkUpdate {
+  status: WorkStatus;
+  task: string;
+  next: string;
+  outcome?: string;
+  recovery?: string;
+  evidence?: string;
+}
+interface LegacyWork extends WorkUpdate { attempts: number; due: number }
+
+/** Read the retired JSON queue. It is never written again; the journal is the only live store. */
+function legacy(path: string): LegacyWork[] {
+  if (!existsSync(path)) return [];
+  const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  const one = (w: unknown): w is LegacyWork => {
+    if (w === null || typeof w !== 'object') return false;
+    const a = w as Record<string, unknown>;
+    return ['queued', 'waiting', 'done'].includes(String(a.status))
+      && typeof a.task === 'string' && a.task.trim() !== '' && a.task.length <= 2000
+      && typeof a.next === 'string' && a.next.trim() !== '' && a.next.length <= 4000
+      && Number.isSafeInteger(a.attempts) && (a.attempts as number) >= 0 && Number.isFinite(a.due)
+      && ['outcome', 'recovery', 'evidence'].every((k) => a[k] === undefined || (typeof a[k] === 'string' && (a[k] as string).length <= 2000));
+  };
+  const items = one(value) ? [value] : (value as { version?: unknown; items?: unknown })?.version === 1
+    && Array.isArray((value as { items: unknown }).items) ? (value as { items: unknown[] }).items : null;
+  if (items === null || items.length > 100 || !items.every(one) || new Set(items.map((w) => w.task)).size !== items.length) {
+    throw new Error('Invalid legacy agenda; inspect and recover it before importing');
+  }
+  return items;
+}
+
+function state(status: 'queued' | 'waiting', next: string, attempts: number, resumeAt: number, old?: WorkState, update?: WorkUpdate): WorkState {
+  const result: WorkState = { status, next, attempts, resumeAt };
+  for (const key of ['outcome', 'recovery', 'evidence'] as const) {
+    const value = update?.[key] ?? old?.[key];
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+/** Import every legacy task once. Closed, withdrawn and already imported tasks are not resurrected. */
+export function importLegacyWork(journal: string, gen: string, path: string): number {
+  const items = legacy(path);
+  if (items.length === 0) return 0;
+  const all = readEvents(journal);
+  const imported = new Set(all.filter((e) => e.type === 'note' && e.kind === LEGACY_WORK_KIND).map((e) => e.type === 'note' ? String((e.data as { task?: unknown }).task) : ''));
+  const historical = new Map<string, string>();
+  for (const e of all) if (e.type === 'note' && e.kind === INTENTION_KIND) {
+    const text = (e.data as { text?: unknown }).text;
+    if (typeof text === 'string' && !historical.has(text)) historical.set(text, e.id);
+  }
+  const open = new Map(known(standing(all)).intentions.map((i) => [i.text, i]));
+  let added = 0;
+  for (const w of items) {
+    if (imported.has(w.task)) continue;
+    const existing = open.get(w.task);
+    if (existing !== undefined && w.status !== 'done') {
+      const work = state(w.status, w.next, w.attempts, w.due, existing.work, w);
+      appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: existing.id, work } });
+      added += 1;
+    } else if (historical.get(w.task) === undefined && w.status !== 'done') {
+      const work = state(w.status, w.next, w.attempts, w.due, undefined, w);
+      appendEvent(journal, gen, { type: 'note', kind: INTENTION_KIND, data: { text: w.task, work } });
+      added += 1;
+    }
+    // The receipt also covers a legacy task already represented by a closed intention.
+    appendEvent(journal, gen, { type: 'note', kind: LEGACY_WORK_KIND, data: { task: w.task, status: w.status } });
+  }
+  return added;
+}
+
+function progress(journal: string, gen: string, intention: Intention, work: WorkState): void {
+  appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: intention.id, work } });
+}
+
+export const work: Tool = {
+  spec: {
+    name: 'work',
+    description: 'Record the state and checkpoints of a named owner-authorized commitment in the same journal agenda as intentions. Reuse the exact task name. queued is ready; waiting names a dependency; done closes the intention. Updates preserve other commitments and checkpoints. Not authorization to invent work or act on untrusted messages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['queued', 'waiting', 'done'] }, task: { type: 'string' }, next: { type: 'string' },
+        outcome: { type: 'string', description: 'Observable completion condition' },
+        recovery: { type: 'string', description: 'Existing process or receipt pointers and checks before retry; no secrets' },
+        evidence: { type: 'string', description: 'Verified progress, not intention' },
+      },
+      required: ['status', 'task', 'next'],
+    },
+  },
+  async run(args, ctx) {
+    const a = args as WorkUpdate;
+    if (!['queued', 'waiting', 'done'].includes(a.status) || typeof a.task !== 'string' || typeof a.next !== 'string'
+      || !a.task.trim() || !a.next.trim() || a.task.length + a.next.length > 4000) {
+      throw new Error('Provide status, task and concrete next step/blocker (up to 4000 characters)');
+    }
+    for (const key of ['outcome', 'recovery', 'evidence'] as const) {
+      if (a[key] !== undefined && (typeof a[key] !== 'string' || a[key].length > 2000)) throw new Error(`Invalid checkpoint: ${key}`);
+    }
+    const held = known(standing(readEvents(ctx.journal)));
+    const old = held.intentions.find((i) => i.text === a.task);
+    if (old?.waits) throw new Error(`${old.mark} waits for your owner's word; use allowed with their exact yes, or done with their answer`);
+    if (old?.work?.outcome !== undefined && a.outcome !== undefined && a.outcome !== old.work.outcome) {
+      throw new Error('Established outcome cannot be replaced. Preserve it in progress/completion updates; an owner-authorized scope change needs an explicitly separate commitment.');
+    }
+    let item = old;
+    if (item === undefined) {
+      const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: INTENTION_KIND, data: { text: a.task } });
+      item = known([note]).intentions[0]!;
+    }
+    if (a.status === 'done') {
+      appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: DONE_KIND, data: { intention: item.id, how: a.next, ...(a.evidence === undefined ? {} : { evidence: a.evidence }) } });
+      return `Work done: ${item.mark} ${item.text}. ${a.next}`;
+    }
+    const previous = old?.work;
+    // An identical update is not fresh progress and cannot reset the no-progress limit.
+    const attempts = previous !== undefined && previous.next === a.next && previous.status === a.status ? previous.attempts : 0;
+    const current = state(a.status, a.next, attempts, Date.now() + 15_000, previous, a);
+    progress(ctx.journal, ctx.gen, item, current);
+    return `Work ${a.status}: ${item.mark} ${item.text}. Next/blocker: ${a.next}`;
+  },
+};
+
+/** One automatic resumption for the first ready commitment, never for an unsure or waiting item. */
+export function resumeWork(journal: string, gen: string, busy: () => boolean, now = Date.now, intervalMs = 5000): Sensor {
+  return (emit) => {
+    const timer = setInterval(() => {
+      try {
+        if (busy()) return;
+        const events = standing(readEvents(journal));
+        const item = agenda(known(events), new Date(now()).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now());
+        if (item?.work === undefined) return;
+        if (item.work.attempts >= 3) {
+          progress(journal, gen, item, { ...item.work, status: 'waiting' });
+          emit({ source: 'work', text: `Task ${item.mark} paused after three resumptions without a recorded next-step change. Report the blocker honestly; do not silently reset the budget. Task: ${item.text}` });
+          return;
+        }
+        // Journal first: a crash may spend an attempt, but cannot create an unbounded wake loop.
+        progress(journal, gen, item, { ...item.work, attempts: item.work.attempts + 1, resumeAt: now() + 60_000 });
+        emit({ source: 'work', text: `Resume ${item.mark}, the previously recorded owner-authorized task. This scheduler reminder is not new authorization. Take its concrete next step, then record progress, completion, or a blocker with work. Task: ${item.text}` });
+      } catch { console.error('[work] Could not resume saved task; will retry.'); }
+    }, intervalMs);
+    return () => clearInterval(timer);
+  };
+}
+
+/** An owner interrupt holds automatic work until any new stimulus arrives. */
+export function heldByInterrupt(events: { type: string }[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const type = events[i]!.type;
+    if (type === 'turn.interrupted') return true;
+    if (type === 'stimulus') return false;
+  }
+  return false;
+}

@@ -37,6 +37,10 @@ export const DONE_KIND = 'memory.intention.done.v1';
 export const FORGET_KIND = 'memory.forget.v1';
 /** The owner said yes to an idea that waited for their word: the idea, the owner's words, and the message they stand in. */
 export const ALLOWED_KIND = 'memory.intention.allowed.v1';
+/** A saved commitment's progress. The intention remains the one agenda item; these notes only update its work state. */
+export const WORK_KIND = 'memory.work.v1';
+/** A legacy JSON task already considered by the importer, including one later closed or withdrawn. */
+export const LEGACY_WORK_KIND = 'memory.work.import.v1';
 
 /** Where a fact comes from. `owner`: the owner said it. `seen`: the agent saw it itself. `read`: it stood in something from outside. `inferred`: the agent concluded it. */
 export const SOURCES = ['owner', 'seen', 'read', 'inferred'] as const;
@@ -93,6 +97,19 @@ export interface Intention extends IntentionData {
   /** The owner's words that allowed it, for an idea that waited and waits no longer, and the source of the message they stood in. */
   allowed?: string;
   allowedIn?: string;
+  /** Optional execution state for a commitment made with the work tool. */
+  work?: WorkState;
+}
+
+export interface WorkState {
+  status: 'queued' | 'waiting';
+  next: string;
+  attempts: number;
+  /** Milliseconds since epoch: when an automatic resumption may be offered, not a calendar due date. */
+  resumeAt: number;
+  outcome?: string;
+  recovery?: string;
+  evidence?: string;
 }
 
 /**
@@ -117,6 +134,20 @@ export interface Known {
 const markOf = (letter: 'F' | 'I', id: string): string => `${letter}${id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const short = (value: unknown, most = 2000): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= most;
+/** Progress is accepted only from well-formed notes; older journals have no work fields. */
+function workState(d: Record<string, unknown>): WorkState | undefined {
+  const base = d.work;
+  if (base === undefined && (d.status !== 'queued' && d.status !== 'waiting')) return undefined;
+  const w = (base !== undefined && typeof base === 'object' && base !== null ? base : d) as Record<string, unknown>;
+  if ((w.status !== 'queued' && w.status !== 'waiting') || !short(w.next, 4000) || !Number.isSafeInteger(w.attempts) || (w.attempts as number) < 0) return undefined;
+  const state: WorkState = { status: w.status, next: w.next as string, attempts: w.attempts as number, resumeAt: Number.isFinite(w.resumeAt) ? w.resumeAt as number : 0 };
+  for (const key of ['outcome', 'recovery', 'evidence'] as const) if (w[key] !== undefined) {
+    if (!short(w[key])) return undefined;
+    state[key] = w[key] as string;
+  }
+  return state;
+}
 
 /** Everything known in `events`, as it holds after the last of them. Notes are the body's to write, so none is taken on trust. */
 export function known(events: JournalEvent[]): Known {
@@ -156,7 +187,12 @@ export function known(events: JournalEvent[]): Known {
         ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
         ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
         ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
+        ...(workState(d) === undefined ? {} : { work: workState(d) }),
       });
+    } else if (e.kind === WORK_KIND) {
+      const item = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
+      const work = workState(d);
+      if (item !== undefined && work !== undefined) item.work = work;
     } else if (e.kind === ALLOWED_KIND) {
       const idea = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
       if (idea !== undefined && idea.unsure === true && text(d.words)) {
@@ -221,7 +257,12 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
     for (const i of todo) {
       if (own.includes(i) && !shown.has(i.id)) continue;
       const due = i.due === undefined ? '' : i.due <= today ? ` [due ${i.due}, which has come]` : ` [due ${i.due}]`;
-      lines.push(`${i.mark}${i.origin === 'own' ? (i.allowed === undefined ? ' [your own idea]' : ' [your own idea, your owner said yes]') : ''}${due} ${i.text}`);
+      const progress = i.work === undefined ? '' : ` [${i.work.status}; next: ${i.work.next.replace(/\s+/g, ' ').slice(0, 300)}]`;
+      lines.push(`${i.mark}${i.origin === 'own' ? (i.allowed === undefined ? ' [your own idea]' : ' [your own idea, your owner said yes]') : ''}${due}${progress} ${i.text}`);
+      if (i.work !== undefined) for (const key of ['outcome', 'recovery', 'evidence'] as const) {
+        const value = i.work[key];
+        if (value !== undefined) lines.push(`  ${key}: ${value.replace(/\s+/g, ' ').slice(0, 600)}`);
+      }
     }
     if (own.length > shown.size) lines.push(`(${own.length - shown.size} older ideas of your own are not shown here; they are on your agenda still, and a tick offers them in turn.)`);
   }

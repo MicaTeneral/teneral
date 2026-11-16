@@ -193,6 +193,38 @@ for (const [name, open] of ways) test(`${name}: a withdrawn wider memory neither
   expect(past.around(old.id, 0, 0)?.events.map((event) => event.id)).toEqual([old.id]);
 });
 
+for (const [name, open] of ways) test(`${name}: a recognized episode recovers a low-ranked closing answer`, () => {
+  clock = Date.parse('2026-11-11T08:00:00.000Z');
+  const complaint = 'Why do duplicate replies appear after reports?';
+  const stretches = Array.from({ length: 100 }, (_, i) => [
+    said(complaint, LONG),
+    replied(i === 7 ? 'I am investigating duplicate replies after reports.' : `server ${i} still has a messaging problem`),
+    replied(i === 7 ? 'Fixed: the scheduler owns continuation, so duplicate replies after reports stop.' : `server ${i} is still broken`),
+  ]);
+  const memories = stretches.map((st, i) => ev({ type: 'note', kind: EPISODE_KIND, data: {
+    from: st[0]!.id, to: st[2]!.id, start: st[0]!.ts, end: st[2]!.ts, outcome: 'done',
+    title: i === 7 ? 'Removing duplicate replies after reports' : `Server ${i} messaging`,
+    text: i === 7 ? 'The extra continuation caused the repeated messages. The completed repair leaves continuation to the scheduler.' : `Server ${i} remains unresolved.`,
+  } }));
+  const events = [...stretches.flat(), ...memories, said('ok', LONG)];
+  const lines = events.map((event, i) => ({ event, off: i }));
+  const raw = recall(scanIndex(() => lines), complaint, { limit: events.length });
+  // One hundred equally good owner messages outrank the reply; the old pool of 80 never saw it.
+  expect(raw.findIndex((hit) => hit.doc === events.indexOf(stretches[7]![2]!))).toBeGreaterThanOrEqual(80);
+  const journal = journalOf(events);
+  const found = open(journal).find(complaint, { limit: 1000 }).map((hit) => hit.event.id);
+  const closing = found.indexOf(stretches[7]![2]!.id);
+  const original = found.indexOf(stretches[7]![0]!.id);
+  const progress = found.indexOf(stretches[7]![1]!.id);
+  // The answer was below the old global pool and must now be in the requested top five.
+  expect(found.slice(0, 5)).toContain(stretches[7]![2]!.id);
+  expect(closing).toBeGreaterThanOrEqual(0);
+  expect(original).toBeGreaterThanOrEqual(0);
+  expect(progress).toBeGreaterThanOrEqual(0);
+  // The original complaint may still lead; the outcome must lead the work-in-progress reply.
+  expect(closing).toBeLessThan(progress);
+});
+
 test('an index over lines reads them again only when there are more', () => {
   let calls = 0;
   const { events } = life();
@@ -245,7 +277,7 @@ test('the timeline lists episodes in order with what is remembered of each, and 
 });
 
 const tool = (name: string) => TOOLS.find((t) => t.spec.name === name)!;
-const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json' });
+const context = (journal: string): ToolContext => ({ workspace: '/tmp', journal, gen: 'g', mutationCommit: null, id: 'me', inbox: '/tmp/none', peers: '/tmp/none.json', soul: '/tmp' });
 
 test('the recall tool gives what it found as events with their ids, and says so when it found nothing', async () => {
   const { mail, memory, journal } = life();

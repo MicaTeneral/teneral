@@ -72,6 +72,15 @@ test('stem events become [stem] messages', () => {
   expect(messages[3]!.content).toContain('rolled back');
 });
 
+test('a rollback note gives its outcome first and multiline stderr last', () => {
+  const note = buildMessages([
+    ev({ type: 'generation.rolledback', commit: 'bad', to: 'good', reason: 'failed to reply\nIts stderr ended with: first error\nsecond error' }),
+  ], 'S')[1]!.content!;
+  expect(note).toBe('[stem] Generation bad failed to reply and was rolled back. You are running good again. Your workspace still holds the code that failed.\nIts stderr ended with:\nfirst error\nsecond error');
+  expect(note.indexOf('You are running good again')).toBeLessThan(note.indexOf('first error'));
+  expect(note.endsWith('first error\nsecond error')).toBe(true);
+});
+
 test('a rejection journaled under its former name, molt.rejected, is the same [stem] message and owes a turn the same', () => {
   const fields = { commit: 'bbb', gate: 'tests', output: '1 fail' };
   const now = buildMessages([ev({ type: 'mutation.rejected', ...fields }, 'aaa')], 'S');
@@ -116,6 +125,27 @@ test('needsTurn', () => {
 });
 
 const intent = (callId: string) => ev({ type: 'tool.intent', callId, name: 'bash', args: {} });
+
+test('request boundaries preserve late work across a crash, but never repeat a reply that saw it', () => {
+  const first = said('first');
+  const boundary = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: first.id } });
+  const late = said('late');
+  const reply = replied('before the crash');
+  expect(needsTurn([first, boundary, late, reply])).toBe(true);
+  const secondBoundary = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: reply.id } });
+  expect(needsTurn([first, boundary, late, reply, secondBoundary, replied('answered late')])).toBe(false);
+  // A historical journal has no proof of a late event, so its completed replies stay complete.
+  expect(needsTurn([said('old'), replied('done'), ev({ type: 'note', kind: 'other', data: {} })])).toBe(false);
+  // A second continuation reply that saw the fragment must not restart the loop forever.
+  const fragment = replied('half\n[this reply was cut off by the provider: length]');
+  expect(needsTurn([first, fragment])).toBe(true);
+  const continued = ev({ type: 'note', kind: 'brain.shown.v1', data: { through: fragment.id, continued: true } });
+  expect(needsTurn([first, fragment, continued, replied('still cut off')])).toBe(false);
+  expect(needsTurn([first, fragment, continued, replied('half\n[this reply was cut off by the provider: length]')])).toBe(false);
+  expect(needsTurn([first, fragment, continued, called('partial')])).toBe(true);
+  // A crash between the first reply and its continuation remains owed after restart.
+  expect(needsTurn([first, fragment, ev({ type: 'note', kind: 'brain.shown.v1', data: { through: fragment.id } })])).toBe(true);
+});
 const result = (callId: string, output: string) => ev({ type: 'tool.result', callId, ok: true, output });
 const toolContents = (events: JournalEvent[]) => buildMessages(events, 'S').filter((m) => m.role === 'tool').map((m) => m.content);
 
@@ -419,6 +449,8 @@ test('an owner\'s message that ends with image markers becomes text without them
   expect(sight.asked).toEqual([`memory/images/${fileOf(1)}`, `memory/images/${fileOf(2, 'jpg')}`]);
   // A message that is only an image has no text at all.
   expect(buildMessages([said(marker(1))], 'S', undefined, fakeSight())[1]).toEqual({ role: 'user', content: null, images: [expect.anything()] });
+  // The Zulip sensor admits only uploads fetched under the API-verified owner identity.
+  expect(buildMessages([said(`Zulip private 12\nAPI-verified owner message.\n{}\n${marker(3)}`, 'owner:zulip')], 'S', undefined, fakeSight())[1]!.images).toHaveLength(1);
 });
 
 test('a marker from anyone but the owner is text, and no file is asked for', () => {
@@ -473,6 +505,16 @@ test('an image counts a fixed amount against the budget, not the length of its d
   const cut = buildMessages(events, 'S', room + IMAGE_CHARS - 1, huge);
   expect(cut.map((m) => m.content)).toEqual(['S', 'this one']);
   expect(cut[1]!.images).toHaveLength(1);
+});
+
+test('image dimensions, not base64 size, set the charge; older images without them keep the cap', () => {
+  const small: Sight = { load: () => ({ name: 'n.png', mime: 'image/png', data: 'A'.repeat(5_000_000), width: 32, height: 32 }) };
+  const events = [said('old words'), replied('old reply'), said(`this one\n${marker(1)}`)];
+  const room = 1 + 'old words'.length + 'old reply'.length + 'this one'.length;
+  expect(buildMessages(events, 'S', room + 816, small)).toHaveLength(4);
+  expect(buildMessages(events, 'S', room + 815, small).map(m => m.content)).toEqual(['S', 'this one']);
+  const unknown: Sight = { load: () => ({ name: 'n.png', mime: 'image/png', data: 'A' }) };
+  expect(buildMessages(events, 'S', room + 816, unknown)[1]!.content).toStartWith('[context] The last exchange was too large');
 });
 
 test('a newest message too long for its room loses the middle of its text, and keeps its image', () => {
@@ -638,4 +680,13 @@ test('a journal from before interruptions reads as before, and an event of a kin
   const withUnknown = [...old.slice(0, 2), ev({ type: 'something.later' } as unknown as EventBody), ...old.slice(2)];
   expect(buildMessages(withUnknown, 'S')).toEqual(buildMessages(old, 'S'));
   expect(needsTurn(withUnknown)).toBe(needsTurn(old));
+});
+
+test('a completed tool round adds no mutable footer or synthetic work message', () => {
+  const events = [said('start'), called('cache-call'), result('cache-call', 'one')];
+  const a = buildMessages(events, 'fixed instructions', 250000);
+  const b = buildMessages([...events, called('cache-next'), result('cache-next', 'two')], 'fixed instructions', 250000);
+  expect(JSON.stringify(b.slice(0, a.length))).toBe(JSON.stringify(a));
+  expect(a.some((m) => m.content === 'work version one')).toBe(false);
+  expect(b[0]!.content).toBe('fixed instructions');
 });

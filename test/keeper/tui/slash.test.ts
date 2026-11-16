@@ -21,7 +21,7 @@ test('a command line is a slash, letters, and what follows a blank on the same l
 
 test('commands are offered while the cursor is in the word that names one: all of them after the slash, fewer with each letter, none once the word is over', () => {
   expect(names('/')).toEqual(COMMANDS.map((c) => c.name));
-  expect(names('/h')).toEqual(['/help', '/history']);
+  expect(names('/h')).toEqual(['/help', '/history', '/heart']);
   expect(names('/hi')).toEqual(['/history']);
   expect(names('/a')).toEqual(['/approve']);
   expect(names('/help')).toEqual(['/help']);
@@ -32,7 +32,7 @@ test('commands are offered while the cursor is in the word that names one: all o
   expect(names('/image ~/a.png')).toBeNull();
   expect(names('/he', 0)).toBeNull();
   expect(names('  /he', 2)).toBeNull();
-  expect(names('/he', 1)).toEqual(['/help']);
+  expect(names('/he', 1)).toEqual(['/help', '/heart']);
   expect(names('/help\n', 6)).toBeNull();
   // What is no command line offers nothing, wherever the cursor is.
   for (const words of ['hello /', '/home/owner/a.png', '//h', '/h\nmore', '/H']) for (let at = 0; at <= words.length; at++) expect(names(words, at)).toBeNull();

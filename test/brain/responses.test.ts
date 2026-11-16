@@ -51,6 +51,13 @@ test('no item is a system message and none carries an id', () => {
   expect(toResponsesInput([...CONVERSATION, { role: 'system', content: 'MORE' }]).instructions).toBe('SYSTEM\n\nMORE');
 });
 
+test('adjacent user stimuli become one ordered, explicitly separated input item', () => {
+  expect(toResponsesInput([
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+  ]).input).toEqual([{ role: 'user', content: 'first\n\n[next stimulus]\n\nsecond' }]);
+});
+
 test('with a namespace, replayed calls name it, as the calls the model made did', () => {
   const calls = toResponsesInput(CONVERSATION, 'teneral').input.filter((item) => item.type === 'function_call');
   expect(calls).toHaveLength(3);
@@ -86,6 +93,17 @@ test('a stream with text only gives the text', () => {
   expect(readResponsesStream(stream)).toEqual({ text: 'Hello', toolCalls: [] });
   // The same with CRLF line ends and a closing [DONE], which some servers add.
   expect(readResponsesStream(`${stream.replaceAll('\n', '\r\n')}data: [DONE]\r\n\r\n`)).toEqual({ text: 'Hello', toolCalls: [] });
+});
+
+test('output text deltas are delivered in order, while the final reply remains whole', () => {
+  const deltas: string[] = [];
+  const reply = readResponsesStream(sse(CREATED,
+    { type: 'response.output_text.delta', delta: 'Hel' },
+    { type: 'response.output_text.delta', delta: 'lo' },
+    completed([message('Hello')]),
+  ), delta => deltas.push(delta));
+  expect(deltas).toEqual(['Hel', 'lo']);
+  expect(reply.text).toBe('Hello');
 });
 
 test('a stream with one call gives the call under its call_id, with parsed arguments, and reasoning items are left out', () => {
@@ -188,6 +206,17 @@ test('a response the provider cut short gives what was complete, marked as cut o
   const reply = readResponsesStream(sse(CREATED, incomplete));
   expect(reply.text).toStartWith('Half a rep');
   expect(reply.text).toMatch(/cut off.*max_output_tokens/);
+  expect(reply.cutOff).toBe(true);
+});
+
+test('an output-limited response never exposes its incomplete tool call', () => {
+  const incomplete = { type: 'response.incomplete', response: {
+    status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+    output: [message('Half'), { ...call(1, 'bash', '{"command":'), status: 'incomplete' }],
+  } };
+  const reply = readResponsesStream(sse(CREATED, incomplete));
+  expect(reply.cutOff).toBe(true);
+  expect(reply.toolCalls).toEqual([]);
 });
 
 // --- the request ---
@@ -362,8 +391,8 @@ test('an image beside a user message is an input_image part after the text; alon
       { type: 'input_text', text: 'what is this?' },
       { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
       { type: 'input_image', image_url: 'data:image/jpeg;base64,BBBB' },
+      { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
     ] },
-    { role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] },
   ]);
   expect(JSON.stringify(input)).not.toContain('"images"');
 });
@@ -385,6 +414,8 @@ const USAGE = { input_tokens: 1200, input_tokens_details: { cached_tokens: 1000 
 test('the usage the stream ends with is returned, with the cached part of the input', () => {
   const done = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: USAGE } };
   expect(readResponsesStream(sse(CREATED, done))).toEqual({ text: 'hi', toolCalls: [], usage: { input: 1200, output: 80, cached: 1000 } });
+  const itemized = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: { ...USAGE, input_tokens_details: { cached_tokens: 1000, image_tokens: 170 } } } };
+  expect(readResponsesStream(sse(CREATED, itemized)).usage).toEqual({ input: 1200, output: 80, cached: 1000, images: 170 });
   const bare = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: { input_tokens: 5, output_tokens: 1 } } };
   expect(readResponsesStream(sse(CREATED, bare)).usage).toEqual({ input: 5, output: 1 });
   // Not numbers, or not there: no usage, rather than a made-up one.
@@ -440,6 +471,50 @@ test('a refusal that is not about the summary, or a second one, is passed on; an
   sent.length = 0;
   await responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'm', summaries: false, fetch: recorder([okStream], sent) })([{ role: 'user', content: 'x' }], []);
   expect('reasoning' in sent[0]!.body).toBe(false);
+});
+
+test('connect reports actual first-stream-byte and whole-call timing once, and telemetry cannot break a reply', async () => {
+  const sent: Sent[] = [];
+  const encode = new TextEncoder();
+  const delayed = () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encode.encode(sse(CREATED, { type: 'response.output_text.delta', delta: 'hi' })));
+      setTimeout(() => { controller.enqueue(encode.encode(sse(completed([message('hi')])))); controller.close(); }, 15);
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+  const provider = connect({ TENERAL_PROVIDER: 'openai', TENERAL_BASE_URL: 'https://api.test/v1', TENERAL_API_KEY: 'k', TENERAL_MODEL: 'm' }, recorder([delayed], sent));
+  const timings: { durationMs: number; firstByteMs: number | null }[] = [];
+  const reply = await provider([{ role: 'user', content: 'x' }], [], { onTiming: timing => { timings.push(timing); throw new Error('telemetry failed'); } });
+  expect(reply.text).toBe('hi');
+  expect(timings).toHaveLength(1);
+  expect(timings[0]!.firstByteMs).not.toBeNull();
+  expect(timings[0]!.durationMs).toBeGreaterThanOrEqual(timings[0]!.firstByteMs!);
+  expect(timings[0]!.firstByteMs!).toBeLessThan(10_000);
+});
+
+test('the pulse and cache measurements coexist on the Responses events consumed by the official Kimi client', async () => {
+  const said: (string | null)[] = [];
+  const probes: unknown[] = [];
+  // MoonshotAI/kimi-cli 9ab1286b consumes exactly these three delta types in
+  // its Responses adapter. This is a compatibility fixture, not a captured reply.
+  const stream = () => new Response(sse(
+    CREATED,
+    { type: 'response.reasoning_summary_part.added', part: { type: 'summary_text', text: '' } },
+    { type: 'response.reasoning_summary_text.delta', delta: 'Compare the evidence.' },
+    { type: 'response.output_text.delta', delta: 'Working' },
+    { type: 'response.function_call_arguments.delta', delta: '{"path":"a.ts"}' },
+    completed([call(1, 'read', '{"path":"a.ts"}')]),
+  ), { headers: { 'content-type': 'text/event-stream' } });
+  const provider = responsesProvider({ baseUrl: () => 'https://api.test/v1', token: async () => 't', model: 'k3.1-pro', fetch: recorder([stream, stream], []), pulse: p => said.push(p === null ? null : p.step) });
+  await provider([{ role: 'user', content: 'read it' }], [], { onCacheProbe: data => probes.push(data) });
+  await provider([{ role: 'user', content: 'read it again' }], [], { onCacheProbe: data => probes.push(data) });
+  expect(said).toContain('reasoning');
+  expect(said).toContain('writing');
+  expect(said).toContain('calling');
+  expect(said.at(-1)).toBeNull();
+  expect(probes).toHaveLength(2);
+  expect(JSON.stringify(probes)).not.toContain('read it');
+  expect((probes[1] as { staticEqual: boolean }).staticEqual).toBe(true);
 });
 
 test('while the answer arrives the pulse says where the request stands, and that it is over when it is, also when it failed', async () => {

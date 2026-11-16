@@ -1,0 +1,78 @@
+{
+  "schema": "memory.paraphrase.eval.v1",
+  "source": "12 sampled real episode memories; questions authored by isolated no-tool workers; intended links confirmed by a separate blind judge. Offline evaluation only; never tune on this validation fixture.",
+  "questions": [
+    {
+      "question": "What two methodological choices prevented the new synthetic memory-map evaluation from being considered an independent held-out benchmark?",
+      "events": [
+        "00418f25-6fdc-4607-991e-61778dae6422"
+      ]
+    },
+    {
+      "question": "After the provider merge conflicts were resolved, what were the pass, fail, and assertion counts from the focused test run?",
+      "events": [
+        "0d887ea8-2186-4480-8764-3cd60d1a838a"
+      ]
+    },
+    {
+      "question": "Before any caching fix was made, how many of the 758 recorded requests showed no cache usage, and what was the overall cached-to-input ratio?",
+      "events": [
+        "42e5d1b8-a668-44b1-bb18-a914e557af14"
+      ]
+    },
+    {
+      "question": "What additional memory functions did the review conclude were necessary beyond basic storage?",
+      "events": [
+        "97bdfa4e-1760-4de4-870b-cbb5c06b9978"
+      ]
+    },
+    {
+      "question": "What verification had been completed for the corrected table writer before the full live-journal replay was attempted?",
+      "events": [
+        "cd6d8d16-7ed7-4bc2-8fe5-c45eab6100c6"
+      ]
+    },
+    {
+      "question": "How did recall change after the search configuration was frozen and validated?",
+      "events": [
+        "131d5285-56b4-4312-9789-c33e3b420c47"
+      ]
+    },
+    {
+      "question": "When the rebuilt memory was checked against the real 8,031-event journal, how many excerpts, episodes, and recall rows were independently confirmed?",
+      "events": [
+        "677d7b59-8234-4a07-804d-2403355c0956"
+      ]
+    },
+    {
+      "question": "What happened to the previous experimental memory files and their related tools when the owner installed the shared species memory system?",
+      "events": [
+        "7cfd1862-8279-4749-9f72-eb1cdae8eefb"
+      ]
+    },
+    {
+      "question": "How many tests passed before the commit containing the validated search-ranking configuration was accepted?",
+      "events": [
+        "6b4979d0-7858-4293-a0a7-d465a6ab6b52"
+      ]
+    },
+    {
+      "question": "After the memory-currency logic was refactored to reuse existing projections, how many of the 159 focused tests failed despite a successful type check?",
+      "events": [
+        "a17b60fb-3036-4cf7-ad18-b8cf0310b5f7"
+      ]
+    },
+    {
+      "question": "After the memory startup defect was corrected, what were the final test, assertion, and file counts?",
+      "events": [
+        "91eb1fdb-2c5a-4768-8309-51ad5683eb0b"
+      ]
+    },
+    {
+      "question": "What polling schedule does the public GitHub sensor use, including its startup delay and subsequent interval?",
+      "events": [
+        "ea9d38a1-7141-4fa5-93d7-a32ea22d8ba0"
+      ]
+    }
+  ]
+}

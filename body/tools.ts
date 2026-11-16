@@ -1,6 +1,10 @@
+import { work } from './work';
+import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
+import { zulipReply, zulipHistory } from './zulip-tools';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readPeers } from './peers';
+import { dirname, join, resolve } from 'node:path';
 import { ENVELOPE_VERSION, MAX_HOPS, deliver, findSeen, parseEnvelope, type Envelope } from './envelope';
 import { git } from '../immune/gates';
 import { appendEvent, readEvents } from '../brain/journal';
@@ -9,8 +13,10 @@ import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
+import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessons } from '../brain/lessons';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
+import { jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
 
 export interface ToolContext {
   /** The candidate worktree: the only copy of the code the agent edits. */
@@ -25,12 +31,16 @@ export interface ToolContext {
   inbox: string;
   /** JSON file mapping a peer's name to its inbox directory. Kept by the owner. */
   peers: string;
+  /** The only directory outside the candidate that read/write/edit may reach. */
+  soul: string;
   /** The agent's past, for the tools that ask it. body/main.ts opens it over the database when there is one; a context without it reads the journal through. */
   past?: Past;
 }
 
 export interface Tool {
   spec: ToolSpec;
+  /** Safe to invoke again with the same arguments after an interruption. */
+  idempotent?: boolean;
   /** `signal`, when given, aborts when the owner interrupts the turn: a tool that can take long stops what it started. One that ignores it is left behind (brain/loop.ts). */
   run(args: unknown, ctx: ToolContext, signal?: AbortSignal): Promise<string>;
 }
@@ -55,10 +65,70 @@ function params(properties: Record<string, string>): Record<string, unknown> {
   };
 }
 
+/** Resolve existing components without changing the filesystem; a missing suffix may still be created. */
+function realpathMissing(path: string): string {
+  const missing: string[] = [];
+  let found = path;
+  while (!existsSync(found)) {
+    const parent = dirname(found);
+    if (parent === found) throw new Error('path has no existing parent');
+    missing.unshift(found.slice(parent.length + 1));
+    found = parent;
+  }
+  return join(realpathSync(found), ...missing);
+}
+
+/** A tool path must resolve inside the candidate or the soul, following links as the filesystem will. */
+function toolPath(ctx: ToolContext, given: string): string {
+  const candidate = resolve(ctx.workspace, given);
+  const real = realpathMissing(candidate);
+  const inside = (path: string, root: string): boolean => path === root || path.startsWith(root + '/');
+  if (!inside(real, realpathSync(ctx.workspace)) && !inside(real, realpathSync(ctx.soul))) {
+    throw new Error('path is outside the workspace and soul');
+  }
+  return real;
+}
+
+const lsp: Tool = {
+  spec: {
+    name: 'lsp',
+    description: 'Ask a trusted language-server profile for semantic definition, references, hover, document symbols or diagnostics. Profiles are host configuration; no arbitrary executable, query-driver, edit or hidden text fallback. Freshness/completeness are explicit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        profile: { type: 'string', description: 'Profile name from the host-owned LSP configuration' },
+        operation: { type: 'string', enum: ['definition', 'references', 'hover', 'symbols', 'diagnostics'] },
+        path: { type: 'string', description: 'Document path, relative to the profile cwd or inside an allowed dependency root' },
+        text: { type: 'string', description: 'Exact document contents to synchronize as this version' },
+        version: { type: 'number', description: 'Positive document version; default 1' },
+        line: { type: 'number', description: 'Zero-based line for definition/references/hover' },
+        character: { type: 'number', description: 'Zero-based UTF-8 character for definition/references/hover' },
+        limit: { type: 'number', description: 'Maximum returned items, 1–100; default 50' },
+      },
+      required: ['profile', 'operation', 'path', 'text'],
+    },
+  },
+  async run(args, ctx, signal) {
+    const profiles = readProfiles(process.env.TENERAL_LSP_PROFILES);
+    const name = str(args, 'profile'); const profile = profiles[name];
+    if (profile === undefined) throw new Error(`unknown LSP profile: ${name}. Profiles come from TENERAL_LSP_PROFILES, not tool arguments`);
+    const number = (key: string, fallback?: number): number | undefined => {
+      const value = args !== null && typeof args === 'object' ? (args as Record<string, unknown>)[key] : undefined;
+      if (value === undefined) return fallback;
+      if (typeof value !== 'number') throw new Error(`${key} must be a number`);
+      return value;
+    };
+    const operation = str(args, 'operation');
+    if (!['definition', 'references', 'hover', 'symbols', 'diagnostics'].includes(operation)) throw new Error('unsupported LSP operation');
+    return JSON.stringify(await runLsp({ profile: profile as LspProfile, operation: operation as 'definition' | 'references' | 'hover' | 'symbols' | 'diagnostics', path: str(args, 'path'), text: str(args, 'text'), version: number('version'), line: number('line'), character: number('character'), limit: number('limit'), signal }), null, 2);
+  },
+};
+
 const read: Tool = {
-  spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace.', parameters: params({ path: 'File path' }) },
+  idempotent: true,
+  spec: { name: 'read', description: 'Read a file. Paths are relative to your workspace; absolute paths are allowed only inside your soul directory.', parameters: params({ path: 'File path' }) },
   async run(args, ctx) {
-    return cap(readFileSync(resolve(ctx.workspace, str(args, 'path')), 'utf8'));
+    return cap(readFileSync(toolPath(ctx, str(args, 'path')), 'utf8'));
   },
 };
 
@@ -69,7 +139,7 @@ const write: Tool = {
     parameters: params({ path: 'File path', content: 'Full file content' }),
   },
   async run(args, ctx) {
-    const path = resolve(ctx.workspace, str(args, 'path'));
+    const path = toolPath(ctx, str(args, 'path'));
     const content = str(args, 'content');
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
@@ -84,7 +154,7 @@ const edit: Tool = {
     parameters: params({ path: 'File path', old: 'Exact text to replace', new: 'Replacement text' }),
   },
   async run(args, ctx) {
-    const path = resolve(ctx.workspace, str(args, 'path'));
+    const path = toolPath(ctx, str(args, 'path'));
     const old = str(args, 'old');
     const replacement = str(args, 'new');
     if (old === '') throw new Error('`old` is empty; give the exact text to replace');
@@ -110,7 +180,7 @@ const look: Tool = {
     parameters: params({ path: 'Image file path' }),
   },
   async run(args, ctx) {
-    const kept = keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
+    const kept = await keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
     // The last line is what brain/memory.ts shows the image by; it is honoured only in the result of this tool.
     return `${str(args, 'path')}: ${kept.mime}, ${kept.bytes} bytes\n${kept.marker}`;
   },
@@ -149,7 +219,7 @@ export function bashEnv(env: Record<string, string | undefined>): Record<string,
  * job, or one that left the group and so escaped the kill): the pipes get DRAIN_MS more, then reading stops.
  * When `signal` aborts (the owner interrupted the turn) the group is killed as at the limit, at once.
  */
-export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal): Promise<string> {
+export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIMIT_MS, signal?: AbortSignal, track?: { journal: string; gen: string; name: string }): Promise<string> {
   if (signal?.aborted) return 'not run: interrupted by your owner before it started\n';
   const p = Bun.spawn(['bash', '-c', command], {
     cwd, env: bashEnv(process.env), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: true,
@@ -193,20 +263,51 @@ export async function runBash(command: string, cwd: string, timeoutMs = BASH_LIM
     : timedOut
     ? `timed out after ${timeoutMs / 1000}s and was killed`
     : p.exitCode === null ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
+  const tracked = track !== undefined && !timedOut && !interrupted
+    ? trackBackground(track.journal, track.gen, track.name, p.pid, cwd, command)
+    : null;
   const note = heldOpen && !timedOut && !interrupted
     ? '\n[something this command started is still running and holds its output open; it was left running, and what it prints from now on is not read]'
     : '';
-  return `${status}\n${output.text()}${note}`;
+  const job = tracked !== null ? `\n[background job ${tracked.name}; use jobs action=stop name=${tracked.name} to stop it after a restart]` : '';
+  return `${status}\n${output.text()}${note}${job}`;
 }
 
 const bash: Tool = {
   spec: {
     name: 'bash',
     description: 'Run a bash command in your workspace. Two-minute limit, then everything it started is killed. Returns the exit code and the output; the middle of long output is dropped. It does not see your API key.',
-    parameters: params({ command: 'The command' }),
+    parameters: params({ command: 'The command', name: 'Optional stable job name (a-z, 0-9, dot, underscore, dash); returned and recorded when a process survives bash.' }),
   },
   async run(args, ctx, signal) {
-    return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal);
+    const name = jobName(typeof args === 'object' && args !== null ? (args as Record<string, unknown>).name as string | undefined : undefined);
+    const previous = jobHistory(readEvents(ctx.journal)).get(name);
+    if (previous !== undefined && jobStatus(previous) === 'running') throw new Error(`background job ${name} is already running`);
+    return runBash(str(args, 'command'), ctx.workspace, BASH_LIMIT_MS, signal, {
+      journal: ctx.journal, gen: ctx.gen, name,
+    });
+  },
+};
+
+const jobs: Tool = {
+  idempotent: true,
+  spec: {
+    name: 'jobs',
+    description: 'List surviving bash jobs, or stop one by its recorded name. Process identity is checked before signaling; processes that left their group cannot be managed by PGID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'stop'], description: 'list all known jobs, or stop one named job' },
+        name: { type: 'string', description: 'Required for stop; ignored for list' },
+      },
+      required: ['action'],
+    },
+  },
+  async run(args, ctx) {
+    const action = str(args, 'action');
+    if (action === 'list') return listJobs(readEvents(ctx.journal));
+    if (action === 'stop') return `${str(args, 'name')}: ${stopJob(ctx.journal, ctx.gen, str(args, 'name'))}`;
+    throw new Error('action must be list or stop');
   },
 };
 
@@ -270,21 +371,9 @@ const send: Tool = {
     const rawReply = (args as Record<string, unknown>).replyTo;
     const replyTo = typeof rawReply === 'string' && rawReply !== '' ? rawReply : null;
 
-    let peers: Record<string, unknown> = {};
-    if (existsSync(ctx.peers)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(ctx.peers, 'utf8'));
-      } catch (err) {
-        throw new Error(`the peers file ${ctx.peers} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error(`the peers file ${ctx.peers} must hold one JSON object mapping peer names to inbox directories`);
-      }
-      peers = parsed as Record<string, unknown>;
-    }
-    const target = peers[to];
-    if (typeof target !== 'string') {
+    const peers = readPeers(ctx.peers);
+    const target = peers[to]?.inbox;
+    if (target === undefined) {
       throw new Error(`unknown peer "${to}". Known peers: ${Object.keys(peers).join(', ') || 'none'}`);
     }
 
@@ -560,4 +649,72 @@ const forget: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [read, write, edit, look, bash, mutate, send, recallTool, open, timeline, intend, done, allowed, forget];
+const lesson: Tool = {
+  spec: {
+    name: 'lesson',
+    description: 'Record and separately review evidence-linked lessons. propose keeps one local to its originating conversation; accept is allowed only from a later conversation in a different generation and needs basedOn 1; check verifies an accepted expected effect using later journal evidence. A single TENERAL_LESSONS=0 switch disables both reads and writes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['propose', 'accept', 'check'] },
+        topic: { type: 'string', description: 'Short retrieval topic for propose' },
+        text: { type: 'string', description: 'The bounded lesson for propose' },
+        conversation: { type: 'string', description: 'First journal event id of the originating episode for propose' },
+        evidence: { type: 'array', items: { type: 'string' }, description: '1–16 exact source journal event ids; checks must cite events after acceptance' },
+        expected: { type: 'string', description: 'Optional observable effect to verify later' },
+        lesson: { type: 'string', description: 'Lesson mark or full id for accept/check' },
+        basedOn: { type: 'number', description: 'Exact version read most recently; proposal and acceptance are both version 1, each check increments it' },
+        outcome: { type: 'string', enum: ['observed', 'not_observed'], description: 'For check: whether journal evidence shows the expected effect' },
+      },
+      required: ['action', 'evidence', 'basedOn'],
+    },
+  },
+  async run(args, ctx) {
+    if (process.env.TENERAL_LESSONS === '0') throw new Error('lessons are disabled by TENERAL_LESSONS=0');
+    const action = str(args, 'action');
+    const events = standing(readEvents(ctx.journal));
+    const held = lessons(events);
+    const record = (args as Record<string, unknown>);
+    const rawEvidence = record.evidence;
+    if (!Array.isArray(rawEvidence) || rawEvidence.length < 1 || rawEvidence.length > 16 || !rawEvidence.every(x => typeof x === 'string')) throw new Error('evidence must contain 1–16 exact journal event ids');
+    const evidence = rawEvidence as string[];
+    if (record.basedOn !== 0 && (!Number.isSafeInteger(record.basedOn) || (record.basedOn as number) < 1)) throw new Error('basedOn must be 0 for a proposal or the positive version last read');
+    if (action === 'propose') {
+      if (record.basedOn !== 0) throw new Error('a new lesson has basedOn 0');
+      if (held.length >= 64) throw new Error('lesson store is full (64); let old lessons expire before proposing more');
+      const conversation = str(args, 'conversation');
+      const { episodes } = await import('../brain/episodes');
+      const current = episodes(events).at(-1);
+      if (!current || current.closed || current.id !== conversation) throw new Error(`conversation must be the first event id of the current open episode: ${current?.id ?? 'none'}`);
+      const knownIds = new Set(events.map(e => e.id));
+      if (evidence.some(id => !knownIds.has(id))) throw new Error('every evidence id must exist in the journal');
+      const text = str(args, 'text').trim(); const topic = str(args, 'topic').trim();
+      if (text.length > 2000 || topic.length > 120) throw new Error('lesson text/topic is too long');
+      const expected = optional(args, 'expected')?.trim();
+      const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_KIND, data: { text, topic, evidence, conversation, ...(expected ? { expected } : {}), version: 1 } });
+      return `Proposed local lesson L${note.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)} (v1). It is not permanent; a later conversation in another generation must accept it separately.`;
+    }
+    const mark = str(args, 'lesson');
+    const found = held.find(l => l.id === mark || l.mark === mark);
+    if (!found) throw new Error(`no current lesson has mark ${mark}`);
+    if (record.basedOn !== found.version) throw new Error(`stale lesson version: read ${record.basedOn}, current ${found.version}; reread before writing`);
+    if (action === 'accept') {
+      if (found.accepted) throw new Error('lesson is already accepted');
+      if (ctx.gen === found.proposedGen) throw new Error('a lesson cannot be accepted by the generation that proposed it');
+      const current = (await import('../brain/episodes')).episodes(events).at(-1);
+      if (!current || current.closed || current.id === found.conversation) throw new Error('acceptance requires a later, separate conversation');
+      appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_ACCEPT_KIND, data: { lesson: found.id, basedOn: found.version, evidence } });
+      return `Accepted ${found.mark} from this later conversation. Expected effects still require a separate check.`;
+    }
+    if (action === 'check') {
+      if (!found.accepted || !found.expected) throw new Error('only an accepted lesson with an expected effect can be checked');
+      const outcome = str(args, 'outcome');
+      if (outcome !== 'observed' && outcome !== 'not_observed') throw new Error('outcome must be observed or not_observed');
+      appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_CHECK_KIND, data: { lesson: found.id, basedOn: found.version, evidence, outcome } });
+      return `Checked ${found.mark}: ${outcome}; version is now ${found.version + 1}.`;
+    }
+    throw new Error('lesson action must be propose, accept or check');
+  },
+};
+
+export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget, lesson];

@@ -16,7 +16,9 @@ test('the prompt says that the owner comes and goes, and reads replies, not tool
   expect(prompt).toMatch(/must be in your reply text/);
 });
 
-// "What the stem requires of you": each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
+// "What the stem requires of you": this section deliberately keeps its
+// second-person contract phrasing inside Mica's otherwise first-person prompt.
+// Each statement is pinned here by a phrase, so one cannot be dropped unnoticed.
 // The numbers are checked against the stem's own constants where it exports them.
 import { OWNER_REASON } from '../../keeper/back';
 import { FREE } from '../../immune/protected';
@@ -75,7 +77,7 @@ test('it says how crashes are counted and that a rollback is the last step back'
 test('it lists what a mutation must pass, in the stem\'s order', () => {
   const order = [
     'nothing uncommitted', 'changes only', 'only plain files', '`bun x tsc --noEmit`',
-    '`bun test test/stem test/immune test/species test/keeper`', '`bun test test/body test/brain`', 'at least one test and no failure', 'the smoke gate',
+    '`bun test test/stem test/immune test/species test/keeper`', '`bun test test/body test/brain test/heart`', 'at least one test and no failure', 'the smoke gate',
   ].map((phrase) => flat.indexOf(phrase));
   expect(order.every((at) => at !== -1)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -254,13 +256,13 @@ test('it says what a note is and the rule it exists for', () => {
 
 test('it says that everything outside the body is its own to change, and that such a change waits for the owner\'s approval', () => {
   expect(flat).toMatch(/A stem supervises you, as a brainstem does: it keeps you alive, and you do not steer it\. It is code in this same repository, in `stem\/`\. Beside it are `immune\/`, .*`species\/`, .*`keeper\/`, your owner's tools\. You may change all of it as you change yourself/);
-  expect(flat).toMatch(/Everything outside `body\/`, `brain\/`, their tests and `BACKLOG\.md` \(the stem, its tests, the project files\) is yours to change as well/);
+  expect(flat).toMatch(/Everything outside `body\/`, `brain\/`, `heart\/`, their tests and `BACKLOG\.md` \(the stem, its tests, the project files\) is yours to change as well/);
   expect(flat).toContain('`TENERAL_APPROVAL`');
   for (const mode of ['ask', 'auto', 'off']) expect(flat).toContain(`\`${mode}\``);
-  expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body and brain/);
+  expect(flat).toMatch(/answered at gate `approval` with the paths you changed outside your body, brain and heart/);
   expect(flat).toMatch(/`\/approve` in their terminal or `\.\/one approve`/);
   expect(flat).toMatch(/you call `mutate` again for the same commit/);
-  expect(flat).toMatch(/a later commit that changes only your body and brain passes on it/);
+  expect(flat).toMatch(/a later commit that changes only your body, brain and heart passes on it/);
   expect(flat).toMatch(/With `off` such a commit is refused at gate `stem`/);
   expect(flat).toMatch(/it is not counted against the commit/);
   expect(flat).toMatch(/`site\/`, `docs\/`, `\.github\/`, `README\.md` and `LICENSE` are run by no stem/);

@@ -66,6 +66,7 @@
     /plain             how to get the plain text client
     /usage             what the requests to the model cost, and how much came from the
   cache
+    /heart             give the agenda one pulse now
     /memory [what]     the agent's memory, and your hand on it: pin, unpin, withdraw,
   back
     /reasoning         print in full what the model last thought (also Ctrl-R)

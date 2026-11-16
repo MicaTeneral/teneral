@@ -29,6 +29,37 @@ test('sends the model, messages and tools, and returns the text', async () => {
   expect(sent.tools).toEqual([{ type: 'function', function: { name: 'read', description: 'd', parameters: { type: 'object' } } }]);
 });
 
+test('adjacent user messages are joined without losing their order or boundaries', () => {
+  expect(toChatMessages([
+    { role: 'user', content: 'first' },
+    { role: 'user', content: 'second' },
+    { role: 'user', content: 'third' },
+    { role: 'assistant', content: 'answer' },
+  ])).toEqual([
+    { role: 'user', content: 'first\n\n[next stimulus]\n\nsecond\n\n[next stimulus]\n\nthird' },
+    { role: 'assistant', content: 'answer' },
+  ]);
+});
+
+test('a length finish is marked and a partial tool call is not returned for execution', async () => {
+  const provider = openAiProvider({
+    ...cfg,
+    fetch: fakeFetch(200, { choices: [{ finish_reason: 'length', message: { content: 'half', tool_calls: [{ id: 'c', function: { name: 'bash', arguments: '{"command":' } }] } }] }),
+  });
+  const reply = await provider([], []);
+  expect(reply.cutOff).toBe(true);
+  expect(reply.text).toContain('half');
+  expect(reply.text).toContain('cut off by the provider: length');
+  expect(reply.toolCalls).toEqual([]);
+});
+
+test('stop and tool_calls finishes do not request a continuation', async () => {
+  for (const finish_reason of ['stop', 'tool_calls']) {
+    const provider = openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ finish_reason, message: { content: 'done' } }] }) });
+    expect((await provider([], [])).cutOff).toBeUndefined();
+  }
+});
+
 test('parses tool calls and their JSON arguments', async () => {
   const provider = openAiProvider({
     ...cfg,
@@ -218,8 +249,8 @@ test('a message without images goes on the wire as it is; one with images become
       { type: 'text', text: 'what is this?' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
       { type: 'image_url', image_url: { url: 'data:image/webp;base64,BBBB' } },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
     ] },
-    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
   ]);
   expect(seen.init!.body as string).not.toContain('"images"');
 });
@@ -253,6 +284,7 @@ test('the usage the endpoint reports is returned, with the cached part of the pr
   const answer = (usage: unknown) => openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'ok' } }], usage }) })([], []);
   expect(await answer({ prompt_tokens: 900, completion_tokens: 30, total_tokens: 930, prompt_tokens_details: { cached_tokens: 512 } }))
     .toEqual({ text: 'ok', toolCalls: [], usage: { input: 900, output: 30, cached: 512 } });
+  expect((await answer({ prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 512, image_tokens: 85 } })).usage).toEqual({ input: 900, output: 30, cached: 512, images: 85 });
   expect((await answer({ prompt_tokens: 900, completion_tokens: 30 })).usage).toEqual({ input: 900, output: 30 });
   expect((await answer({ prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: null })).usage).toEqual({ input: 900, output: 30 });
   for (const odd of [undefined, null, 'x', {}, { prompt_tokens: 'many', completion_tokens: 1 }, { prompt_tokens: NaN, completion_tokens: 1 }]) {
@@ -351,4 +383,59 @@ test('Responses, refused a reasoning summary and then cancelled, does not ask ag
   const again = responsesProvider({ baseUrl: () => cfg.baseUrl, token: async () => 'k', model: 'm', fetch: (async () => { posts += 1; return refusal(); }) as unknown as typeof fetch });
   await expect(again([], [], { signal: new AbortController().signal })).rejects.toThrow(/answered 400/);
   expect(posts).toBe(3);
+});
+
+test('optional output bounds map to each protocol and invalid values never acquire token or send', async () => {
+ const {responsesProvider}=await import('../../brain/provider');
+ for(const responses of [false,true]) {
+  let sends=0, tokens=0; const bodies: Record<string,unknown>[]=[];
+  const send=(async (_u:unknown, init?:RequestInit)=>{
+   sends++; bodies.push(JSON.parse(init!.body as string));
+   return new Response('limit unsupported',{status:400});
+  }) as typeof fetch;
+  const p=responses?responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=>{tokens++;return 'k';},fetch:send}):openAiProvider({...cfg,fetch:send});
+  for(const limit of [0,-1,1.5,NaN,Infinity,32769]) await expect(p([],[],{maxOutputTokens:limit})).rejects.toThrow('maxOutputTokens');
+  expect(sends).toBe(0); expect(tokens).toBe(0);
+  await expect(p([],[],{maxOutputTokens:512})).rejects.toThrow();
+  expect(sends).toBe(1); // Unsupported bound must not be dropped and retried.
+  expect(bodies[0]![responses?'max_output_tokens':'max_completion_tokens']).toBe(512);
+  await expect(p([],[])).rejects.toThrow();
+  expect(bodies[1]).not.toHaveProperty('max_output_tokens');
+  expect(bodies[1]).not.toHaveProperty('max_completion_tokens');
+ }
+});
+
+test('Responses sends a stable explicit prompt cache routing key', async () => {
+ const {responsesProvider}=await import('../../brain/provider');
+ const bodies: Record<string, unknown>[]=[];
+ const send=(async (_url: unknown, init: RequestInit) => {
+   bodies.push(JSON.parse(String(init.body)));
+   return new Response('refused', {status:400});
+ }) as typeof fetch;
+ const provider=responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=> 'k',cacheKey:'individual-test',summaries:false,fetch:send});
+ await expect(provider([{role:'system',content:'fixed'},{role:'user',content:'one'}],[])).rejects.toThrow();
+ await expect(provider([{role:'system',content:'fixed'},{role:'user',content:'two'}],[])).rejects.toThrow();
+ expect(bodies.map(b=>b.prompt_cache_key)).toEqual(['individual-test','individual-test']);
+ expect(bodies.map(b=>b.instructions)).toEqual(['fixed','fixed']);
+});
+
+test('plan affinity uses our session identity and retains cache key and byte-stable static fields', async () => {
+ const {responsesProvider,connect}=await import('../../brain/provider');
+ const bodies: Record<string,unknown>[]=[]; const headers: Headers[]=[];
+ const send=(async (_url:unknown,init:RequestInit)=>{
+  bodies.push(JSON.parse(String(init.body))); headers.push(new Headers(init.headers));
+  return new Response('refused',{status:400});
+ }) as typeof fetch;
+ const p=responsesProvider({baseUrl:()=>cfg.baseUrl,model:'m',token:async()=> 'test-only',cacheKey:'our-id',sessionId:'our-id',summaries:false,fetch:send});
+ const tools=[{name:'test',description:'fixed',parameters:{type:'object'}}];
+ for(const text of ['one','two']) await expect(p([{role:'system',content:'fixed'},{role:'user',content:text}],tools)).rejects.toThrow();
+ expect(headers.map(h=>h.get('session-id'))).toEqual(['our-id','our-id']);
+ expect(headers[0]!.get('user-agent')).toContain('teneral');
+ expect(headers[0]!.has('originator')).toBe(false);
+ expect(bodies.map(b=>b.prompt_cache_key)).toEqual(['our-id','our-id']);
+ expect(JSON.stringify(bodies[0]!.tools)).toBe(JSON.stringify(bodies[1]!.tools));
+ expect(bodies[0]!.instructions).toBe(bodies[1]!.instructions);
+ const api=connect({TENERAL_PROVIDER:'chatgpt',TENERAL_MODEL:'m',TENERAL_API_KEY:'test-only',TENERAL_BASE_URL:cfg.baseUrl,TENERAL_ID:'our-id'},send);
+ await expect(api([],[])).rejects.toThrow();
+ expect(headers.at(-1)!.has('session-id')).toBe(false);
 });

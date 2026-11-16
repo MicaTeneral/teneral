@@ -2,15 +2,17 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runTurn } from '../../brain/loop';
+import { runTurn, journalSuffixReads } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
+import { decideBudget } from '../../body/adaptive-budget';
 import { appendEvent, readEvents } from '../../brain/journal';
+import { buildMessages } from '../../brain/memory';
 
 function setup(replies: Reply[], tools: Tool[] = []) {
   const journal = join(mkdtempSync(join(tmpdir(), 'teneral-loop-')), 'journal.jsonl');
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp' };
   const seen: ChatMessage[][] = [];
   const provider: Provider = async (messages) => {
     seen.push(messages);
@@ -35,6 +37,22 @@ test('a plain reply is journaled and ends the turn', async () => {
   expect(shown).toEqual(['hello']);
 });
 
+test('streamed reply text is shown once, while a tool-only reply stays unchanged', async () => {
+  for (const toolCalls of [[], [{ id: 'c1', name: 'echo', args: {} }]]) {
+    const shown: string[] = [];
+    const provider: Provider = async (_messages, _tools, options) => {
+      if (toolCalls.length > 0) return { text: '', toolCalls };
+      options?.onTextDelta?.('Hel');
+      options?.onTextDelta?.('lo');
+      return { text: 'Hello', toolCalls: [] };
+    };
+    const s = setup([], [echo]);
+    expect(await runTurn({ ...s.deps, provider, onDelta: text => shown.push(text), onText: text => shown.push(text) })).toBe('done');
+    expect(shown).toEqual(toolCalls.length > 0 ? [] : ['Hel', 'lo']);
+    expect(readEvents(s.journal).find(e => e.type === 'assistant')).toMatchObject({ text: toolCalls.length > 0 ? '' : 'Hello' });
+  }
+});
+
 test('the intent is journaled before the tool runs, the result after', async () => {
   let typesWhenRun: string[] = [];
   const spy: Tool = {
@@ -48,6 +66,64 @@ test('the intent is journaled before the tool runs, the result after', async () 
   expect(typesWhenRun).toEqual(['stimulus', 'note', 'assistant', 'tool.intent']);
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'note', 'assistant']);
   expect(s.seen[1]!.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'ok' });
+});
+
+test('a cut-off reply gets one continuation with its fragment, and no partial call runs', async () => {
+  const fragment = 'half a reply\n[this reply was cut off by the provider: max_output_tokens]';
+  let ran = 0;
+  const spy: Tool = { spec: { name: 'echo', description: '', parameters: {} }, run: async () => { ran += 1; return 'ran'; } };
+  const s = setup([{ text: fragment, toolCalls: [{ id: 'partial', name: 'echo', args: {} }], cutOff: true }, { text: 'continued', toolCalls: [] }], [spy]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(s.seen[1]!.some(m => m.role === 'assistant' && m.content === fragment)).toBe(true);
+  expect(s.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringMatching(/Continue exactly where/) });
+  expect(readEvents(s.journal).filter(e => e.type === 'assistant').map(e => e.text)).toEqual([fragment, 'continued']);
+  expect(ran).toBe(0);
+  expect(readEvents(s.journal).some(e => e.type === 'tool.intent')).toBe(false);
+  expect(s.seen[1]!.some(m => m.role === 'tool')).toBe(false);
+  expect(s.seen[1]!.some(m => m.tool_calls !== undefined)).toBe(false);
+});
+
+test('a cut-off reply containing only a partial call still has a valid continuation', async () => {
+  const fragment = '[this reply was cut off by the provider: length]';
+  const s = setup([{ text: fragment, toolCalls: [{ id: 'partial', name: 'echo', args: {} }], cutOff: true }, { text: 'finished', toolCalls: [] }]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(s.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringMatching(/Continue exactly where/) });
+  expect(s.seen[1]!.some(m => m.role === 'tool' || m.tool_calls !== undefined)).toBe(false);
+});
+
+test('a second cut-off remains marked and does not loop forever', async () => {
+  const fragment = 'half\n[this reply was cut off by the provider: length]';
+  const s = setup([{ text: fragment, toolCalls: [], cutOff: true }, { text: 'still half', toolCalls: [], cutOff: true }]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen).toHaveLength(2);
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ text: 'still half', toolCalls: [] });
+});
+
+test('later rounds parse only the journal suffix, with requests identical to a full reread', { timeout: 20_000 }, async () => {
+  const s = setup([
+    { text: '', toolCalls: [{ id: 'c1', name: 'echo', args: { round: 1 } }] },
+    { text: '', toolCalls: [{ id: 'c2', name: 'echo', args: { round: 2 } }] },
+    { text: 'finished', toolCalls: [] },
+  ], [echo]);
+  for (let i = 0; i < 1000; i++) {
+    appendEvent(s.journal, 'g1', { type: 'note', kind: 'fixture.large.v1', data: { i, text: 'unchanged-prefix'.repeat(100) } });
+  }
+  journalSuffixReads.length = 0;
+  expect(await runTurn(s.deps)).toBe('done');
+  const reads = journalSuffixReads.filter(read => read.path === s.journal);
+  // Three requests and one final late-stimulus check. None reparses the unchanged prefix.
+  expect(reads).toHaveLength(4);
+  expect(reads.every(read => read.bytes < 2000)).toBe(true);
+  expect(reads[0]!.bytes).toBe(0);
+  const events = readEvents(s.journal);
+  const requests: ChatMessage[][] = [];
+  for (let end = 1002; end <= events.length - 1; end += 4) {
+    requests.push(buildMessages(events.slice(0, end), 'SYS', 200000));
+  }
+  expect(requests).toHaveLength(3);
+  expect(s.seen).toEqual(requests);
 });
 
 test('a tool that throws becomes a failed result the model can read', async () => {
@@ -226,6 +302,22 @@ test('the tool specs count against the budget', async () => {
   expect(withSpecs.map((m) => m.content)).toEqual(['SYS', 'newest']);
 });
 
+test('a successful adaptive-budget request journals provider timing without changing its reply', async () => {
+  const s = setup([]);
+  const provider: Provider = async (_messages, _tools, options) => {
+    options?.onTiming?.({ durationMs: 123, firstByteMs: 45 });
+    return { text: 'timed', toolCalls: [], usage: { input: 10, output: 2, cached: 5 } };
+  };
+  const budget = decideBudget([], null, undefined, 10_000);
+  expect(await runTurn({ ...s.deps, provider, budget })).toBe('done');
+  const note = readEvents(s.journal).find((e) => e.type === 'note' && e.kind === 'budget.sent.v1');
+  expect(note).toMatchObject({ data: { durationMs: 123, firstByteMs: 45, input: 10, cached: 5 } });
+  const data = note?.type === 'note' ? note.data : undefined;
+  expect(data).not.toHaveProperty('dropped');
+  expect(data).not.toHaveProperty('stepShare');
+  expect(readEvents(s.journal).filter((e) => e.type === 'assistant').at(-1)).toMatchObject({ text: 'timed' });
+});
+
 test('a request the provider refuses as too long is tried once more at half the budget, which then holds for the turn', async () => {
   const s = setup([]);
   for (let i = 0; i < 6; i++) {
@@ -321,7 +413,7 @@ function withImage(provider: Provider) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), PNG_BYTES);
   appendEvent(journal, 'g1', { type: 'stimulus', source: 'terminal', text: `what is this?\n[image: ${path}]` });
-  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json' };
+  const ctx: ToolContext = { workspace: '/tmp', journal, gen: 'g1', mutationCommit: null, id: 'me', inbox: '/tmp/unused-inbox', peers: '/tmp/unused-peers.json', soul: '/tmp' };
   return { journal, path, deps: { journal, gen: 'g1', provider, tools: [echo], system: () => 'SYS', ctx, sight: { load: imageStore(root) } } };
 }
 
@@ -329,7 +421,7 @@ test('the owner\'s image goes out with the message, read from the store beside t
   const seen: ChatMessage[][] = [];
   const s = withImage(async (messages) => { seen.push(messages); return { text: 'a dot', toolCalls: [] }; });
   await runTurn(s.deps);
-  expect(seen[0]![1]).toEqual({ role: 'user', content: 'what is this?', images: [{ name: `${'5'.repeat(64)}.png`, mime: 'image/png', data: PNG_BYTES.toString('base64') }] });
+  expect(seen[0]![1]).toEqual({ role: 'user', content: 'what is this?', images: [{ name: `${'5'.repeat(64)}.png`, mime: 'image/png', data: PNG_BYTES.toString('base64'), width: 1, height: 1 }] });
   // The journal holds the marker, as it was typed, and no image data.
   expect(readEvents(s.journal)[0]).toMatchObject({ text: `what is this?\n[image: ${s.path}]` });
 });
@@ -350,6 +442,41 @@ test('a request refused because of its image is asked once more with a note in i
   // Journaled as any turn is: the refusal left no trace, and nothing is owed.
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'note', 'assistant']);
   expect(needsTurn(readEvents(s.journal))).toBe(false);
+});
+
+test('an image refusal survives later turns and a new loader, and is scoped to its model and route', async () => {
+  const route = { provider: 'responses', baseUrl: 'https://route.example/v1', model: 'vision-less' };
+  const s = withImage(async () => ({ text: 'seen without the image', toolCalls: [] }));
+  let calls = 0;
+  const provider: Provider = async (messages) => {
+    calls++;
+    if (messages.some(m => m.images)) throw new ProviderError('refused', 400, 'image_url unsupported');
+    return { text: 'done', toolCalls: [] };
+  };
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'another turn' });
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  expect(calls).toBe(3); // The initial retry once; neither later turn asks with the known image.
+  expect(readEvents(s.journal).filter(e => e.type === 'note' && e.kind === 'image.refusal.v1')).toHaveLength(1);
+
+  const root = dirname(dirname(s.journal));
+  const second = `memory/images/${'6'.repeat(64)}.png`;
+  writeFileSync(join(root, second), PNG_BYTES);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: `a different image\n[image: ${second}]` });
+  const beforeOther = calls;
+  await runTurn({ ...s.deps, provider, imageRoute: route });
+  expect(calls).toBe(beforeOther + 2);
+  const notes = readEvents(s.journal).filter(e => e.type === 'note' && e.kind === 'image.refusal.v1');
+  expect(notes).toHaveLength(2);
+
+  const freshSight = { load: imageStore(root) };
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'after restart' });
+  await runTurn({ ...s.deps, provider, sight: freshSight, imageRoute: route });
+  expect(calls).toBe(beforeOther + 3);
+
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'a different model' });
+  await runTurn({ ...s.deps, provider, sight: freshSight, imageRoute: { ...route, model: 'vision-capable' } });
+  expect(calls).toBe(beforeOther + 5);
 });
 
 test('a refusal that stays after the images are gone is passed on, and one about images without any in the request is not retried', async () => {
@@ -446,6 +573,29 @@ test('interrupted while a tool runs: the tool is told, its result says so, the c
   for (const [i, id] of [[2, 'c3'], [3, 'c4']] as const) expect(results[i]).toMatchObject({ callId: id, ok: false, output: '[not started] Your owner interrupted this turn before this tool ran.' });
   expect(paired(s.journal)).toBe(true);
   expect(needsTurn(events)).toBe(false);
+});
+
+test('an interrupted idempotent read is retried once without the aborted signal', async () => {
+  let calls = 0;
+  const read: Tool = {
+    idempotent: true,
+    spec: { name: 'read', description: '', parameters: {} },
+    run: async (_args, _ctx, signal) => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
+        return 'partial';
+      }
+      expect(signal).toBeUndefined();
+      return 'complete';
+    },
+  };
+  const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'read', args: { path: 'x' } }] }], [read]);
+  const controller = new AbortController();
+  const result = runTurn({ ...s.deps, signal: controller.signal, onTool: () => setTimeout(() => controller.abort(), 10) });
+  expect(await result).toBe('interrupted');
+  expect(calls).toBe(2);
+  expect(readEvents(s.journal).filter(e => e.type === 'tool.result')[0]).toMatchObject({ ok: false, output: expect.stringContaining('complete') });
 });
 
 test('a tool that does not stop when asked is left behind after a moment, and what it does later disturbs nothing', async () => {
@@ -573,4 +723,23 @@ test('an image refused and then a request too long: each is answered once, in tu
   });
   expect(await runTurn(s.deps)).toBe('done');
   expect(seen).toHaveLength(3);
+});
+
+import { work } from '../../body/work';
+import { known } from '../../brain/known';
+
+test("queued work final text does not request another model round without a new event", async () => {
+  const s = setup([{ text: "Step verified.", toolCalls: [] }]);
+  await work.run({task:"fix",status:"queued",next:"next step",outcome:"verified result"}, s.ctx);
+  expect(await runTurn(s.deps)).toBe("done");
+  expect(s.seen).toHaveLength(1);
+  expect(readEvents(s.journal).filter(e=>e.type==="assistant")).toHaveLength(1);
+  expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: "queued", outcome: "verified result" });
+});
+
+test('completion cannot silently shrink an established outcome', async () => {
+  const s = setup([]);
+  await work.run({ task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation' }, s.ctx);
+  await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
+  expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
 });

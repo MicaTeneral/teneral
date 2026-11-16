@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bashEnv, runBash, TOOLS, type ToolContext } from '../../body/tools';
@@ -16,14 +16,16 @@ function tool(name: string) {
 
 function context(workspace: string, gen = 'gen'): ToolContext {
   const data = mkdtempSync(join(tmpdir(), 'teneral-tools-'));
+  const soul = join(data, 'soul');
+  mkdirSync(soul, { recursive: true });
   return {
     workspace, journal: join(data, 'journal.jsonl'), gen, mutationCommit: null,
-    id: 'me', inbox: join(data, 'inbox'), peers: join(data, 'peers.json'),
+    id: 'me', inbox: join(data, 'inbox'), peers: join(data, 'peers.json'), soul,
   };
 }
 
 test('the seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'done', 'edit', 'forget', 'intend', 'look', 'mutate', 'open', 'read', 'recall', 'send', 'timeline', 'write']);
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'done', 'edit', 'forget', 'intend', 'jobs', 'lesson', 'look', 'lsp', 'mutate', 'open', 'read', 'recall', 'send', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
 });
 
 test('write creates parent directories and read returns the content', async () => {
@@ -39,6 +41,37 @@ test('edit replaces one occurrence and refuses none or several', async () => {
   expect(readFileSync(join(ctx.workspace, 'f.txt'), 'utf8')).toBe('ONE two two');
   await expect(tool('edit').run({ path: 'f.txt', old: 'two', new: 'x' }, ctx)).rejects.toThrow(/2 times/);
   await expect(tool('edit').run({ path: 'f.txt', old: 'absent', new: 'x' }, ctx)).rejects.toThrow(/not found/);
+});
+
+test('file tools contain traversal and absolute paths without touching anything outside', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const ctx = context(workspace);
+  const outside = join(mkdtempSync(join(tmpdir(), 'teneral-outside-')), 'secret.txt');
+  writeFileSync(outside, 'untouched');
+  for (const path of ['../escape.txt', outside, 'new/../../escape.txt']) {
+    for (const name of ['read', 'write', 'edit']) {
+      const args = name === 'read' ? { path } : name === 'write' ? { path, content: 'bad' } : { path, old: 'a', new: 'b' };
+      await expect(tool(name).run(args, ctx)).rejects.toThrow(/outside the workspace and soul/);
+    }
+  }
+  expect(readFileSync(outside, 'utf8')).toBe('untouched');
+});
+
+test('file tools follow links in both directions and still allow the soul', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const ctx = context(workspace);
+  const outside = mkdtempSync(join(tmpdir(), 'teneral-outside-'));
+  writeFileSync(join(outside, 'secret.txt'), 'untouched');
+  symlinkSync(outside, join(workspace, 'out'), 'dir');
+  await expect(tool('read').run({ path: 'out/secret.txt' }, ctx)).rejects.toThrow(/outside/);
+  await expect(tool('write').run({ path: 'out/new/file.txt', content: 'bad' }, ctx)).rejects.toThrow(/outside/);
+  expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('untouched');
+  const linkedSoul = join(mkdtempSync(join(tmpdir(), 'teneral-link-')), 'soul-link');
+  symlinkSync(ctx.soul, linkedSoul, 'dir');
+  await tool('write').run({ path: join(linkedSoul, 'identity.md'), content: 'Mica' }, ctx);
+  expect(await tool('read').run({ path: join(ctx.soul, 'identity.md') }, ctx)).toBe('Mica');
+  await tool('edit').run({ path: join(linkedSoul, 'identity.md'), old: 'Mica', new: 'Mica, here' }, ctx);
+  expect(await tool('read').run({ path: join(ctx.soul, 'identity.md') }, ctx)).toBe('Mica, here');
 });
 
 test('bash runs in the workspace and reports the exit code and output', async () => {
@@ -377,7 +410,7 @@ test('look keeps a copy of the image under memory/images and returns the line it
   appendEvent(ctx.journal, 'gen', { type: 'tool.result', callId: 'c1', ok: true, output });
   const messages = buildMessages(readEvents(ctx.journal), 'S', undefined, { load: imageStore(root) });
   expect(messages.at(-1)).toEqual({
-    role: 'tool', tool_call_id: 'c1', content: lines[0]!, images: [{ name: lines[1]!.slice(22, -1), mime: 'image/png', data: PNG_BYTES.toString('base64') }],
+    role: 'tool', tool_call_id: 'c1', content: lines[0]!, images: [{ name: lines[1]!.slice(22, -1), mime: 'image/png', data: PNG_BYTES.toString('base64'), width: 1, height: 1 }],
   });
 });
 

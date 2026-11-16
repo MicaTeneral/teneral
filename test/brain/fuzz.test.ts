@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMessages, needsTurn, type Sight } from '../../brain/memory';
-import { IMAGE_CHARS } from '../../body/images';
+import { imageChars } from '../../body/images';
 import { toChatMessages, toResponsesInput } from '../../brain/provider';
 import type { JournalEvent } from '../../brain/journal';
 
@@ -101,7 +101,7 @@ const BUDGETS = [0, 60, 400, 3000, 30_000, undefined];
 /** Images per request: the default, none, one, an odd number, more than a journal here holds. */
 const LIMITS = [undefined, 0, 1, 3, 100];
 const sizeOf = (list: ReturnType<typeof buildMessages>) => list.reduce(
-  (sum, m) => sum + (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS, 0);
+  (sum, m) => sum + (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images ?? []).reduce((n, i) => n + imageChars(i), 0), 0);
 
 /** Throws with the reason when `messages` is not a request a strict provider would take. */
 function check(messages: ReturnType<typeof buildMessages>, budget: number | undefined): void {
@@ -261,7 +261,8 @@ function checkIsTail(trimmed: ReturnType<typeof buildMessages>, whole: ReturnTyp
 
 /** How much more than it had to the trimming took away. A step is a fifth of the room, so never the better part of it. */
 function checkNotWasteful(trimmed: ReturnType<typeof buildMessages>, whole: ReturnType<typeof buildMessages>, budget: number): void {
-  if (sizeOf(whole) <= budget && trimmed.length !== whole.length) throw new Error('a request that fitted whole was trimmed');
+  const reserve = Math.max(0, Math.min(12000, Math.floor((budget - SYSTEM.length) * .2)));
+  if (sizeOf(whole) <= budget - reserve && trimmed.length !== whole.length) throw new Error('a request that fitted the history allocation was trimmed');
 }
 
 /**

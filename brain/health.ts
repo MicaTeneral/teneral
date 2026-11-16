@@ -1,4 +1,4 @@
-import { idleTicks } from './agenda';
+import { PASSED_TICKS, idleTicks } from './agenda';
 import { episodes } from './episodes';
 import { QUESTIONS_MIN, lastResult, rate, type Result } from './exam';
 import type { JournalEvent } from './journal';
@@ -26,10 +26,8 @@ const QUARANTINED = { count: 3, share: 0.2 };
 const MECHANICAL = { count: 2, share: 0.5 };
 /** The memories tell less than this share of what the agent's own questions ask: what mattered did not get into them. */
 const TOLD_LOW = 0.5;
-/** This many ticks of time of its own in a row ended with nothing done, while there are things on the agenda: it is stuck. */
-// A number of its own, not one worked out from brain/agenda.ts when this file loads: the two files reach each other in a circle,
-// and a value read from the other at load time is not there yet when this one happens to load first.
-const STUCK_TICKS = 12;
+/** Twelve idle ticks (four times PASSED_TICKS) mean the agenda is stuck. Read lazily: health and agenda import each other indirectly. */
+const stuckTicks = (): number => PASSED_TICKS * 4;
 
 export interface Health {
   state: State;
@@ -74,7 +72,7 @@ export function health(events: JournalEvent[], now: number): Health {
   if (exam !== null && exam.written && rate(exam.told) < TOLD_LOW) behind.push(`the memories tell ${Math.round(rate(exam.told) * 100)}% of what the exam asks`);
   const idle = idleTicks(events);
   const open = agenda(known(events), today).length;
-  if (idle >= STUCK_TICKS && open > 0) behind.push(`the agenda is stuck: ${idle} ticks of time of your own in a row ended with nothing done, with ${open} ${open === 1 ? 'thing' : 'things'} open`);
+  if (idle >= stuckTicks() && open > 0) behind.push(`the agenda is stuck: ${idle} ticks of time of your own in a row ended with nothing done, with ${open} ${open === 1 ? 'thing' : 'things'} open`);
   if (overdue > 0) behind.push(`${overdue} ${overdue === 1 ? 'thing' : 'things'} meant to be done ${overdue === 1 ? 'is' : 'are'} past the day`);
 
   return {

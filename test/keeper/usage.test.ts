@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { JournalEvent } from '../../brain/journal';
 import { cacheUse } from '../../keeper/tui/view';
-import { REMEMBERING, formatUsage, memoryLine, share, usageReport } from '../../keeper/usage';
+import { LOOKING_AHEAD, REMEMBERING, formatUsage, memoryLine, share, usageReport } from '../../keeper/usage';
 
 const NOW = Date.parse('2027-01-15T12:00:00Z');
 const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -37,20 +37,25 @@ test('a journal with no usage says so, and the footer says nothing of a cache th
   expect(cacheUse(54_396, 52_608)).toBe('cached 97%');
 });
 
-test('what forming memories cost is counted, in a row of its own: those requests belong to no turn', () => {
+test('usage separates looking ahead from forming memories, and other notes with usage are ignored', () => {
   const memory = (minutesAgo: number, usage: unknown): JournalEvent => ev({ type: 'note', kind: 'memory.episode.v1', data: { title: 't', usage }, ts: at(minutesAgo), gen: 'g2' });
-  const r = usageReport([
+  const events = [
     said('terminal', 30), reply(29, { input: 1000, output: 10, cached: 900 }),
     memory(20, { input: 500, output: 60 }), memory(10, { input: 700, output: 80, cached: 100 }),
     // A memory without usage, and a note of another kind that happens to carry one, count for nothing.
     memory(5, undefined), ev({ type: 'note', kind: 'other.v1', data: { usage: { input: 9, output: 9 } }, ts: at(4), gen: 'g2' }),
-  ], NOW, 'g2');
-  expect(r.spans[0]!.spent).toEqual({ requests: 3, input: 2200, cached: 1000, output: 150 });
+    ev({ type: 'note', kind: 'memory.reflection.v1', data: { usage: { input: 300, output: 20, cached: 250 } }, ts: at(3), gen: 'g2' }),
+  ];
+  const r = usageReport(events, NOW, 'g2');
+  expect(r.spans[0]!.spent).toEqual({ requests: 4, input: 2500, cached: 1250, output: 170 });
   expect(Object.fromEntries(r.sources.map((s) => [s.name, s.spent]))).toEqual({
     [REMEMBERING]: { requests: 2, input: 1200, cached: 100, output: 140 },
     terminal: { requests: 1, input: 1000, cached: 900, output: 10 },
+    [LOOKING_AHEAD]: { requests: 1, input: 300, cached: 250, output: 20 },
   });
-  expect(formatUsage(r).join('\n')).toContain('remembering');
+  const shown = formatUsage(r).join('\n');
+  expect(shown).toContain(REMEMBERING);
+  expect(shown).toContain(LOOKING_AHEAD);
 });
 
 test('the report says how the memory stands: what is remembered, what waits, what could not be, and what is held', () => {
