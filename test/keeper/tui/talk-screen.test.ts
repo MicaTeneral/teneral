@@ -7,6 +7,7 @@ import { OWNER_REASON } from '../../../keeper/back';
 import { git } from '../../../immune/gates';
 import type { EventBody } from '../../../brain/journal';
 import { readEvents } from '../../../brain/journal';
+import { clockText } from '../../../body/sensors';
 import { IMAGE_MAX_BYTES } from '../../../keeper/tui/images';
 import { ENTRY_LIMIT } from '../../../keeper/tui/model';
 import { ago, lineage } from '../../../keeper/tui/talk';
@@ -1498,6 +1499,18 @@ test('while the agent is thinking, the line over the input box says what the mod
   unlinkSync(s.p.pulse);
   s.clock.at += 400;
   expect(line()).toContain('Mica is thinking');
+});
+
+test('a routine clock turn is a footer status, not the main activity prompt', () => {
+  const s = stage(160, 30, { name: 'Mica' });
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'clock', text: clockText(new Date(T0 + 1000)) }, 1000);
+  const live = s.live();
+  expect(live).not.toContain('Mica is thinking');
+  expect(rows(live).at(-1)).toContain('background: agenda');
+  s.journal({ type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] }, 2000);
+  expect(s.live()).not.toContain('round limit reached');
+  expect(rows(s.live()).at(-1)).not.toContain('background: agenda');
 });
 
 test('background memory work is only a footer status, not the primary prompt or its streaming text', () => {

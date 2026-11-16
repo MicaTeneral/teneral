@@ -4,6 +4,7 @@ import { AT_REST, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
 import { quietReply } from '../../brain/quiet';
+import { routineClock } from '../../body/sensors';
 
 // What the talk client knows, built from journal events one at a time: the transcript as a list
 // of entries, and where the agent stands. Nothing here reads a file or draws. Like the plain
@@ -103,9 +104,11 @@ export interface Standing {
   trouble: { message: string; failures: number; retryAt: number | null } | null;
   /** Active no-tools workers and the task each is doing, recoverable from the journal. */
   workers: { callId: string; label: string; task: string }[];
+  /** The current turn is only an ordinary clock tick, not the owner's foreground request. */
+  background: boolean;
 }
 
-export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null, trouble: null, workers: [] };
+export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null, trouble: null, workers: [], background: false };
 
 function workerTask(args: unknown): { label: string; task: string } | null {
   if (typeof args !== 'object' || args === null) return null;
@@ -141,13 +144,15 @@ export function stand(s: Standing, e: JournalEvent): Standing {
     if (c !== '' && !next.known.includes(c)) next = { ...next, known: [...next.known, c] };
   };
   switch (eventName(e.type)) {
-    case 'stimulus':
-      return { ...next, asked: false };
+    case 'stimulus': {
+      const source = asText(f.source);
+      return { ...next, asked: false, background: source === 'clock' && routineClock(asText(f.text)) };
+    }
     case 'assistant': {
       const text = asText(f.text).trim();
       const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
       const words = text !== '' && !text.startsWith(NOT_FROM_MODEL) && !quietReply(text);
-      return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
+      return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, background: !next.turn.busy ? false : next.background, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
     }
     case 'tool.intent': {
       const name = cut(flat(clean(asText(f.name))), 40);

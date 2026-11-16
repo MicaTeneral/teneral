@@ -4,7 +4,7 @@ import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
-import { QUIET_REPLY, quietReply } from './quiet';
+import { QUIET_REPLY, ROUND_LIMIT_REPLY, quietReply } from './quiet';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
@@ -245,6 +245,6 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   // mark that as answered; without it the turn stays owed and the caller starts another.
   journal.refresh();
   if (arrivedSince(journal.read(), shown)) return 'done';
-  appendEvent(d.journal, d.gen, { type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] });
+  appendEvent(d.journal, d.gen, { type: 'assistant', text: ROUND_LIMIT_REPLY, toolCalls: [] });
   return 'done';
 }

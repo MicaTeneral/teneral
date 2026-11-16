@@ -1064,7 +1064,8 @@ export class TalkScreen {
     // What the brain says of the request under way, where it says anything: thought is told apart from a hang by this.
     // A request to the model while no turn is owed is the agent forming a memory (brain/sleep.ts): nothing else asks the model then.
     const remembering = word === 'resting' || word === 'waiting for you' ? this.beat(now, true) : '';
-    const beat = word === 'thinking' || word === 'waking' ? this.beat(now) : '';
+    const background = s.background || remembering !== '';
+    const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
     const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
@@ -1097,7 +1098,7 @@ export class TalkScreen {
     const activity: Line | null = failed !== null
       ? [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} cannot get an answer from the model`, style: { fg: 'warn', bold: true } },
         { text: ` ${g.sep} ${failed.failures} in a row${wait === '' ? '' : ` ${g.sep} ${wait}`} ${g.sep} ${failed.message}`, style: { fg: 'dim' } }]
-      : active
+      : active && !background
       ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: `${clock === '' ? '' : ` ${g.sep} ${clock}`}${beat === '' ? '' : ` ${g.sep} ${beat}`}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 
@@ -1127,7 +1128,7 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(remembering === '' ? [] : ['background: remembering']), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
