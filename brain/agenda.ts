@@ -254,10 +254,11 @@ export function parseLook(reply: string): Looked | { problem: string } {
 /**
  * Looks ahead once, when it is time: asks the agent what follows from what it remembers, and
  * journals what it sets down. Whatever comes of it, a record that it looked is journaled, so that
- * a model that will not answer in form is not asked again and again.
+ * a model that will not answer in form is not asked again and again. `now` is used once when the
+ * last ready commitment closes; its reflection record is still the cooldown boundary.
  */
-export async function reflect(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
-  if (!reflectionDue(events)) return 'nothing';
+export async function reflect(d: SleepDeps, events: JournalEvent[], now = false): Promise<Slept> {
+  if (!now && !reflectionDue(events)) return 'nothing';
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
   let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events))), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });

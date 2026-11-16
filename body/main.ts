@@ -19,7 +19,8 @@ import { PATIENCE, describeDelay, failureKind, refusalNote, retryDelayMs, verdic
 import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor, type Stimulus } from './sensors';
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
-import { idleTicks, offered, ownSpend, reportAsk } from '../brain/agenda';
+import { clockText } from './sensors';
+import { idleTicks, offered, ownSpend, reflect, reportAsk } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -301,6 +302,8 @@ function idle(ms?: number): Promise<void> {
 /** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
 const REST_RETRY_MS = 15 * 60_000;
 let restNotBefore = 0;
+/** Closing the last actionable item can make a look ahead due before the next heartbeat. */
+let agendaBecameEmpty = false;
 
 /**
  * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
@@ -359,10 +362,16 @@ for (;;) {
       continue;
     }
     const before = ownerArrived;
+    const beforeTurn = readEvents(journal);
+    const readyBefore = known(standing(beforeTurn)).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'));
+    const fromClock = beforeTurn.findLast((e) => e.type === 'stimulus')?.source === 'clock';
     working = true;
     const failed = await turn();
     working = false;
     settleWords();
+    const afterTurn = standing(readEvents(journal));
+    const readyAfter = known(afterTurn).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'));
+    agendaBecameEmpty ||= readyBefore && !readyAfter && !fromClock;
     if (handoff !== null) {
       const events = readEvents(journal);
       const last = events.findLast(e => e.type === 'stimulus');
@@ -422,7 +431,30 @@ for (;;) {
     await idle(delay);
   }
   if (quitting) break;
-  // Nothing is owed: time to remember. After each memory the loop looks again for a turn to take.
+  // Nothing is owed. Closing the last actionable commitment gets one bounded look ahead now,
+  // instead of making its next intention wait behind a memory backlog or a thirty-minute clock.
+  if (agendaBecameEmpty) {
+    agendaBecameEmpty = false;
+    const events = standing(readEvents(journal));
+    const woken = new AbortController();
+    wake = () => woken.abort();
+    try {
+      const looked = await reflect({ journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
+      if (looked === 'woken') continue;
+      const after = standing(readEvents(journal));
+      if (known(after).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'))) {
+        emit({ source: 'clock', text: `${clockText(new Date())} ${offered(known(after), Date.now(), idleTicks(after))}` });
+      }
+      continue;
+    } catch (err) {
+      if (woken.signal.aborted) continue;
+      console.error(`[memory] could not look ahead now: ${err instanceof Error ? err.message : String(err)}`);
+      restNotBefore = Date.now() + REST_RETRY_MS;
+    } finally {
+      wake = null;
+    }
+  }
+  // Time to remember. After each memory the loop looks again for a turn to take.
   if (await rest()) continue;
   if (quitting) break;
   // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;

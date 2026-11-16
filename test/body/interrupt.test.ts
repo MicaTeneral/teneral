@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
+import { known } from '../../brain/known';
+import { standing } from '../../brain/owned';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
@@ -37,6 +39,8 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
   const owner = join(dir, 'owner');
   const workspace = join(dir, 'workspace');
   mkdirSync(workspace, { recursive: true });
+  mkdirSync(join(dir, 'soul'), { recursive: true });
+  writeFileSync(join(dir, 'soul', 'identity.md'), '# Test agent\n');
   // mutate requires a real commit descending from the running generation, even in this fixture.
   for (const args of [
     ['init', '-q'], ['config', 'user.name', 'test'], ['config', 'user.email', 'test@localhost'],
@@ -77,7 +81,7 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
       TENERAL_CONTEXT_CHARS: '100000',
     },
     // Keep the foreground terminal channel available: these tests also type /quit into it.
-    stdin: 'pipe', stdout: 'ignore', stderr: 'pipe',
+    stdin: process.env.MICA_TEST_BACKGROUND === '1' ? 'ignore' : 'pipe', stdout: 'ignore', stderr: 'pipe',
   });
   let stderr = '';
   void (async () => {
@@ -85,7 +89,7 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
     for await (const chunk of body.stderr) stderr += decoder.decode(chunk, { stream: true });
   })().catch(() => {});
   // Close the input as well as killing: a foreground stdin reader may own the PTY/pipe.
-  ends.push(() => { body.stdin.end(); body.kill('SIGKILL'); void server.stop(true); });
+  ends.push(() => { body.stdin?.end(); body.kill('SIGKILL'); void server.stop(true); });
   const events = (): JournalEvent[] => readEvents(journal);
   const types = (): string[] => events().slice(2).map((e) => e.type);
   /** Wait until `seen` holds, or fail saying what there was instead. */
@@ -120,9 +124,9 @@ test('a terminal line read during a mutation turn is answered before generation 
   // Never release the provider if an assertion or timeout fails.
   ends.push(release);
   await l.until('ready', () => l.types().includes('generation.ready'));
-  l.body.stdin.write('start\n');
+  l.body.stdin!.write('start\n');
   await l.until('mutation requested', () => l.asked.length === 2);
-  l.body.stdin.write('keep my late line\n');
+  l.body.stdin!.write('keep my late line\n');
   await l.until('the line is journaled', () => l.events().some(e => e.type === 'stimulus' && e.source === 'terminal' && e.text === 'keep my late line'));
   release();
   await l.until('the late-line answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Kept.'));
@@ -132,13 +136,37 @@ test('a terminal line read during a mutation turn is answered before generation 
   expect(needsTurn(l.events())).toBe(false);
 }, 10_000);
 
+test('closing the last ready commitment reflects and wakes new work immediately', async () => {
+  let mark = '';
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('d1', 'done', { intention: mark, how: 'Finished.' })] });
+    if (n === 2) return says('Fixed.');
+    if (n === 3) return reply({ content: 'Agenda:\n- [] The next ready commitment.' });
+    if (n === 4) return reply({ content: '', tool_calls: [tool('d2', 'done', { intention: known(standing(readEvents(l.journal))).intentions.find(i => i.text === 'The next ready commitment.')!.mark, how: 'Finished.' })] });
+    if (n === 5) return says('Continuing.');
+    return never();
+  }, (journal) => {
+    const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The first ready commitment.', origin: 'own', episode: 'fixture' } });
+    mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+  });
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'start');
+  await l.until('the reply that completes the first commitment', () => l.asked.length === 2 && l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
+  await l.until('the immediate reflection', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
+  await l.until('the immediate agenda turn', () => l.asked.length === 5);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(5);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+}, 10_000);
+
 test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {
   const l = life(() => never());
   await l.until('ready', () => l.types().includes('generation.ready'));
-  l.body.stdin.write('think for a long time\n');
+  l.body.stdin!.write('think for a long time\n');
   await l.until('the request', () => l.asked.length === 1);
   const pressed = Date.now();
-  l.body.stdin.write('/quit\n');
+  l.body.stdin!.write('/quit\n');
   const exited = await l.body.exited;
   expect(exited).toBe(0);
   expect(Date.now() - pressed).toBeLessThan(2000);
@@ -151,11 +179,11 @@ test('foreground /quit while bash runs reports every tool call, kills its tree a
   const command = 'echo begun; sleep 303 & echo $! > quit-child.pid; wait';
   const l = life(() => says('I will wait.', [{ id: 'q1', command }, { id: 'q2', command: 'touch quit-second-ran' }]));
   await l.until('ready', () => l.types().includes('generation.ready'));
-  l.body.stdin.write('sleep\n');
+  l.body.stdin!.write('sleep\n');
   await l.until('the command under way', () => existsSync(join(l.workspace, 'quit-child.pid')));
   const child = Number(readFileSync(join(l.workspace, 'quit-child.pid'), 'utf8'));
   const pressed = Date.now();
-  l.body.stdin.write('/quit\n');
+  l.body.stdin!.write('/quit\n');
   expect(await l.body.exited).toBe(0);
   expect(Date.now() - pressed).toBeLessThan(2000);
   expect(alive(child)).toBe(false);
