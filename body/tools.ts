@@ -13,6 +13,7 @@ import { ALLOWED_KIND, DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, byMark
 import { journalPast, shown, timeline as timelineOf, when, type Past } from '../brain/past';
 import type { Kind } from '../brain/recall';
 import { keepImage, rootOf } from './images';
+import { LESSON_ACCEPT_KIND, LESSON_CHECK_KIND, LESSON_KIND, lessons } from '../brain/lessons';
 import type { ToolSpec } from '../brain/provider';
 import { Clipped, clip } from './text';
 import { jobHistory, jobName, jobStatus, listJobs, stopJob, trackBackground } from './jobs';
@@ -648,4 +649,72 @@ const forget: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget];
+const lesson: Tool = {
+  spec: {
+    name: 'lesson',
+    description: 'Record and separately review evidence-linked lessons. propose keeps one local to its originating conversation; accept is allowed only from a later conversation in a different generation and needs basedOn 1; check verifies an accepted expected effect using later journal evidence. A single TENERAL_LESSONS=0 switch disables both reads and writes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['propose', 'accept', 'check'] },
+        topic: { type: 'string', description: 'Short retrieval topic for propose' },
+        text: { type: 'string', description: 'The bounded lesson for propose' },
+        conversation: { type: 'string', description: 'First journal event id of the originating episode for propose' },
+        evidence: { type: 'array', items: { type: 'string' }, description: '1–16 exact source journal event ids; checks must cite events after acceptance' },
+        expected: { type: 'string', description: 'Optional observable effect to verify later' },
+        lesson: { type: 'string', description: 'Lesson mark or full id for accept/check' },
+        basedOn: { type: 'number', description: 'Exact version read most recently; proposal and acceptance are both version 1, each check increments it' },
+        outcome: { type: 'string', enum: ['observed', 'not_observed'], description: 'For check: whether journal evidence shows the expected effect' },
+      },
+      required: ['action', 'evidence', 'basedOn'],
+    },
+  },
+  async run(args, ctx) {
+    if (process.env.TENERAL_LESSONS === '0') throw new Error('lessons are disabled by TENERAL_LESSONS=0');
+    const action = str(args, 'action');
+    const events = standing(readEvents(ctx.journal));
+    const held = lessons(events);
+    const record = (args as Record<string, unknown>);
+    const rawEvidence = record.evidence;
+    if (!Array.isArray(rawEvidence) || rawEvidence.length < 1 || rawEvidence.length > 16 || !rawEvidence.every(x => typeof x === 'string')) throw new Error('evidence must contain 1–16 exact journal event ids');
+    const evidence = rawEvidence as string[];
+    if (record.basedOn !== 0 && (!Number.isSafeInteger(record.basedOn) || (record.basedOn as number) < 1)) throw new Error('basedOn must be 0 for a proposal or the positive version last read');
+    if (action === 'propose') {
+      if (record.basedOn !== 0) throw new Error('a new lesson has basedOn 0');
+      if (held.length >= 64) throw new Error('lesson store is full (64); let old lessons expire before proposing more');
+      const conversation = str(args, 'conversation');
+      const { episodes } = await import('../brain/episodes');
+      const current = episodes(events).at(-1);
+      if (!current || current.closed || current.id !== conversation) throw new Error(`conversation must be the first event id of the current open episode: ${current?.id ?? 'none'}`);
+      const knownIds = new Set(events.map(e => e.id));
+      if (evidence.some(id => !knownIds.has(id))) throw new Error('every evidence id must exist in the journal');
+      const text = str(args, 'text').trim(); const topic = str(args, 'topic').trim();
+      if (text.length > 2000 || topic.length > 120) throw new Error('lesson text/topic is too long');
+      const expected = optional(args, 'expected')?.trim();
+      const note = appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_KIND, data: { text, topic, evidence, conversation, ...(expected ? { expected } : {}), version: 1 } });
+      return `Proposed local lesson L${note.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)} (v1). It is not permanent; a later conversation in another generation must accept it separately.`;
+    }
+    const mark = str(args, 'lesson');
+    const found = held.find(l => l.id === mark || l.mark === mark);
+    if (!found) throw new Error(`no current lesson has mark ${mark}`);
+    if (record.basedOn !== found.version) throw new Error(`stale lesson version: read ${record.basedOn}, current ${found.version}; reread before writing`);
+    if (action === 'accept') {
+      if (found.accepted) throw new Error('lesson is already accepted');
+      if (ctx.gen === found.proposedGen) throw new Error('a lesson cannot be accepted by the generation that proposed it');
+      const current = (await import('../brain/episodes')).episodes(events).at(-1);
+      if (!current || current.closed || current.id === found.conversation) throw new Error('acceptance requires a later, separate conversation');
+      appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_ACCEPT_KIND, data: { lesson: found.id, basedOn: found.version, evidence } });
+      return `Accepted ${found.mark} from this later conversation. Expected effects still require a separate check.`;
+    }
+    if (action === 'check') {
+      if (!found.accepted || !found.expected) throw new Error('only an accepted lesson with an expected effect can be checked');
+      const outcome = str(args, 'outcome');
+      if (outcome !== 'observed' && outcome !== 'not_observed') throw new Error('outcome must be observed or not_observed');
+      appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: LESSON_CHECK_KIND, data: { lesson: found.id, basedOn: found.version, evidence, outcome } });
+      return `Checked ${found.mark}: ${outcome}; version is now ${found.version + 1}.`;
+    }
+    throw new Error('lesson action must be propose, accept or check');
+  },
+};
+
+export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget, lesson];

@@ -5,6 +5,7 @@ import { episodes, type Episode } from './episodes';
 import { health, healthNote } from './health';
 import { known, knownText } from './known';
 import { pinned } from './owned';
+import { lessonText } from './lessons';
 import { remembered, type Memory, type Merge, type QuarantineData, type Remembered } from './remembered';
 
 // The logbook is the remembered past as a request shows it: for every episode that no longer fits
@@ -207,7 +208,7 @@ export function logbook(events: JournalEvent[], messages: ChatMessage[], origin:
   const last = events.at(-1)?.ts ?? '';
   // How the memory itself stands, while anything is wrong with it (brain/health.ts): the agent is the first who can do something about it.
   const ill = healthNote(health(events, Date.parse(last) || 0), MEMORY_MARK);
-  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
+  const held = [knownText(known(events), last.slice(0, 10), MEMORY_MARK), lessonText(events, process.env.TENERAL_LESSONS !== '0', MEMORY_MARK), ill].filter((text) => text !== null).join('\n');
   const knowing: ChatMessage[] = held === '' ? [] : [{ role: 'user', content: held }];
   const nothingSwapped: Logbook = { head: knowing, seam: null, start: 0 };
   const all = remembered(events);
