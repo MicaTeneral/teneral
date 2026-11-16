@@ -193,7 +193,6 @@ for (const [name, open] of ways) test(`${name}: a withdrawn wider memory neither
   expect(past.around(old.id, 0, 0)?.events.map((event) => event.id)).toEqual([old.id]);
 });
 
-<<<<<<< HEAD
 for (const [name, open] of ways) test(`${name}: a recognized episode recovers a low-ranked closing answer`, () => {
   clock = Date.parse('2026-11-11T08:00:00.000Z');
   const complaint = 'Why do duplicate replies appear after reports?';
@@ -226,8 +225,6 @@ for (const [name, open] of ways) test(`${name}: a recognized episode recovers a 
   expect(closing).toBeLessThan(progress);
 });
 
-=======
->>>>>>> origin/main
 test('an index over lines reads them again only when there are more', () => {
   let calls = 0;
   const { events } = life();
