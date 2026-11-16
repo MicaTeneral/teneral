@@ -33,7 +33,10 @@ afterEach(() => {
 });
 
 /** A life that has already said its first words and is at rest, unless `seed` says otherwise. */
-function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
+function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => void) | boolean, lookAfterEveryTurn = false) {
+  const seed = typeof seedOrLook === 'function' ? seedOrLook : undefined;
+  if (typeof seedOrLook === 'boolean') lookAfterEveryTurn = seedOrLook;
+  // Do not add an `undefined` argument before the flag: Bun's TS transform can drop the last one.
   const dir = mkdtempSync(join(tmpdir(), 'teneral-interrupt-'));
   const journal = join(dir, 'memory', 'journal.jsonl');
   const owner = join(dir, 'owner');
@@ -75,6 +78,7 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
       PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
       TENERAL_GEN: commit, TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
+      ...(lookAfterEveryTurn ? { TENERAL_REFLECT_AFTER_TURN: '1' } : { TENERAL_REFLECT_AFTER_TURN: '0' }),
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
       // This test is about interruption, not trimming. Keep enough room after the real composed
       // prompt and tool specifications to show the interrupted exchange on the next request.
@@ -100,7 +104,7 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
     }
     throw new Error(`never happened: ${what}\njournal: ${types().join(', ')}\nasked: ${asked.length}\nstderr: ${stderr}`);
   };
-  return { dir, journal, owner, workspace, asked, body, events, types, until, stderr: () => stderr };
+  return { dir, journal, owner, workspace, asked, body, events, types, until, lookAfterEveryTurn, stderr: () => stderr };
 }
 
 const alive = (pid: number): boolean => {
@@ -136,6 +140,27 @@ test('a terminal line read during a mutation turn is answered before generation 
   expect(needsTurn(l.events())).toBe(false);
 }, 10_000);
 
+test('a reply that records a waiting dependency still gets one bounded look ahead', async () => {
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
+      task: 'Finish the repository change', status: 'waiting', next: 'Wait for the existing check.',
+      outcome: 'The change is merged.', evidence: 'The check is running.',
+    })] });
+    if (n === 2) return says('Waiting for the check.');
+    if (n === 3) return reply({ content: 'Nothing' });
+    return never();
+  }, undefined, true);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'finish the repository change');
+  await l.until('the dependency answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Waiting for the check.'));
+  await l.until('the bounded look ahead despite open waiting work', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
+  expect(l.asked).toHaveLength(3);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(3);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(0);
+}, 10_000);
+
 test('closing the last ready commitment reflects and wakes new work immediately', async () => {
   let mark = '';
   const l = life((n) => {
@@ -148,7 +173,7 @@ test('closing the last ready commitment reflects and wakes new work immediately'
   }, (journal) => {
     const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The first ready commitment.', origin: 'own', episode: 'fixture' } });
     mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
-  });
+  }, true);
   await l.until('ready', () => l.types().includes('generation.ready'));
   tell(l.owner, 'start');
   await l.until('the reply that completes the first commitment', () => l.asked.length === 2 || l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
@@ -171,7 +196,7 @@ test('a reflection that needs an owner decision gets its question turn immediate
   }, (journal) => {
     const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The only ready commitment.', origin: 'own', episode: 'fixture' } });
     mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
-  });
+  }, true);
   await l.until('ready', () => l.types().includes('generation.ready'));
   tell(l.owner, 'start');
   await l.until('the reflection produces an unsure intention', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { unsure?: unknown }).unsure === true));

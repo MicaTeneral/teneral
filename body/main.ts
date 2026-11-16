@@ -302,8 +302,8 @@ function idle(ms?: number): Promise<void> {
 /** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
 const REST_RETRY_MS = 15 * 60_000;
 let restNotBefore = 0;
-/** Closing the last actionable item can make a look ahead due before the next heartbeat. */
-let agendaBecameEmpty = false;
+/** A completed non-clock turn gets one bounded look ahead, also when dependencies remain open. */
+let agendaNeedsLook = false;
 
 /**
  * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
@@ -363,15 +363,14 @@ for (;;) {
     }
     const before = ownerArrived;
     const beforeTurn = readEvents(journal);
-    const readyBefore = known(standing(beforeTurn)).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'));
     const fromClock = beforeTurn.findLast((e) => e.type === 'stimulus')?.source === 'clock';
     working = true;
     const failed = await turn();
     working = false;
     settleWords();
-    const afterTurn = standing(readEvents(journal));
-    const readyAfter = known(afterTurn).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'));
-    agendaBecameEmpty ||= readyBefore && !readyAfter && !fromClock;
+    // Open commitments and new dependencies do not make a completed reply an endpoint. One look
+    // ahead may find the next authorized step; a clock turn must not recursively trigger another.
+    agendaNeedsLook ||= !fromClock && process.env.TENERAL_REFLECT_AFTER_TURN !== '0';
     if (handoff !== null) {
       const events = readEvents(journal);
       const last = events.findLast(e => e.type === 'stimulus');
@@ -431,13 +430,20 @@ for (;;) {
     await idle(delay);
   }
   if (quitting) break;
-  // Nothing is owed. Closing the last actionable commitment gets one bounded look ahead now,
-  // instead of making its next intention wait behind a memory backlog or a thirty-minute clock.
-  if (agendaBecameEmpty) {
-    agendaBecameEmpty = false;
+  // Nothing is owed. A completed non-clock turn gets one bounded look ahead now, instead of
+  // leaving open work behind a memory backlog or a thirty-minute clock.
+  if (agendaNeedsLook) {
+    agendaNeedsLook = false;
     const events = standing(readEvents(journal));
     const woken = new AbortController();
+    // An idle wake can arrive before reflection installs its abort handler. Do not mistake that
+    // for an owner interrupt of a request which has not started yet.
     wake = () => woken.abort();
+    if (needsTurn(readEvents(journal))) {
+      wake = null;
+      agendaNeedsLook = true;
+      continue;
+    }
     try {
       const looked = await reflect({ journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
       if (looked === 'woken') continue;
