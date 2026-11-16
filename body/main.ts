@@ -30,6 +30,7 @@ import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, 
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
+import { foregroundPrompt } from './prompt';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -122,9 +123,11 @@ let current: AbortController | null = null;
  * an inbox message does not hurry it. The owner's own line always does: that is in emit.
  */
 let retryAt: number | null = null;
+const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
+  if (s.source === 'terminal') terminalPrompt.submitted();
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
   if (ownerStimulus(s)) {
     ownerArrived += 1;
@@ -263,7 +266,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       journal, gen, provider, tools: [...TOOLS, subagent(provider), subagents(provider), research(provider)], ctx, budgetChars, tailChars, sight, imageRoute: imageRoute(process.env), budget: budgetChoice,
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
-      onText: (t) => console.log(`\n${t}\n`),
+      onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => console.log(t),
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
@@ -374,6 +377,7 @@ for (;;) {
       const note = refusalNote(error, kind);
       appendEvent(journal, gen, { type: 'assistant', text: note, toolCalls: [] });
       console.log(`\n${note}\n`);
+      terminalPrompt.answered();
       failures = 0;
       streak.count = 0;
       continue;
@@ -420,8 +424,8 @@ for (;;) {
   } catch (err) {
     console.error(`[memory] the store could not be written: ${err instanceof Error ? err.message : String(err)}`);
   }
-  // A prompt only where someone can type at it; in the background it would be noise in the log.
-  if (process.stdin.isTTY) process.stdout.write('> ');
+  // A prompt only where someone can type at it; a wake reuses the existing input place.
+  if (process.stdin.isTTY) terminalPrompt.ready();
   await idle();
 }
 
