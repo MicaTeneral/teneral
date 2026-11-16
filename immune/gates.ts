@@ -30,7 +30,8 @@ export const DEFAULT_CHECKS: readonly Check[] = [
   // Two runs, so the tests of what supervises and judges the agent, and the agent's own, of its body and its brain, each have to show up and pass on their own.
   // A lineage from before there was a brain has no test/brain, and bun then runs what test/body holds.
   { gate: 'tests-stem', cmd: ['bun', 'test', 'test/stem', 'test/immune', 'test/species', 'test/keeper'], bunSummary: true },
-  { gate: 'tests-body', cmd: ['bun', 'test', 'test/body', 'test/brain'], bunSummary: true },
+  // The tests of the agent itself, including its heart, run independently of the supervising stem.
+  { gate: 'tests-body', cmd: ['bun', 'test', 'test/body', 'test/brain', 'test/heart'], bunSummary: true },
 ];
 
 /** The command a generation is started with, by the supervisor and by the smoke gate alike. */
@@ -162,17 +163,17 @@ export interface BodyEntry {
   size: number;
 }
 
-/** What `commit` holds under body/ and brain/, read from the commit itself, never from a worktree. */
+/** What `commit` holds under body/, brain/ and heart/, read from the commit itself, never from a worktree. */
 export function bodyEntries(dir: string, commit: string): BodyEntry[] {
   // Each record is `<mode> <type> <object> <size>\t<path>`, the size padded with spaces.
-  return gitPaths(dir, 'ls-tree', '-r', '-l', '-z', commit, '--', 'body', 'brain').map((record) => {
+  return gitPaths(dir, 'ls-tree', '-r', '-l', '-z', commit, '--', 'body', 'brain', 'heart').map((record) => {
     const tab = record.indexOf('\t');
     const [mode = '', , , size = ''] = record.slice(0, tab).split(/ +/);
     return { path: record.slice(tab + 1), mode, size: Number(size) || 0 };
   });
 }
 
-/** Bytes of the files `commit` holds under body/ and brain/. */
+/** Bytes of the files `commit` holds under body/, brain/ and heart/. */
 export function bodySize(dir: string, commit = 'HEAD'): number {
   return bodyEntries(dir, commit).reduce((total, entry) => total + entry.size, 0);
 }
@@ -644,7 +645,7 @@ export async function runGates(
     const entries = bodyEntries(dir, to);
     const odd = entries.filter((entry) => !PLAIN_MODES.has(entry.mode));
     if (odd.length > 0) {
-      return fail('body', `body/ and brain/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
+      return fail('body', `body/, brain/ and heart/ may hold only plain files; these are not: ${odd.map((entry) => entry.path).join(', ')}`);
     }
     pins = pinsAt(dir, to);
   } catch (err) {

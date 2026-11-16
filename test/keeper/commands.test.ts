@@ -41,6 +41,7 @@ test('/help prints the table: every command for the screen client, with the key 
     '  /stop              interrupt what the agent is doing now',
     '  /approve [commit]  approve the mutation the agent asked about, or the commit or offer named',
     '  /offers            what waits for your approval before it goes out to the species',
+    '  /heart             give the agenda one pulse now',
     '  /quit              leave',
   ]);
 });

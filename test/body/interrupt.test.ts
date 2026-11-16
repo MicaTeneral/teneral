@@ -97,12 +97,12 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
   const events = (): JournalEvent[] => readEvents(journal);
   const types = (): string[] => events().slice(2).map((e) => e.type);
   /** Wait until `seen` holds, or fail saying what there was instead. */
-  const until = async (what: string, seen: () => boolean, ms = 10_000): Promise<void> => {
+  const until = async (what: string, seen: () => boolean, ms = 7_000): Promise<void> => {
     for (const began = Date.now(); Date.now() - began < ms;) {
       if (seen()) return;
       await Bun.sleep(15);
     }
-    throw new Error(`never happened: ${what}\njournal: ${types().join(', ')}\nasked: ${asked.length}\nstderr: ${stderr}`);
+    throw new Error(`never happened: ${what}\njournal: ${JSON.stringify(events().slice(-12).map(e => ({ type: e.type, source: (e as { source?: unknown }).source, text: (e as { text?: unknown }).text, kind: (e as { kind?: unknown }).kind, data: (e as { data?: unknown }).data })))}\nasked: ${asked.length}\nexit: ${body.exitCode}\nstderr: ${stderr}`);
   };
   return { dir, journal, owner, workspace, asked, body, events, types, until, lookAfterEveryTurn, stderr: () => stderr };
 }
@@ -186,26 +186,49 @@ test('closing the last ready commitment reflects and wakes new work immediately'
 }, 10_000);
 
 test('a reflection that needs an owner decision gets its question turn immediately', async () => {
-  let mark = '';
   const l = life((n) => {
-    if (n === 1) return reply({ content: '', tool_calls: [tool('d1', 'done', { intention: mark, how: 'Finished.' })] });
-    if (n === 2) return says('Fixed.');
-    if (n === 3) return reply({ content: 'Unsure:\n- May I publish the prepared correction?' });
+    if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
+      task: 'The existing answer', status: 'waiting', next: 'Wait for the owner.',
+      outcome: 'The owner answers.', evidence: 'The dependency is recorded.',
+    })] });
+    if (n === 2) return says('Waiting.');
+    if (n === 3) return reply({ content: 'Ask:\n- [] May I publish the prepared correction?' });
     if (n === 4) return says('I3dbfbe44: may I publish the prepared correction?');
     return never();
-  }, (journal) => {
-    const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The only ready commitment.', origin: 'own', episode: 'fixture' } });
-    mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
-  }, true);
+  }, undefined, true);
   await l.until('ready', () => l.types().includes('generation.ready'));
-  tell(l.owner, 'start');
-  await l.until('the reflection produces an unsure intention', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { unsure?: unknown }).unsure === true));
-  await l.until('the clock offers the question without a heartbeat', () => l.events().some(e => e.type === 'assistant' && e.text.startsWith('I3dbfbe44:')));
+  tell(l.owner, 'record the dependency');
+  await l.until('the reflection produces a question', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { origin?: unknown }).origin === 'ask' && (e.data as { text?: unknown }).text === 'May I publish the prepared correction?'));
+  await l.until('the pulse asks the new question', () => l.events().some(e => e.type === 'assistant' && e.text.startsWith('I3dbfbe44:')));
   expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
-  expect(known(standing(readEvents(l.journal))).intentions.some(i => i.unsure === true && i.put !== undefined)).toBe(true);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'terminal')).toHaveLength(1);
+  expect(known(standing(readEvents(l.journal))).intentions.some(i => i.origin === 'ask' && i.put !== undefined)).toBe(true);
   await Bun.sleep(300);
   expect(l.asked).toHaveLength(4);
   expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+}, 10_000);
+
+test('a /heart line during a turn waits for its reply and then takes the agenda turn', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const l = life(async n => {
+    if (n === 1) { await hold; return says('Finished first.'); }
+    if (n === 2) return says('Pulse answered.');
+    return never();
+  });
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'start');
+  await l.until('the running request', () => l.asked.length === 1);
+  tell(l.owner, '/heart');
+  await Bun.sleep(80);
+  expect(l.asked).toHaveLength(1);
+  expect(l.asked[0]!.aborted).toBe(false);
+  expect(l.events().some(e => e.type === 'stimulus' && e.text === '/heart')).toBe(false);
+  release();
+  await l.until('the pulse reply', () => l.events().some(e => e.type === 'assistant' && e.text === 'Pulse answered.'));
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(l.asked).toHaveLength(2);
 }, 10_000);
 
 test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {

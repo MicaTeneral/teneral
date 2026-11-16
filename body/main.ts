@@ -20,7 +20,7 @@ import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
-import { idleTicks, offered, ownSpend, reflect, reportAsk, toAsk } from '../brain/agenda';
+import { ownSpend, reflect, reportAsk } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -32,6 +32,7 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
+import { Heart, agendaFor, heartCommand } from '../heart/coordinator';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -114,6 +115,8 @@ try {
 let quitting = false;
 let working = false;
 let wake: (() => void) | null = null;
+/** Wakes only the sleep between beats; background requests install their own abort wake. */
+let idleWake: (() => void) | null = null;
 /** Owner stimuli journaled by this process: only these may shorten a failed turn's backoff. */
 let ownerArrived = 0;
 /** Aborts the turn in progress; null between turns. */
@@ -131,6 +134,12 @@ const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
   if (s.source === 'terminal') terminalPrompt.submitted();
+  if (s.source === 'terminal' && heartCommand(s.text)) {
+    heart.requestPulse();
+    // A pulse is work for the next beat, not a cancellation of reflection, memory or a live turn.
+    idleWake?.();
+    return;
+  }
   appendEvent(journal, gen, { type: 'stimulus', source: s.source, text: s.text });
   if (ownerStimulus(s)) {
     ownerArrived += 1;
@@ -192,7 +201,7 @@ const sensors: Sensor[] = [
   }),
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
-  // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
+  // Heartbeat and /heart share the same pulse construction; only the owner command is manual.
   clock(
     heartbeatMinutes * 60_000,
     () => {
@@ -200,10 +209,7 @@ const sensors: Sensor[] = [
       // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
       return clockMayTick(events, soulDir) && (ownTokensDay === null || ownSpend(events, Date.now()) < ownTokensDay);
     },
-    () => {
-      const events = standing(readEvents(journal));
-      return offered(known(events), Date.now(), idleTicks(events), reportAsk(events, Date.now(), reportHours * 3_600_000));
-    },
+    () => agendaFor(readEvents(journal), Date.now(), reportHours * 3_600_000),
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
   // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
@@ -296,14 +302,13 @@ function idle(ms?: number): Promise<void> {
   return new Promise<void>((resolve) => {
     const timer = ms === undefined ? undefined : setTimeout(resolve, ms);
     wake = () => { clearTimeout(timer); resolve(); };
-  }).then(() => { wake = null; });
+    idleWake = wake;
+  }).then(() => { wake = null; idleWake = null; });
 }
 
 /** How long after a memory could not be formed before the next try. The episode waits; nothing is lost by waiting. */
 const REST_RETRY_MS = 15 * 60_000;
 let restNotBefore = 0;
-/** A completed non-clock turn gets one bounded look ahead, also when dependencies remain open. */
-let agendaNeedsLook = false;
 
 /**
  * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
@@ -336,6 +341,23 @@ async function rest(): Promise<boolean> {
 
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
+const heart = new Heart({
+  events: () => readEvents(journal),
+  emit,
+  reflect: async () => {
+    const woken = new AbortController();
+    wake = () => woken.abort();
+    try {
+      const events = standing(readEvents(journal));
+      return await reflect({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
+    } finally { wake = null; }
+  },
+  remember: rest,
+  onError: error => {
+    console.error(`[memory] could not look ahead now: ${error instanceof Error ? error.message : String(error)}`);
+    restNotBefore = Date.now() + REST_RETRY_MS;
+  },
+});
 // A journal with no stimulus yet means this individual was never born: the letter goes first.
 const firstWords = birth(readEvents(journal), letter);
 if (firstWords !== null) emit(firstWords);
@@ -362,15 +384,11 @@ for (;;) {
       continue;
     }
     const before = ownerArrived;
-    const beforeTurn = readEvents(journal);
-    const fromClock = beforeTurn.findLast((e) => e.type === 'stimulus')?.source === 'clock';
     working = true;
     const failed = await turn();
     working = false;
     settleWords();
-    // Open commitments and new dependencies do not make a completed reply an endpoint. One look
-    // ahead may find the next authorized step; a clock turn must not recursively trigger another.
-    agendaNeedsLook ||= !fromClock && process.env.TENERAL_REFLECT_AFTER_TURN !== '0';
+    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0');
     if (handoff !== null) {
       const events = readEvents(journal);
       const last = events.findLast(e => e.type === 'stimulus');
@@ -430,42 +448,11 @@ for (;;) {
     await idle(delay);
   }
   if (quitting) break;
-  // Nothing is owed. A completed non-clock turn gets one bounded look ahead now, instead of
-  // leaving open work behind a memory backlog or a thirty-minute clock.
-  if (agendaNeedsLook) {
-    agendaNeedsLook = false;
-    const events = standing(readEvents(journal));
-    const woken = new AbortController();
-    // An idle wake can arrive before reflection installs its abort handler. Do not mistake that
-    // for an owner interrupt of a request which has not started yet.
-    wake = () => woken.abort();
-    if (needsTurn(readEvents(journal))) {
-      wake = null;
-      agendaNeedsLook = true;
-      continue;
-    }
-    try {
-      const looked = await reflect({ journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
-      if (looked === 'woken') continue;
-      const after = standing(readEvents(journal));
-      const held = known(after);
-      // A reflection can create work that needs a word from the owner rather than a ready task.
-      // Offer that now too; otherwise even a newly formed question waits for the next heartbeat.
-      if (held.intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own')) || toAsk(held, Date.now()).length > 0) {
-        emit({ source: 'clock', text: `${clockText(new Date())} ${offered(held, Date.now(), idleTicks(after))}` });
-      }
-      continue;
-    } catch (err) {
-      if (woken.signal.aborted) continue;
-      console.error(`[memory] could not look ahead now: ${err instanceof Error ? err.message : String(err)}`);
-      restNotBefore = Date.now() + REST_RETRY_MS;
-    } finally {
-      wake = null;
-    }
-  }
-  // Time to remember. After each memory the loop looks again for a turn to take.
-  if (await rest()) continue;
+  // The heart chooses one bounded idle activity. A new pulse or reflection loops back so any
+  // newly owed turn is answered before memory work or a long sleep.
+  const beat = await heart.next();
   if (quitting) break;
+  if (beat !== 'wait') continue;
   // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
   // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
   try {

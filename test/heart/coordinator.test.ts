@@ -1,0 +1,63 @@
+import { expect, test } from 'bun:test';
+import { Heart, afterTurn, heartCommand, pulseNeeded, type HeartState } from '../../heart/coordinator';
+import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
+import { join } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { known } from '../../brain/known';
+
+const setup = () => {
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-heart-')), 'journal.jsonl');
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'birth', text: 'Hello.' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Here.', toolCalls: [] });
+  return journal;
+};
+
+test('the heart command is one exact owner line, not an arbitrary message', () => {
+  expect(heartCommand(' /heart ')).toBe(true);
+  expect(heartCommand('/heart now')).toBe(false);
+  expect(heartCommand('please /heart')).toBe(false);
+});
+
+test('a completed ordinary turn asks for one look; clock and interruption do not', () => {
+  const state: HeartState = { look: false, pulse: false };
+  const events = setup();
+  afterTurn(state, readEvents(events));
+  expect(state.look).toBe(true);
+  const clock: HeartState = { look: false, pulse: false };
+  appendEvent(events, 'g', { type: 'stimulus', source: 'clock', text: 'tick' });
+  afterTurn(clock, readEvents(events));
+  expect(clock.look).toBe(false);
+  const stopped: HeartState = { look: false, pulse: false };
+  appendEvent(events, 'g', { type: 'turn.interrupted' });
+  afterTurn(stopped, readEvents(events));
+  expect(stopped.look).toBe(false);
+});
+
+test('an owner pulse is coalesced and does not call the model by itself', async () => {
+  const journal = setup();
+  const pulses: string[] = [];
+  let remembered = 0;
+  const heart = new Heart({ events: () => readEvents(journal), emit: s => pulses.push(s.text), reflect: async () => { throw new Error('not requested'); }, remember: async () => { remembered++; return false; }, onError: () => {} });
+  heart.requestPulse(); heart.requestPulse();
+  expect(await heart.next()).toBe('pulse');
+  expect(pulses).toHaveLength(1);
+  expect(await heart.next()).toBe('wait');
+  expect(remembered).toBe(1);
+});
+
+test('reflection asks for a pulse for a newly ready task, not a recursive reflection', async () => {
+  const journal = setup();
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'finish' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Finished.', toolCalls: [] });
+  const state: HeartState = { look: false, pulse: false };
+  afterTurn(state, readEvents(journal));
+  expect(state.look).toBe(true);
+  const heart = new Heart({ events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {
+    appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'Do the next safe step.', origin: 'own', episode: 'fixture' } });
+  }, remember: async () => false, onError: () => {} });
+  heart.completed(readEvents(journal));
+  expect(await heart.next()).toBe('reflect');
+  expect(known(readEvents(journal)).intentions.some(i => i.origin === 'own')).toBe(true);
+  expect(await heart.next()).toBe('turn');
+});

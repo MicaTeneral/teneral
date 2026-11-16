@@ -29,8 +29,8 @@ jobs:
         run: bun x tsc --noEmit
       - name: the tests of the stem, the immune gates, the species and the keeper
         run: bun test test/stem test/immune test/species test/keeper
-      - name: the tests of the body and the brain
-        run: bun test test/body test/brain
+      - name: the tests of the body, the brain and the heart
+        run: bun test test/body test/brain test/heart
       # Once more as the stem itself runs them on a candidate, in a fresh checkout with a bare
       # environment, ending with the smoke run: the body is started against a stand-in for the model.
       # What the seed pins, fetched into the cache and kept only with the pinned hash, as an install does when it starts.
@@ -54,13 +54,13 @@ jobs:
       - name: report them
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-          FREE: '^(body/|brain/|test/body/|test/brain/|BACKLOG\.md$)'
+          FREE: '^(body/|brain/|heart/|test/body/|test/brain/|test/heart/|BACKLOG\.md$)'
           HELD: '^(brain/journal\.ts$)'
         run: |
           changed="$(git -c core.quotePath=false diff --name-only --no-renames "$(git merge-base "$BASE" HEAD)" HEAD)"
           outside="$({ printf '%s\n' "$changed" | grep -v -E "$FREE" || true; printf '%s\n' "$changed" | grep -E "$HELD" || true; } | sed '/^$/d' | sort -u)"
           if [ -z "$outside" ]; then
-            echo "This pull request changes only what a mutation changes without asking its owner: body/, brain/, their tests and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "This pull request changes only what a mutation changes without asking its owner: body/, brain/, heart/, their tests and BACKLOG.md." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             count="$(printf '%s\n' "$outside" | wc -l | tr -d ' ')"
             echo "::warning title=Outside the body::This pull request changes $count path(s) a mutation changes only with its owner's approval: the stem, its tests or the project's own files."

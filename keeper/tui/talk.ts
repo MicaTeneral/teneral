@@ -841,6 +841,9 @@ export class TalkScreen {
         }
         return this.page('what the model was asked for', lines);
       }
+      case '/heart':
+        // The body turns this owner line into one bounded pulse; it is not a second running turn.
+        return this.send('/heart');
       case '/memory': {
         let lines: string[];
         try {
