@@ -16,8 +16,11 @@ const ROOT = join(import.meta.dir, '..', '..');
 interface Asked { messages: { role: string; content: unknown }[]; aborted: boolean }
 type Answer = (n: number, asked: Asked) => Response | Promise<Response>;
 
-const says = (text: string, calls: { id: string; command: string }[] = []): Response => Response.json({
-  choices: [{ message: { content: text, tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: c.command }) } })) } }],
+const reply = (message: Record<string, unknown>): Response => Response.json({ choices: [{ message }] });
+const tool = (id: string, name: string, args: Record<string, unknown>) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+
+const says = (text: string, calls: { id: string; command: string }[] = []): Response => reply({
+  content: text, tool_calls: calls.map(c => tool(c.id, 'bash', { command: c.command })),
 });
 /** An answer that never comes. */
 const never = (): Promise<Response> => new Promise(() => {});
@@ -34,8 +37,19 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
   const owner = join(dir, 'owner');
   const workspace = join(dir, 'workspace');
   mkdirSync(workspace, { recursive: true });
-  appendEvent(journal, 'g0', { type: 'stimulus', source: 'birth', text: 'Hello.' });
-  appendEvent(journal, 'g0', { type: 'assistant', text: 'Hello. I am here.', toolCalls: [] });
+  // mutate requires a real commit descending from the running generation, even in this fixture.
+  for (const args of [
+    ['init', '-q'], ['config', 'user.name', 'test'], ['config', 'user.email', 'test@localhost'],
+    ['commit', '--allow-empty', '-q', '-m', 'running generation'],
+    ['commit', '--allow-empty', '-q', '-m', 'candidate'],
+  ]) {
+    const run = Bun.spawnSync(['git', ...args], { cwd: workspace });
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString());
+  }
+  const history = Bun.spawnSync(['git', 'log', '--format=%H', '--reverse'], { cwd: workspace }).stdout.toString().trim().split('\n');
+  const commit = history[0]!;
+  appendEvent(journal, commit, { type: 'stimulus', source: 'birth', text: 'Hello.' });
+  appendEvent(journal, commit, { type: 'assistant', text: 'Hello. I am here.', toolCalls: [] });
   seed?.(journal, owner);
   const asked: Asked[] = [];
   const server = Bun.serve({
@@ -55,7 +69,7 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
     cwd: dir,
     env: {
       PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
-      TENERAL_GEN: 'g1', TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
+      TENERAL_GEN: commit, TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
       // This test is about interruption, not trimming. Keep enough room after the real composed
@@ -93,6 +107,30 @@ const alive = (pid: number): boolean => {
     return false;
   }
 };
+
+test('a terminal line read during a mutation turn is answered before generation hand-off', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const l = life(async (n, asked) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('m1', 'mutate', { motive: 'test hand-off' })] });
+    if (n === 2) { await hold; return says('Mutation requested.'); }
+    expect(asked.messages.some(m => m.role === 'user' && m.content === 'keep my late line')).toBe(true);
+    return says('Kept.');
+  });
+  // Never release the provider if an assertion or timeout fails.
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin.write('start\n');
+  await l.until('mutation requested', () => l.asked.length === 2);
+  l.body.stdin.write('keep my late line\n');
+  await l.until('the line is journaled', () => l.events().some(e => e.type === 'stimulus' && e.source === 'terminal' && e.text === 'keep my late line'));
+  release();
+  await l.until('the late-line answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Kept.'));
+  const exit = await Promise.race([l.body.exited, Bun.sleep(1000).then(() => 'still running' as const)]);
+  expect(exit).toBe(75);
+  expect(l.events().filter(e => e.type === 'mutation.requested')).toHaveLength(1);
+  expect(needsTurn(l.events())).toBe(false);
+}, 10_000);
 
 test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {
   const l = life(() => never());

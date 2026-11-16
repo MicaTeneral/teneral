@@ -123,6 +123,8 @@ let current: AbortController | null = null;
  * an inbox message does not hurry it. The owner's own line always does: that is in emit.
  */
 let retryAt: number | null = null;
+/** The already-requested mutation to hand to the stem once no foreground terminal line is unanswered. */
+let handoff: string | null = null;
 const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
@@ -277,7 +279,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
     });
-    if (outcome === 'mutation') process.exit(75);
+    if (outcome === 'mutation') handoff = ctx.mutationCommit;
     // Not a failure: nothing is counted and nothing is tried again. The loop below finds no turn owed and waits.
     if (outcome === 'interrupted') console.error('[interrupted]');
     return null;
@@ -341,6 +343,7 @@ stops.push(watchJournal(journal, () => wake?.()));
 let failures = 0;
 let streak: { kind: FailureKind; count: number } = { kind: 'passing', count: 0 };
 for (;;) {
+  if (handoff !== null) process.exit(75);
   settleWords();
   // Also true right after a restart: an unfinished turn or a stem note is picked up here.
   while (!quitting && needsTurn(readEvents(journal))) {
@@ -360,6 +363,13 @@ for (;;) {
     const failed = await turn();
     working = false;
     settleWords();
+    if (handoff !== null) {
+      const events = readEvents(journal);
+      const last = events.findLast(e => e.type === 'stimulus');
+      // A terminal line read during the mutation turn is durable and must get its reply now.
+      // Re-running mutate would be rejected as a repeated request, so keep the original handoff.
+      if (last?.source !== 'terminal' || !needsTurn(events)) process.exit(75);
+    }
     if (failed === null) {
       retryAt = null;
       failures = 0;

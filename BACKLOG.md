@@ -9,7 +9,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Conversation
 
-7. **Lines typed around a mutation may be dropped.** Only in the foreground: what the old process had already read from the terminal but not yet journaled dies with it. Lines sent through `./one talk` are files in the owner directory, removed only after they are journaled, so they survive a mutation. Better when: a line typed in the foreground at any moment around a mutation is in the journal afterwards.
 26. **Images go out at full size.** A file of up to 10 MB is sent as it is, in every request while it is among the newest few, so one request can carry tens of megabytes. Against the budget each counts a fixed 12,000 characters (`IMAGE_CHARS` in `body/images.ts`), an estimate that is not checked against the image's real dimensions or against `usage`. Better when: an image is made smaller once, when it is first kept, and its charge is the token cost its size gives, checked against the usage the provider reports.
 
 ## Sensors
