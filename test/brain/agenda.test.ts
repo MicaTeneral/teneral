@@ -52,6 +52,26 @@ test('the agent looks ahead only once enough has been remembered since it last d
   expect(reflectionDue([...events, ev({ type: 'note', kind: REFLECTION_KIND, data: {} })])).toBe(false);
 });
 
+test('an idle agenda with no own ideas gets a bounded look ahead, and a fresh look is not repeated', () => {
+  const tick = () => ev({ type: 'stimulus', source: 'clock', text: 'Clock tick.' }, LONG);
+  const idle = () => [tick(), ev({ type: 'assistant', text: 'Everything waits.', toolCalls: [] })];
+  const waiting = intention('Wait for an external answer', { work: { status: 'waiting', next: 'Wait.', attempts: 0, resumeAt: 0 } });
+  const events = [...idle(), ...idle(), ...idle(), waiting];
+  expect(idleTicks(events)).toBe(PASSED_TICKS);
+  expect(reflectionDue(events)).toBe(true);
+
+  const looked = ev({ type: 'note', kind: REFLECTION_KIND, data: {} });
+  expect(reflectionDue([...events, looked])).toBe(false);
+  // The look is an idle wake; ticks after it must reach the threshold again.
+  expect(reflectionDue([...events, looked, ...idle(), ...idle(), ...idle()])).toBe(true);
+
+  // New memories keep the old trigger even when an existing own idea is open. With only waiting
+  // commitments there is no own idea to advance, so the idle path remains available.
+  expect(reflectionDue([...events, looked, intention('An open own idea', { origin: 'own' })])).toBe(false);
+  const remembered = Array.from({ length: REFLECT_EVERY }, () => ev({ type: 'note', kind: EPISODE_KIND, data: { outcome: 'done' } }));
+  expect(reflectionDue([...events, looked, ...remembered, intention('An open own idea', { origin: 'own' })])).toBe(true);
+});
+
 test('what it sets down when it looks ahead becomes intentions of its own, questions for its owner, and closes what is settled', async () => {
   const taken = intention('Send the owner the weekly deploy report');
   const events = [...life(REFLECT_EVERY), taken];
@@ -204,6 +224,18 @@ test('ticks that end with nothing done are counted, and after a few a tick offer
   expect(offered(held, NOW, PASSED_TICKS)).toContain('you passed over several times, and they stay on it');
   // It comes round again.
   expect(first(PASSED_TICKS * 2)).toBe('Thing number 2');
+
+  // A wall of old waits must not hide work that is ready now.
+  const waiting = Array.from({ length: 5 }, (_, i) => intention(`Waiting for dependency ${i}`, {
+    work: { status: 'waiting', next: 'Wait for the named dependency.', attempts: 0, resumeAt: 0 },
+  }));
+  const ready = intention('Ready work behind the waits', {
+    work: { status: 'queued', next: 'Do the concrete next step.', attempts: 0, resumeAt: 0 },
+  });
+  const text = offered(known([...waiting, ready]), NOW);
+  expect(text).toContain('I');
+  expect(text).toContain('Ready work behind the waits');
+  expect(text).not.toContain('Waiting for dependency 0');
 });
 
 test('what time of its own costs is the tokens of the turns a tick woke, over the last day', () => {

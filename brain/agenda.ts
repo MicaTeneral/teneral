@@ -155,16 +155,25 @@ export function ownSpend(events: JournalEvent[], now: number): number {
   return spent;
 }
 
-/** Whether it is time to look ahead: enough has been remembered since the last time. */
+/** Whether it is time to look ahead: enough memories, or an idle agenda with no own idea to carry it. */
 export function reflectionDue(events: JournalEvent[]): boolean {
   let since = 0;
+  let last = '';
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.type !== 'note') continue;
-    if (e.kind === REFLECTION_KIND) break;
+    if (e.kind === REFLECTION_KIND) {
+      last = e.ts;
+      break;
+    }
     if (e.kind === EPISODE_KIND && (e.data as { outcome?: unknown } | null)?.outcome !== 'quiet') since += 1;
   }
-  return since >= REFLECT_EVERY;
+  if (since >= REFLECT_EVERY) return true;
+  if (known(events).intentions.some((i) => i.origin === 'own' && !i.waits)) return false;
+  // Only idle ticks since the last look can make another one due. That look itself, or a reflection
+  // reached through new memories, is a fresh boundary: three new idle ticks are needed, not a loop.
+  const idle = idleTicks(events.filter((e) => e.ts > last));
+  return idle >= PASSED_TICKS;
 }
 
 /** What the agent is asked, after everything a turn would show it. */
@@ -387,7 +396,10 @@ export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS)
  */
 export function offered(held: Known, now: number, idle = 0, report = ''): string {
   const today = new Date(now).toISOString().slice(0, 10);
-  const whole = agenda(held, today);
+  const listed = agenda(held, today);
+  // Ready work comes before waits. Otherwise a full page of dependencies can hide the one commitment
+  // that can actually advance, leaving the agent silent while the scheduler waits behind it.
+  const whole = listed.filter((i) => i.work?.status !== 'waiting');
   // What was offered and passed over several ticks running gives way to what stands after it, so that nothing behind
   // a line that cannot be acted on waits for ever. What is due keeps its place; the rest comes round again in turn.
   const come = whole.filter((i) => i.due !== undefined && i.due <= today);
@@ -407,7 +419,7 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'What you say in your reply here your owner reads when they next come to you, and no one else does. A reminder is one line, not the case made again. '
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
-  if (todo.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda. If something is worth doing now all the same, do it; if not, say so in one line.`;
+  if (todo.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; if not, say so in one line.`;
   const rows = todo.slice(0, OFFERED).map((i) => {
     const why = i.due !== undefined && i.due <= today ? `[due ${i.due}, which has come] ` : i.origin === 'own' ? '[your own idea] ' : '';
     return `${i.mark} ${why}${line(i.text)}`;
