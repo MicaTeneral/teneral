@@ -9,11 +9,17 @@ export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wait';
 export interface HeartState { look: boolean; pulse: boolean }
 export const heartCommand = (line: string): boolean => line.trim() === '/heart';
 
-export function afterTurn(state: HeartState, events: JournalEvent[], enabled = true): void {
-  const last = events.findLast(e => e.type === 'stimulus');
-  if (!enabled || last?.source === 'clock') return;
-  const interrupted = last !== undefined && events.some(e => e.type === 'turn.interrupted' && e.ts >= last.ts);
-  if (!interrupted) state.look = true;
+export function afterTurn(state: HeartState, events: JournalEvent[], enabled = true, from?: number): void {
+  if (!enabled) return;
+  // A direct caller supplies the complete turn by default; body/main snapshots its start before
+  // running it so late scheduled stimuli cannot change whether that turn asked for a look.
+  from ??= events.findLastIndex(e => e.type === 'stimulus');
+  // One runTurn can answer a late scheduled stimulus too. Look at the whole turn, not just its
+  // last stimulus, and never cancel an already requested look merely because work followed it.
+  const recent = events.slice(from);
+  const ordinary = recent.findLastIndex(e => e.type === 'stimulus' && e.source !== 'clock' && e.source !== 'work');
+  if (ordinary < 0) return;
+  if (!recent.slice(ordinary + 1).some(e => e.type === 'turn.interrupted')) state.look = true;
 }
 export function pulseNeeded(held: Known, now: number): boolean {
   return held.intentions.some(i => !i.waits && (i.work?.status === 'queued' || i.origin === 'own')) || toAsk(held, now).length > 0;
@@ -44,7 +50,7 @@ export class Heart {
   private state: HeartState = { look: false, pulse: false };
   constructor(private d: HeartDeps) {}
   requestPulse(): void { this.state.pulse = true; }
-  completed(events: JournalEvent[], enabled = true): void { afterTurn(this.state, events, enabled); }
+  completed(events: JournalEvent[], enabled = true, from?: number): void { afterTurn(this.state, events, enabled, from); }
   async next(): Promise<Beat> {
     if (needsTurn(standing(this.d.events()))) return 'turn';
     if (this.state.pulse) {

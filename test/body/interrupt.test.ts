@@ -162,6 +162,44 @@ test('a reply that records a waiting dependency still gets one bounded look ahea
   expect(l.asked).toHaveLength(4);
 }, 10_000);
 
+test('a work-source turn cannot cancel a pending reflection and leave waiting work asleep', async () => {
+  const task = 'Publish the verified change';
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const l = life(async (n) => {
+    if (n === 1) { await hold; return says('Recorded the dependency.'); }
+    if (n === 2) return says('Checked the existing dependency.');
+    if (n === 3) return reply({ content: 'Nothing' });
+    if (n === 4) return says('Still waiting for approval.');
+    return never();
+  }, (journal) => {
+    appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: {
+      text: task, work: { status: 'waiting', next: 'Wait for the existing approval.', attempts: 0, resumeAt: 0 },
+    } });
+  }, true);
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'record the dependency');
+  await l.until('the ordinary reply requests a look', () => l.asked.length === 1);
+  // Run the one state transition under inspection synchronously; a watcher would be free to wake
+  // the idle loop between these calls, which is a different ordering from the reported failure.
+  const { afterTurn } = await import('../../heart/coordinator');
+  const heartState = { look: false, pulse: false };
+  appendEvent(l.journal, 'g', { type: 'stimulus', source: 'work', text: `Resume the recorded task. Task: ${task}` });
+  // Keep the assertion about this exact state transition synchronous with the release: a watcher
+  // must not get a free scheduling turn in the middle of the regression's own arrangement.
+  afterTurn(heartState, l.events(), true, 3);
+  release();
+  await l.until('the scheduled work turn finishes', () => l.asked.length >= 2);
+  await l.until('the pending reflection survives the work turn', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
+  await l.until('the existing waiting work gets its bounded follow-up', () => l.asked.length === 4);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'work')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(4);
+}, 10_000);
+
 test('closing the last ready commitment reflects and wakes new work immediately', async () => {
   let mark = '';
   const l = life((n) => {

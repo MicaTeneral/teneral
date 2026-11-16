@@ -384,11 +384,15 @@ for (;;) {
       continue;
     }
     const before = ownerArrived;
+    // The stimulus that woke this turn is already in the journal. Start after the last settled
+    // reply/interruption, not at the current end, and include any late work answered by the turn.
+    const beforeTurn = readEvents(journal);
+    const turnFrom = beforeTurn.findLastIndex(e => e.type === 'assistant' || e.type === 'turn.interrupted') + 1;
     working = true;
     const failed = await turn();
     working = false;
     settleWords();
-    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0');
+    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
     if (handoff !== null) {
       const events = readEvents(journal);
       const last = events.findLast(e => e.type === 'stimulus');
