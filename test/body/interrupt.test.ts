@@ -62,14 +62,16 @@ function life(answer: Answer, seed?: (journal: string, owner: string) => void) {
       // prompt and tool specifications to show the interrupted exchange on the next request.
       TENERAL_CONTEXT_CHARS: '100000',
     },
-    stdin: 'ignore', stdout: 'ignore', stderr: 'pipe',
+    // Keep the foreground terminal channel available: these tests also type /quit into it.
+    stdin: 'pipe', stdout: 'ignore', stderr: 'pipe',
   });
   let stderr = '';
   void (async () => {
     const decoder = new TextDecoder();
     for await (const chunk of body.stderr) stderr += decoder.decode(chunk, { stream: true });
   })().catch(() => {});
-  ends.push(() => { body.kill('SIGKILL'); void server.stop(true); });
+  // Close the input as well as killing: a foreground stdin reader may own the PTY/pipe.
+  ends.push(() => { body.stdin.end(); body.kill('SIGKILL'); void server.stop(true); });
   const events = (): JournalEvent[] => readEvents(journal);
   const types = (): string[] => events().slice(2).map((e) => e.type);
   /** Wait until `seen` holds, or fail saying what there was instead. */
@@ -91,6 +93,42 @@ const alive = (pid: number): boolean => {
     return false;
   }
 };
+
+test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {
+  const l = life(() => never());
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin.write('think for a long time\n');
+  await l.until('the request', () => l.asked.length === 1);
+  const pressed = Date.now();
+  l.body.stdin.write('/quit\n');
+  const exited = await l.body.exited;
+  expect(exited).toBe(0);
+  expect(Date.now() - pressed).toBeLessThan(2000);
+  expect(l.types()).toContain('turn.interrupted');
+  expect(l.asked[0]!.aborted).toBe(true);
+  expect(needsTurn(l.events())).toBe(false);
+}, 10_000);
+
+test('foreground /quit while bash runs reports every tool call, kills its tree and exits', async () => {
+  const command = 'echo begun; sleep 303 & echo $! > quit-child.pid; wait';
+  const l = life(() => says('I will wait.', [{ id: 'q1', command }, { id: 'q2', command: 'touch quit-second-ran' }]));
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  l.body.stdin.write('sleep\n');
+  await l.until('the command under way', () => existsSync(join(l.workspace, 'quit-child.pid')));
+  const child = Number(readFileSync(join(l.workspace, 'quit-child.pid'), 'utf8'));
+  const pressed = Date.now();
+  l.body.stdin.write('/quit\n');
+  expect(await l.body.exited).toBe(0);
+  expect(Date.now() - pressed).toBeLessThan(2000);
+  expect(alive(child)).toBe(false);
+  const results = l.events().flatMap(e => e.type === 'tool.result' ? [e] : []);
+  expect(results).toHaveLength(2);
+  expect(results[0]).toMatchObject({ callId: 'q1', ok: false });
+  expect(results[0]!.output).toContain('[interrupted]');
+  expect(results[1]).toMatchObject({ callId: 'q2', ok: false, output: '[not started] Your owner interrupted this turn before this tool ran.' });
+  expect(l.types().at(-1)).toBe('turn.interrupted');
+  expect(existsSync(join(l.workspace, 'quit-second-ran'))).toBe(false);
+}, 10_000);
 
 test('interrupted while it waits for the model: the request is dropped at the provider, the journal says so, and the body waits without asking again', async () => {
   const l = life((n) => (n === 1 ? never() : says('Stopped before I had begun. What now?')));

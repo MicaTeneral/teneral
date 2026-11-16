@@ -180,7 +180,13 @@ function settleWords(): void {
 
 const sensors: Sensor[] = [
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
-  terminal(console, () => { quitting = true; wake?.(); }),
+  terminal(console, () => {
+    quitting = true;
+    // Foreground /quit is an exit, unlike ./one talk's detach: abort the live provider/tool turn.
+    // runTurn journals its interruption and bounded cleanup before the main loop exits normally.
+    current?.abort();
+    wake?.();
+  }),
   // The owner's lines from `./one talk`, which may come and go while this process lives.
   owner(ownerDir, undefined, interrupt, ownerWord),
   // Reads the journal and the soul before each tick: see clockMayTick for when it stays silent.
