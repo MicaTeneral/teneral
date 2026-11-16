@@ -16,7 +16,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 
 ## Sensors
 
-12. **Workspace watcher.** Notice when the person edits files in the repository. Better when: such an edit shows up as a stimulus without the person saying so.
 
 ## Robustness
 

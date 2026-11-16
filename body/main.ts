@@ -2,6 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { github, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
+import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
@@ -193,6 +194,12 @@ const sensors: Sensor[] = [
     },
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
+  // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
+  ...(process.env.TENERAL_WORKSPACE_WATCH === '1' ? [workspaceSensor({
+    root: workspace,
+    events: () => readEvents(journal),
+    checkpoint: (cursor: WorkspaceCursor) => appendEvent(journal, gen, { type: 'note', kind: WORKSPACE_CURSOR_KIND, data: cursor }),
+  })] : []),
   ...githubRepositories.map(repository => github({
     repository,
     events: () => readEvents(journal),
