@@ -180,7 +180,7 @@ const look: Tool = {
     parameters: params({ path: 'Image file path' }),
   },
   async run(args, ctx) {
-    const kept = keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
+    const kept = await keepImage(rootOf(ctx.journal), resolve(ctx.workspace, str(args, 'path')));
     // The last line is what brain/memory.ts shows the image by; it is honoured only in the result of this tool.
     return `${str(args, 'path')}: ${kept.mime}, ${kept.bytes} bytes\n${kept.marker}`;
   },

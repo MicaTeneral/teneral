@@ -15,7 +15,7 @@ import { holder, readState, type Paths } from '../../stem/supervisor';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
 import {
-  Clip, IMAGES_PER_MESSAGE, IMAGE_MAX_BYTES, NotKept, keep, look, namedLikeImage, pathsIn, sizeText, whyNoClipboard, withMarkers,
+  Clip, IMAGES_PER_MESSAGE, IMAGE_MAX_BYTES, NotKept, keepFitted, look, namedLikeImage, pathsIn, sizeText, whyNoClipboard, withMarkers,
   type Attachment,
 } from './images';
 import { KeyParser, type Key } from './keys';
@@ -234,6 +234,8 @@ export class TalkScreen {
   private soulStamp = '?';
   private ticks = 0;
   private readonly asks: Ask[] = [];
+  /** One codec pipeline at a time; helper answers still arrive in their original order. */
+  private preparing: Promise<void> = Promise.resolve();
   /** Keys pressed while a line that may be a file's path is looked up: they are taken once it is known. */
   private held: Key[] | null = null;
   /** Lines typed while the agent was in the middle of a step: kept here, not sent yet, and the owner's to take back with Up. */
@@ -528,6 +530,11 @@ export class TalkScreen {
     this.edit = { ...this.edit, text: line.typed, cursor: line.typed.length, chips: line.chips, at: null };
   }
 
+  /** Wait for codec work already accepted from the helper; used by deterministic terminal tests. */
+  async imagesReady(): Promise<void> {
+    await this.preparing;
+  }
+
   /** Look at the journal, the helper's answers and the soul once, print what is finished, and paint if the live region shows differently. */
   tick(): void {
     if (this.closed) return;
@@ -696,6 +703,8 @@ export class TalkScreen {
 
   private submit(): void {
     const text = this.edit.text.trim();
+    // A second Enter while a file is being prepared must not discard the pending line and chips.
+    if (this.held !== null) return;
     if (text === '' && this.edit.chips.length === 0) return;
     const line = entered(text);
     if (line.kind === 'command') {
@@ -874,13 +883,14 @@ export class TalkScreen {
   }
 
   private full(): boolean {
-    if (this.edit.chips.length + this.asks.filter((ask) => ask.origin === 'key' || ask.origin === 'command').length < IMAGES_PER_MESSAGE) return false;
+    if (this.edit.chips.length + this.asks.filter((ask) => ask.origin === 'key' || ask.origin === 'command' || ask.origin === 'paste').length < IMAGES_PER_MESSAGE) return false;
     this.say(`A message carries at most ${IMAGES_PER_MESSAGE} images. Backspace at the start of the line removes the last one.`);
     return true;
   }
 
   /** Ctrl+V: the image in the clipboard of the owner's machine, which only the helper there can reach. */
   private fromClipboard(): void {
+    if (this.held !== null) return this.say('Finish the image being attached before asking for another.');
     if (this.full()) return;
     const why = whyNoClipboard(this.clip.tool(), this.clip.there);
     if (why !== null) return this.say(why);
@@ -905,7 +915,8 @@ export class TalkScreen {
   /** Ask for the file at `path`: of the helper when there is one, else of this client's own disk. */
   private bring(path: string, raw: string, origin: Ask['origin']): void {
     const ask: Ask = { n: null, origin, path, raw };
-    if (origin === 'command' && this.full()) return;
+    if (this.held !== null && origin !== 'enter') return this.say('Finish the image being attached before asking for another.');
+    if (this.full()) return;
     if (this.clip.there) {
       ask.n = this.clip.ask('file', path);
       if (ask.n === null) return this.failed(ask, 'gone', '');
@@ -941,20 +952,36 @@ export class TalkScreen {
   }
 
   private arrived(ask: Ask, bytes: Uint8Array): void {
-    const what = ask.origin === 'key' ? 'The clipboard\'s image' : ask.path;
-    let image: Attachment;
-    try {
-      image = keep(this.root, bytes);
-    } catch (err) {
-      if (err instanceof NotKept && err.message.startsWith('it is not')) return this.failed(ask, 'not-image', '');
-      this.say(`${what} was not attached: ${err instanceof Error ? err.message : String(err)}.`);
-      return this.release(ask, false);
-    }
-    this.images.set(image.path, image);
-    if (this.edit.chips.some((chip) => chip.path === image.path)) this.say('That image is attached already.');
-    else if (this.edit.chips.length >= IMAGES_PER_MESSAGE) this.say(`A message carries at most ${IMAGES_PER_MESSAGE} images, so ${what === ask.path ? what : 'that one'} was not attached. Backspace at the start of the line removes the last one.`);
-    else this.edit = attach(this.edit, image);
-    this.release(ask, true);
+    // Codec work is asynchronous; serialize completions so paste order and enter/held-key handling
+    // stay deterministic. The host helper and the source file are never modified.
+    this.preparing = this.preparing.then(async () => {
+      if (this.closed) return;
+      this.dirty = true;
+      const what = ask.origin === 'key' ? 'The clipboard\'s image' : ask.path;
+      let image: Attachment;
+      try {
+        image = await keepFitted(this.root, bytes);
+      } catch (err) {
+        if (this.closed) return;
+        if (err instanceof NotKept && err.message.startsWith('it is not')) return this.failed(ask, 'not-image', '');
+        this.say(`${what} was not attached: ${err instanceof Error ? err.message : String(err)}.`);
+        return this.release(ask, false);
+      }
+      if (this.closed) return;
+      this.images.set(image.path, image);
+      if (ask.origin === 'enter') {
+        // Replace the path before replaying held keys: otherwise "look" replaces the path and drops
+        // the chip attached to that old line.
+        this.edit = { ...this.edit, text: '', cursor: 0, at: null };
+      }
+      this.release(ask, true, image);
+    }).catch((err) => {
+      // A codec failure must not poison the queue for every later attachment.
+      if (!this.closed) {
+        this.say(`${ask.path || 'The clipboard\'s image'} was not attached: ${err instanceof Error ? err.message : String(err)}.`);
+        this.release(ask, false);
+      }
+    });
   }
 
   private failed(ask: Ask, code: string, detail: string): void {
@@ -980,13 +1007,41 @@ export class TalkScreen {
   }
 
   /** What becomes of the text that named a file, once it is known whether the file was attached. */
-  private release(ask: Ask, attached: boolean): void {
+  private release(ask: Ask, attached: boolean, image?: Attachment): void {
     if (ask.origin === 'paste' && !attached) this.edit = insert(this.edit, ask.raw);
-    if (ask.origin !== 'enter') return;
+    if (ask.origin !== 'enter') {
+      if (image) {
+        if (this.edit.chips.some((chip) => chip.path === image.path)) this.say('That image is attached already.');
+        else if (this.edit.chips.length >= IMAGES_PER_MESSAGE) this.say(`A message carries at most ${IMAGES_PER_MESSAGE} images, so ${ask.path || 'that image'} was not attached. Backspace at the start of the line removes the last one.`);
+        else this.edit = attach(this.edit, image);
+      }
+      return;
+    }
     const held = this.held ?? [];
     this.held = null;
-    if (attached) this.edit = { ...this.edit, text: '', cursor: 0, at: null };
+    if (attached) this.edit = this.edit.text.trim() === ask.raw.trim() ? { ...this.edit, text: '', cursor: 0, at: null } : this.edit;
     else if (!namedLikeImage(ask.path)) this.send(this.edit.text.trim());
+    if (image && attached) {
+      // Attach to the current line only after held typing has replaced the entered path. An Enter
+      // among those keys sends immediately, with the image, instead of losing the chip.
+      let sentImage = false;
+      for (const key of held) {
+        if (this.edit.chips.length >= IMAGES_PER_MESSAGE && !this.edit.chips.some(chip => chip.path === image.path)) break;
+        if (key.kind === 'key' && key.name === 'enter' && !key.alt && !key.shift) {
+          const text = this.edit.text.trim();
+          if (text !== '' && this.edit.chips.length < IMAGES_PER_MESSAGE) {
+            this.edit = attach(this.edit, image);
+            this.send(text);
+            sentImage = true;
+          }
+          continue;
+        }
+        this.key(key);
+      }
+      if (!sentImage && this.edit.chips.length < IMAGES_PER_MESSAGE && !this.edit.chips.some(chip => chip.path === image.path)) this.edit = attach(this.edit, image);
+      this.dirty = true;
+      return;
+    }
     for (const key of held) this.key(key);
   }
 

@@ -421,7 +421,7 @@ test('the owner\'s image goes out with the message, read from the store beside t
   const seen: ChatMessage[][] = [];
   const s = withImage(async (messages) => { seen.push(messages); return { text: 'a dot', toolCalls: [] }; });
   await runTurn(s.deps);
-  expect(seen[0]![1]).toEqual({ role: 'user', content: 'what is this?', images: [{ name: `${'5'.repeat(64)}.png`, mime: 'image/png', data: PNG_BYTES.toString('base64') }] });
+  expect(seen[0]![1]).toEqual({ role: 'user', content: 'what is this?', images: [{ name: `${'5'.repeat(64)}.png`, mime: 'image/png', data: PNG_BYTES.toString('base64'), width: 1, height: 1 }] });
   // The journal holds the marker, as it was typed, and no image data.
   expect(readEvents(s.journal)[0]).toMatchObject({ text: `what is this?\n[image: ${s.path}]` });
 });

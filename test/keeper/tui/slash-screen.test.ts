@@ -477,12 +477,13 @@ test('on a low screen fewer commands are shown and the list still follows the ch
   expect(s.app.closed).toBe(true);
 });
 
-test('with images attached the list stands under the box that holds them, and a command run leaves them attached', () => {
+test('with images attached the list stands under the box that holds them, and a command run leaves them attached', async () => {
   const s = stage(90, 30);
   settled(s);
   const file = join(s.p.root, 'plan.png');
   writeFileSync(file, png(640, 480));
   s.type(`/image ${file}${ENTER}`);
+  await s.ready();
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1 · png · 640×480 · \d+ B\]$/), '›']);
   s.type('/to');
   expectFrame('commands-with-image-90x30', s.all());

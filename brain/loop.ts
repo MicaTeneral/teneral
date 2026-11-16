@@ -2,7 +2,7 @@ import { acceptanceNotes } from "../body/acceptance";
 import { REFUSED_KIND, SENT_KIND, type BudgetDecision } from '../body/adaptive-budget';
 import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
-import { IMAGE_REFUSAL_KIND, imageRoute, refusedImages, type ImageRoute } from '../body/images';
+import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
@@ -133,7 +133,9 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
         // Only when a chooser is in play: tests that don't pass `budget` keep the historical event sequence.
         if (d.budget !== undefined) {
           const chars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, budget: d.budget.budgetChars, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
+          const images = messages.flatMap(m => m.images ?? []);
+          const estimatedImageTokens = images.reduce((sum, image) => sum + imageChars(image) / 4, 0);
+          appendEvent(d.journal, d.gen, { type: 'note', kind: SENT_KIND, data: { chars, input: reply.usage?.input ?? 0, cached: reply.usage?.cached ?? 0, ...(images.length > 0 ? { estimatedImageTokens } : {}), ...(reply.usage?.images === undefined ? {} : { imageTokens: reply.usage.images }), budget: d.budget.budgetChars, windowTokens: d.budget.windowTokens, ...(timing === undefined ? {} : { durationMs: timing.durationMs, ...(timing.firstByteMs === null ? {} : { firstByteMs: timing.firstByteMs }) }) } });
         }
         break;
       } catch (err) {

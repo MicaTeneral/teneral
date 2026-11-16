@@ -3,7 +3,7 @@ import type { JournalEvent } from './journal';
 import { backNote, standing, OWNER_PREFIX, fromOwner } from './owned';
 import { asText, stemNote } from './stemnote';
 import { MEMORY_MARK, logbook, sizeOf, type Sizes } from './logbook';
-import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, IMAGE_CHARS, splitMarkers, type Image } from '../body/images';
+import { DEFAULT_IMAGES, IMAGES_PER_MESSAGE, imageChars, splitMarkers, type Image } from '../body/images';
 import type { ChatMessage, WireToolCall } from './provider';
 import { clip } from '../body/text';
 import { replyIsCurrent } from './shown';
@@ -151,7 +151,7 @@ function fit(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
     const room = budgetChars - messages.slice(newest + 1).reduce((sum, m) => sum + size(m), 0);
     const m = messages[newest]!;
     // Only its text can be cut; its images count in full.
-    const text = room - (m.images?.length ?? 0) * IMAGE_CHARS;
+    const text = room - (m.images ?? []).reduce((sum, image) => sum + imageChars(image), 0);
     if (size(m) > room && text >= CLIP_MIN) messages[newest] = { ...m, content: clip(m.content ?? '', text - CLIP_NOTE) };
   }
   // What stands before the first user message can never be sent, so it is not counted as something to make room for.

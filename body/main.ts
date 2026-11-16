@@ -77,7 +77,7 @@ const sight = { load: imageStore(rootOf(journal)), max: /^\d+$/.test(imagesSet) 
 async function keepZulipImage(bytes: Buffer): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mica-zulip-image-'));
   const file = join(dir, 'upload');
-  try { writeFileSync(file, bytes); return keepImage(rootOf(journal), file).marker; }
+  try { writeFileSync(file, bytes); return (await keepImage(rootOf(journal), file)).marker; }
   finally { rmSync(dir, { recursive: true, force: true }); }
 }
 const prompt = readFileSync(join(import.meta.dir, '..', 'brain', 'prompt.md'), 'utf8');

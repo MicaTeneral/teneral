@@ -62,8 +62,10 @@ function readUsage(raw: unknown): Usage | undefined {
   const input = count(u.prompt_tokens ?? u.input_tokens);
   const output = count(u.completion_tokens ?? u.output_tokens);
   if (input === undefined || output === undefined) return undefined;
-  const cached = count(((u.prompt_tokens_details ?? u.input_tokens_details) as { cached_tokens?: unknown } | null | undefined)?.cached_tokens);
-  return cached === undefined ? { input, output } : { input, output, cached };
+  const details = (u.prompt_tokens_details ?? u.input_tokens_details) as { cached_tokens?: unknown; image_tokens?: unknown } | null | undefined;
+  const cached = count(details?.cached_tokens);
+  const images = count(details?.image_tokens);
+  return { input, output, ...(cached === undefined ? {} : { cached }), ...(images === undefined ? {} : { images }) };
 }
 
 /** A reply without the keys it has nothing for. */

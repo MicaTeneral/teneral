@@ -3,6 +3,7 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fitImage } from '../../body/image-codec';
 
 // Images the owner gives the agent. An image is kept for good under `memory/images/`, named by
 // the SHA-256 of its bytes, and a message that carries it ends with one line naming that file.
@@ -146,6 +147,13 @@ export function keep(root: string, bytes: Uint8Array): Attachment {
   }
   const size = dimensions(bytes);
   return { path, ext, width: size?.width ?? null, height: size?.height ?? null, bytes: bytes.length };
+}
+
+/** Downsize a static image once at ingestion, then use the ordinary atomic content-addressed keep. */
+export async function keepFitted(root: string, bytes: Uint8Array): Promise<Attachment> {
+  if (bytes.length > IMAGE_MAX_BYTES) throw new NotKept(`it is ${sizeText(bytes.length)}, and the limit is ${IMAGE_MAX_BYTES / 1024 / 1024} MB for one image`);
+  if (sniff(bytes) === null) throw new NotKept('it is not a PNG, JPEG, GIF or WebP image');
+  return keep(root, await fitImage(bytes));
 }
 
 /** What a kept image is, for showing a line that names it; null when the file is not there or is no image. Reads its first bytes only. */

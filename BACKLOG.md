@@ -7,8 +7,6 @@ This is not a list of what to do. What an agent means to do is its agenda, in it
 ## The agent itself
 ## Conversation
 
-26. **Images go out at full size.** A file of up to 10 MB is sent as it is, in every request while it is among the newest few, so one request can carry tens of megabytes. Against the budget each counts a fixed 12,000 characters (`IMAGE_CHARS` in `body/images.ts`), an estimate that is not checked against the image's real dimensions or against `usage`. Better when: an image is made smaller once, when it is first kept, and its charge is the token cost its size gives, checked against the usage the provider reports.
-
 ## Sensors
 
 

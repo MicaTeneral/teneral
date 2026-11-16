@@ -548,7 +548,7 @@ function helper(s: Stage, answer: (action: string, path: string) => { first: str
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
 const stored = (s: Stage): string[] => (existsSync(join(s.p.root, 'memory', 'images')) ? readdirSync(join(s.p.root, 'memory', 'images')).sort() : []);
 
-test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the image becomes a chip in the box and a file named by its content, and the message ends with one line naming it', () => {
+test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the image becomes a chip in the box and a file named by its content, and the message ends with one line naming it', async () => {
   const s = stage(100, 34, { helper: 'xclip', name: 'Mica' });
   settled(s);
   s.clock.at = 1000;
@@ -559,6 +559,7 @@ test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the 
   expect(typed(s)).toEqual(['› what is wrong in this screenshot?']);
   const shot = png(1280, 720, 245_000);
   expect(helper(s, () => ({ first: 'ok', data: shot }))).toEqual(['clipboard']);
+  await s.ready();
   const live = s.live();
   expect(typed(s)).toEqual([`[image 1 · png · 1280×720 · ${Math.round(shot.length / 1024)} KB]`, '› what is wrong in this screenshot?']);
   expect(rows(live).at(-1)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
@@ -585,7 +586,7 @@ test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the 
   expect(s.all()).toContain('› [image 1 · png · 1280×720 · 239 KB]  [image 2 · gif · not in memory/images]\n  from another terminal');
 });
 
-test('a file dragged in, pasted as its path or named with /image becomes a chip through the helper; a path that is no picture stays the text it is', () => {
+test('a file dragged in, pasted as its path or named with /image becomes a chip through the helper; a path that is no picture stays the text it is', async () => {
   const s = stage(100, 30, { helper: 'wl-paste' });
   settled(s);
   s.clock.at = 1000;
@@ -602,26 +603,32 @@ test('a file dragged in, pasted as its path or named with /image becomes a chip 
   expect(typed(s)).toEqual(['›']);
   expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the file …$/);
   expect(helper(s, answer)).toEqual(['file /home/owner/My Pictures/photo 1.jpg']);
+  await s.ready();
   expect(typed(s)).toEqual([`[image 1 · jpg · 4032×3024 · ${photo.length} B]`, '›']);
   // A file address, as some terminals paste it; and /image with a path from the home directory.
   s.type(PASTE('file:///home/owner/anim.gif'));
+  await s.ready();
   helper(s, answer);
   s.type('/image ~/anim.gif\r');
   expect(helper(s, answer)).toEqual(['file ~/anim.gif']);
+  await s.ready();
   expect(typed(s)).toEqual([`[image 1 · jpg · 4032×3024 · ${photo.length} B]  [image 2 · gif · 320×200 · ${anim.length} B]`, '›']);
   expect(s.all()).toContain('  That image is attached already.');
   expect(stored(s)).toEqual([`${sha(anim)}.gif`, `${sha(photo)}.jpg`].sort());
 
   // A path that is not a picture: pasted, it is text, and nothing is said. Named like a picture and not one, or not there: said, and left as text.
   s.type(PASTE('/home/owner/notes.txt'));
+  await s.ready();
   helper(s, answer);
   expect(typed(s).at(-1)).toBe('› /home/owner/notes.txt');
   s.type('\x15');
   s.type(PASTE('/home/owner/fake.png'));
+  await s.ready();
   helper(s, answer);
   expect(typed(s).at(-1)).toBe('› /home/owner/fake.png');
   expect(s.all()).toContain('  /home/owner/fake.png is not a PNG, JPEG, GIF or WebP image, so it was not attached.');
   s.type('\x15/image /home/owner/missing.png\r');
+  await s.ready();
   helper(s, answer);
   expect(s.all()).toContain('  No such file on your machine: /home/owner/missing.png');
   // A paste that only mentions a path is text and is never asked about.
@@ -637,7 +644,7 @@ test('a file dragged in, pasted as its path or named with /image becomes a chip 
   expect(rows(s.live()).some((row) => row.includes('attached'))).toBe(false);
 });
 
-test('a line that is a path and nothing else, sent with Enter: an image is attached instead of sent; anything else is sent as the words it is', () => {
+test('a line that is a path and nothing else, sent with Enter: an image is attached instead of sent; anything else is sent as the words it is', async () => {
   const s = stage(100, 30, { helper: 'xclip' });
   settled(s);
   s.clock.at = 1000;
@@ -648,17 +655,20 @@ test('a line that is a path and nothing else, sent with Enter: an image is attac
   s.type('look');
   expect(typed(s)).toEqual(['› /tmp/shot.png']);
   expect(helper(s, answer)).toEqual(['file /tmp/shot.png']);
+  await s.ready();
   expect(typed(s)).toEqual([`[image 1 · png · 800×600 · ${shot.length} B]`, '› look']);
   expect(sentFiles(s)).toEqual([]);
   s.type('\r');
   expect(sentFiles(s)).toEqual([`look\n[image: memory/images/${sha(shot)}.png]`]);
   // A path of something else is the owner's words.
   s.type('/etc/hosts\r');
+  await s.ready();
   helper(s, answer);
   expect(typed(s)).toEqual(['›']);
   expect(sentFiles(s)).toContain('/etc/hosts');
   // Named as a picture and not there: not sent, said why, left to be corrected.
   s.type('/tmp/shto.png\r');
+  await s.ready();
   helper(s, answer);
   expect(typed(s)).toEqual(['› /tmp/shto.png']);
   expect(s.all()).toContain('  No such file on your machine: /tmp/shto.png');
@@ -669,13 +679,28 @@ test('a line that is a path and nothing else, sent with Enter: an image is attac
   expect(sentFiles(s)).toContain('/teneral/body is where you live');
 });
 
-test('limits: at most four images in a message, 10 MB each, and each refusal says which', () => {
+test('Enter while an entered image is being prepared keeps the line and sends it once with the image', async () => {
+  const s = stage(100, 30, { helper: 'xclip' });
+  settled(s);
+  s.clock.at = 1000;
+  const shot = png(800, 600);
+  s.type('/tmp/shot.png\r');
+  s.type('look\r');
+  expect(sentFiles(s)).toEqual([]);
+  expect(helper(s, () => ({ first: 'ok', data: shot }))).toEqual(['file /tmp/shot.png']);
+  await s.ready();
+  expect(sentFiles(s)).toEqual([`look\n[image: memory/images/${sha(shot)}.png]`]);
+  expect(typed(s)).toEqual(['›']);
+});
+
+test('limits: at most four images in a message, 10 MB each, and each refusal says which', async () => {
   const s = stage(100, 34, { helper: 'xclip' });
   settled(s);
   s.clock.at = 1000;
   for (let i = 1; i <= 4; i++) {
     s.type('\x16');
     helper(s, () => ({ first: 'ok', data: png(10 * i, 10) }));
+    await s.ready();
     s.frame();
   }
   expect(typed(s).join(' ').match(/\[image \d/g)).toHaveLength(4);
@@ -692,22 +717,26 @@ test('limits: at most four images in a message, 10 MB each, and each refusal say
 
   // Too large, as the helper measures it and as the client measures what the helper hands over.
   s.type('\x16');
+  await s.ready();
   helper(s, () => ({ first: 'error too-large 14900000' }));
   expect(s.all()).toContain('  The clipboard\'s image is 14.2 MB, and the limit is 10 MB for one image. It was not attached.');
   s.type('/image /tmp/huge.png\r');
+  await s.ready();
   helper(s, () => ({ first: 'ok', data: png(10, 10, IMAGE_MAX_BYTES) }));
   expect(s.all()).toContain('  /tmp/huge.png is 10.0 MB, and the limit is 10 MB for one image. It was not attached.');
   s.type('\x16');
+  await s.ready();
   helper(s, () => ({ first: 'error no-image' }));
   expect(s.all()).toContain('  There is no image in the clipboard.');
   s.type('\x16');
   helper(s, () => ({ first: 'ok', data: Buffer.from('<svg/>') }));
+  await s.ready();
   expect(s.all()).toContain('  The clipboard could not be read.');
   expect(typed(s)).toEqual(['›']);
   expect(stored(s)).toHaveLength(4);
 });
 
-test('without a helper, or without a clipboard tool, Ctrl+V says precisely why and what to do; a file this client can read itself is still attached', () => {
+test('without a helper, or without a clipboard tool, Ctrl+V says precisely why and what to do; a file this client can read itself is still attached', async () => {
   const bare = stage(100, 30);
   settled(bare);
   const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
@@ -718,6 +747,7 @@ test('without a helper, or without a clipboard tool, Ctrl+V says precisely why a
   const local = join(bare.p.root, 'shot.png');
   writeFileSync(local, png(640, 480));
   bare.type(`/image ${local}\r`);
+  await bare.ready();
   expect(typed(bare)[0]).toMatch(/^\[image 1 · png · 640×480 · \d+ B\]$/);
   bare.type(PASTE('/home/owner/elsewhere.png'));
   expect(flowed(bare)).toContain('so it cannot read /home/owner/elsewhere.png there. It was left as the text you pasted.');
@@ -846,6 +876,7 @@ test('leaving in the middle of a turn, with a line half typed and an image attac
   s.journal({ type: 'tool.intent', callId: 'c1', name: 'bash', args: { command: 'sleep 60' } }, 2000);
   s.clock.at = 5000;
   s.type('\x16');
+  await s.ready();
   helper(s, () => ({ first: 'ok', data: png(8, 8) }));
   s.type('half typed');
   expect(s.live()).toContain('running');
@@ -1064,7 +1095,7 @@ test('with 256 or 16 colours the same client is drawn with the colours there are
   }
 });
 
-test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, marks and box', () => {
+test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, marks and box', async () => {
   const s = stage(80, 44, { open: false, caps: { utf8: false }, helper: 'xclip' });
   waking(s);
   s.journal({ type: 'tool.result', callId: 'c4', ok: true, output: 'ok' }, 9900);
@@ -1074,6 +1105,7 @@ test('a locale that is not UTF-8 gets the same client in ASCII: panel, mark, mar
   s.app.open();
   s.type('\x16');
   helper(s, () => ({ first: 'ok', data: png(64, 48) }));
+  await s.ready();
   const all = s.all();
   expectFrame('ascii-locale-80x44', all);
   expect(all).toMatch(/^[\x20-\x7e\n]*$/);

@@ -507,6 +507,16 @@ test('an image counts a fixed amount against the budget, not the length of its d
   expect(cut[1]!.images).toHaveLength(1);
 });
 
+test('image dimensions, not base64 size, set the charge; older images without them keep the cap', () => {
+  const small: Sight = { load: () => ({ name: 'n.png', mime: 'image/png', data: 'A'.repeat(5_000_000), width: 32, height: 32 }) };
+  const events = [said('old words'), replied('old reply'), said(`this one\n${marker(1)}`)];
+  const room = 1 + 'old words'.length + 'old reply'.length + 'this one'.length;
+  expect(buildMessages(events, 'S', room + 816, small)).toHaveLength(4);
+  expect(buildMessages(events, 'S', room + 815, small).map(m => m.content)).toEqual(['S', 'this one']);
+  const unknown: Sight = { load: () => ({ name: 'n.png', mime: 'image/png', data: 'A' }) };
+  expect(buildMessages(events, 'S', room + 816, unknown)[1]!.content).toStartWith('[context] The last exchange was too large');
+});
+
 test('a newest message too long for its room loses the middle of its text, and keeps its image', () => {
   const sight = fakeSight();
   const m = buildMessages([said(`${'w'.repeat(30_000)}\n${marker(1)}`)], 'S', IMAGE_CHARS + 2000, sight);

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
+import { dimensions } from '../keeper/tui/images';
+import { fitImage } from './image-codec';
 
 // Images the model is shown. They live as files under `<root>/memory/images/`, named by the SHA-256
 // of their bytes, where `<root>` is the directory that holds `memory/`. The owner's terminal puts
@@ -14,6 +16,9 @@ export interface Image {
   mime: string;
   /** The bytes, in base64. */
   data: string;
+  /** Actual kept dimensions, when the image header provides them. Older loaders may omit these. */
+  width?: number;
+  height?: number;
 }
 
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -28,6 +33,19 @@ export const DEFAULT_IMAGES = 4;
  * so 3,000 tokens; at the four characters a token that the budget assumes of text, 12,000.
  */
 export const IMAGE_CHARS = 12_000;
+/** Static images are kept within this box. It bounds both the picture and its vision patches. */
+export const IMAGE_MAX_SIDE = 1568;
+
+/** OpenAI's high-detail tile estimate, bounded by the historical 3,000-token cap. */
+export function imageChars(image: Pick<Image, 'width' | 'height'>): number {
+  const { width, height } = image;
+  if (width === undefined || height === undefined || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return IMAGE_CHARS;
+  const w = Math.min(width, 2048);
+  const h = Math.min(height, 2048);
+  const scale = Math.min(1, 768 / Math.min(w, h));
+  const tiles = Math.ceil(w * scale / 512) * Math.ceil(h * scale / 512);
+  return Math.min(IMAGE_CHARS, Math.ceil(tiles * 170 * 1.2) * 4);
+}
 
 /** A provider route whose handling of an image was learned from a real refusal. No credentials. */
 export interface ImageRoute { provider: string; baseUrl: string; model: string }
@@ -115,7 +133,8 @@ export function imageStore(root: string, keep = 8): (path: string) => Image | st
     }
     const read = readImage(real);
     if (typeof read === 'string') return read;
-    const image = { name: basename(path), mime: read.mime, data: read.bytes.toString('base64') };
+    const size = dimensions(read.bytes);
+    const image: Image = { name: basename(path), mime: read.mime, data: read.bytes.toString('base64'), ...(size ? { width: size.width, height: size.height } : {}) };
     if (kept.size >= keep) kept.delete(kept.keys().next().value!);
     kept.set(path, image);
     return image;
@@ -123,14 +142,16 @@ export function imageStore(root: string, keep = 8): (path: string) => Image | st
 }
 
 /** Copies the image at `file` into the store under `root` and returns the marker line that names it. Throws, saying why, when it is not an image that can be shown. */
-export function keepImage(root: string, file: string): { marker: string; mime: string; bytes: number } {
+export async function keepImage(root: string, file: string): Promise<{ marker: string; mime: string; bytes: number }> {
   const read = readImage(file);
   if (typeof read === 'string') throw new Error(`${file} cannot be shown: ${read}`);
-  const path = `${STORE}/${createHash('sha256').update(read.bytes).digest('hex')}.${read.ext}`;
+  const fitted = await fitImage(read.bytes);
+  const actual = kind(Buffer.from(fitted)) ?? read;
+  const path = `${STORE}/${createHash('sha256').update(fitted).digest('hex')}.${actual.ext}`;
   const target = join(root, path);
   if (!existsSync(target)) {
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, read.bytes);
+    writeFileSync(target, fitted);
   }
-  return { marker: `[image: ${path}]`, mime: read.mime, bytes: read.bytes.length };
+  return { marker: `[image: ${path}]`, mime: actual.mime, bytes: fitted.length };
 }

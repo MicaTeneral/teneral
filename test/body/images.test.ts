@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IMAGE_CHARS, IMAGE_MAX_BYTES, imageRoute, imageStore, keepImage, refusedImages, rootOf, splitMarkers } from '../../body/images';
+import { IMAGE_CHARS, IMAGE_MAX_BYTES, imageChars, imageRoute, imageStore, keepImage, refusedImages, rootOf, splitMarkers } from '../../body/images';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46]);
@@ -48,7 +48,7 @@ test('marker lines are taken from the end of a message only, in order, and only 
 test('an image of each supported kind is loaded with the type its bytes say, whatever its name says', () => {
   const r = root();
   const load = imageStore(r.dir);
-  expect(load(r.put(PNG))).toEqual({ name: `${hash(PNG)}.png`, mime: 'image/png', data: PNG.toString('base64') });
+  expect(load(r.put(PNG))).toEqual({ name: `${hash(PNG)}.png`, mime: 'image/png', data: PNG.toString('base64'), width: 1, height: 1 });
   expect(load(r.put(JPEG, 'jpg'))).toMatchObject({ mime: 'image/jpeg' });
   expect(load(r.put(GIF, 'gif'))).toMatchObject({ mime: 'image/gif' });
   expect(load(r.put(WEBP, 'webp'))).toMatchObject({ mime: 'image/webp' });
@@ -131,37 +131,58 @@ test('a loaded image is kept, so a turn does not read the same file for every re
   expect(load(path)).toBe('the file is missing');
 });
 
-test('keepImage copies an image into the store under the name of its content and gives the marker for it', () => {
+test('a static image is downsized once when kept, with the dimensions its request budget needs', async () => {
+  const r = root();
+  const elsewhere = mkdtempSync(join(tmpdir(), 'teneral-shot-'));
+  const original = await new Bun.Image(PNG).resize(2000, 1000).png().bytes();
+  writeFileSync(join(elsewhere, 'large.png'), original);
+  const kept = await keepImage(r.dir, join(elsewhere, 'large.png'));
+  const path = kept.marker.slice(8, -1);
+  const bytes = readFileSync(join(r.dir, path));
+  expect(await new Bun.Image(bytes).metadata()).toMatchObject({ width: 1568, height: 784 });
+  const loaded = imageStore(r.dir)(path);
+  expect(loaded).toMatchObject({ width: 1568, height: 784 });
+  expect(imageChars({ width: 1568, height: 784 })).toBeLessThan(IMAGE_CHARS);
+  // The content-addressed file is the only resized copy; loading is not another conversion.
+  const load = imageStore(r.dir);
+  expect(load(path)).toBe(load(path));
+  expect(readdirSync(join(r.dir, 'memory', 'images'))).toHaveLength(1);
+});
+
+test('keepImage copies an image into the store under the name of its content and gives the marker for it', async () => {
   const r = root();
   const elsewhere = mkdtempSync(join(tmpdir(), 'teneral-shot-'));
   writeFileSync(join(elsewhere, 'shot.dat'), PNG);
-  const kept = keepImage(r.dir, join(elsewhere, 'shot.dat'));
+  const kept = await keepImage(r.dir, join(elsewhere, 'shot.dat'));
   expect(kept).toEqual({ marker: `[image: memory/images/${hash(PNG)}.png]`, mime: 'image/png', bytes: PNG.length });
   expect(readFileSync(join(r.dir, 'memory', 'images', `${hash(PNG)}.png`)).equals(PNG)).toBe(true);
   // The marker is one the store honours, and the same file kept twice is one file.
   expect(splitMarkers(kept.marker).paths).toHaveLength(1);
-  expect(keepImage(r.dir, join(elsewhere, 'shot.dat'))).toEqual(kept);
+  expect(await keepImage(r.dir, join(elsewhere, 'shot.dat'))).toEqual(kept);
   // Where there is no store yet, it is made.
   const fresh = mkdtempSync(join(tmpdir(), 'teneral-fresh-'));
-  keepImage(fresh, join(elsewhere, 'shot.dat'));
+  await keepImage(fresh, join(elsewhere, 'shot.dat'));
   expect(existsSync(join(fresh, 'memory', 'images', `${hash(PNG)}.png`))).toBe(true);
 });
 
-test('keepImage refuses, saying why, what is not an image, is too large, or is not there', () => {
+test('keepImage refuses, saying why, what is not an image, is too large, or is not there', async () => {
   const r = root();
   const dir = mkdtempSync(join(tmpdir(), 'teneral-shot-'));
   writeFileSync(join(dir, 'notes.png'), 'just text');
-  expect(() => keepImage(r.dir, join(dir, 'notes.png'))).toThrow(/cannot be shown: it is not a PNG, JPEG, GIF or WebP image/);
+  await expect(keepImage(r.dir, join(dir, 'notes.png'))).rejects.toThrow(/cannot be shown: it is not a PNG, JPEG, GIF or WebP image/);
   writeFileSync(join(dir, 'big.png'), PNG);
   truncateSync(join(dir, 'big.png'), IMAGE_MAX_BYTES + 1);
-  expect(() => keepImage(r.dir, join(dir, 'big.png'))).toThrow(/larger than 10 MB/);
-  expect(() => keepImage(r.dir, join(dir, 'gone.png'))).toThrow(/the file is missing/);
-  expect(() => keepImage(r.dir, dir)).toThrow(/not a file/);
+  await expect(keepImage(r.dir, join(dir, 'big.png'))).rejects.toThrow(/larger than 10 MB/);
+  await expect(keepImage(r.dir, join(dir, 'gone.png'))).rejects.toThrow(/the file is missing/);
+  await expect(keepImage(r.dir, dir)).rejects.toThrow(/not a file/);
 });
 
-test('an image is charged what a large one costs the model in tokens, at four characters a token', () => {
-  // 2,500 patches at most, times 1.2, is 3,000 tokens (OpenAI's vision guide, patch-based models at high detail).
-  expect(IMAGE_CHARS).toBe(Math.ceil(2500 * 1.2) * 4);
+test('an image is charged by its actual dimensions, with the old cap retained as a bounded fallback', () => {
+  expect(imageChars({ width: 32, height: 32 })).toBeLessThan(IMAGE_CHARS);
+  expect(imageChars({ width: 1568, height: 1568 })).toBeLessThanOrEqual(IMAGE_CHARS);
+  expect(imageChars({ width: 100, height: 1000 })).toBeGreaterThan(imageChars({ width: 100, height: 100 }));
+  expect(imageChars({ width: 1_000_000, height: 1_000_000 })).toBeLessThanOrEqual(IMAGE_CHARS);
+  expect(imageChars({})).toBe(IMAGE_CHARS);
 });
 
 test('persistent image refusals are rebuilt per exact route and ignore malformed notes', () => {

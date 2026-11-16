@@ -284,6 +284,7 @@ test('the usage the endpoint reports is returned, with the cached part of the pr
   const answer = (usage: unknown) => openAiProvider({ ...cfg, fetch: fakeFetch(200, { choices: [{ message: { content: 'ok' } }], usage }) })([], []);
   expect(await answer({ prompt_tokens: 900, completion_tokens: 30, total_tokens: 930, prompt_tokens_details: { cached_tokens: 512 } }))
     .toEqual({ text: 'ok', toolCalls: [], usage: { input: 900, output: 30, cached: 512 } });
+  expect((await answer({ prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 512, image_tokens: 85 } })).usage).toEqual({ input: 900, output: 30, cached: 512, images: 85 });
   expect((await answer({ prompt_tokens: 900, completion_tokens: 30 })).usage).toEqual({ input: 900, output: 30 });
   expect((await answer({ prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: null })).usage).toEqual({ input: 900, output: 30 });
   for (const odd of [undefined, null, 'x', {}, { prompt_tokens: 'many', completion_tokens: 1 }, { prompt_tokens: NaN, completion_tokens: 1 }]) {

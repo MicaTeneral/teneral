@@ -28,6 +28,8 @@ export interface Stage {
   /** The time the screen reads, in milliseconds into the story. */
   clock: { at: number };
   alive: Alive;
+  /** Finish any accepted asynchronous image conversion before the next synchronous key/frame step. */
+  ready: () => Promise<void>;
   /** Let the client look at the journal, then give the screen as text. */
   frame: () => string;
   /** The same, with everything that scrolled off the screen above it: what the owner can scroll through. */
@@ -74,6 +76,7 @@ export function stage(cols: number, rows: number, o: { caps?: Partial<Caps>; env
   };
   const s: Stage = {
     term, app, p, clock, alive, clip,
+    ready: async () => { attach(); app.tick(); await app.imagesReady(); app.settleKeys(); },
     journal: (body, at = clock.at, gen = A) => {
       serial += 1;
       const id = `e${serial}`;

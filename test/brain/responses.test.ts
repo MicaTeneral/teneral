@@ -414,6 +414,8 @@ const USAGE = { input_tokens: 1200, input_tokens_details: { cached_tokens: 1000 
 test('the usage the stream ends with is returned, with the cached part of the input', () => {
   const done = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: USAGE } };
   expect(readResponsesStream(sse(CREATED, done))).toEqual({ text: 'hi', toolCalls: [], usage: { input: 1200, output: 80, cached: 1000 } });
+  const itemized = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: { ...USAGE, input_tokens_details: { cached_tokens: 1000, image_tokens: 170 } } } };
+  expect(readResponsesStream(sse(CREATED, itemized)).usage).toEqual({ input: 1200, output: 80, cached: 1000, images: 170 });
   const bare = { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [message('hi')], usage: { input_tokens: 5, output_tokens: 1 } } };
   expect(readResponsesStream(sse(CREATED, bare)).usage).toEqual({ input: 5, output: 1 });
   // Not numbers, or not there: no usage, rather than a made-up one.

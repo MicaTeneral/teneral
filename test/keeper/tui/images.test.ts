@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  Clip, IMAGES_PER_MESSAGE, IMAGE_MAX_BYTES, NotKept, describe, dimensions, keep, look, marker, namedLikeImage, pathsIn, sizeText, sniff,
+  Clip, IMAGES_PER_MESSAGE, IMAGE_MAX_BYTES, NotKept, describe, dimensions, keep, keepFitted, look, marker, namedLikeImage, pathsIn, sizeText, sniff,
   splitMarkers, whyNoClipboard, withMarkers,
 } from '../../../keeper/tui/images';
 import { gif, jpeg, png, webp } from './pictures';
@@ -103,6 +103,14 @@ test('what is over 10 MB, or is no picture, is refused with the reason, and noth
   const most = png(10, 10, IMAGE_MAX_BYTES - png(10, 10).length);
   expect(most.length).toBe(IMAGE_MAX_BYTES);
   expect(keep(root, most).bytes).toBe(IMAGE_MAX_BYTES);
+});
+
+test('keepFitted uses the same content-addressed store and rejects an oversize original before decoding', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'teneral-fitted-'));
+  const one = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+  expect(await keepFitted(root, one)).toEqual(keep(root, one));
+  await expect(keepFitted(root, png(1, 1, IMAGE_MAX_BYTES))).rejects.toThrow(/limit is 10 MB/);
+  await expect(keepFitted(root, Buffer.from('not a picture'))).rejects.toThrow(/not a PNG/);
 });
 
 // --- a path, as a terminal types it when a file is dragged in ---

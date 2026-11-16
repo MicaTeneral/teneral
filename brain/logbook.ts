@@ -1,6 +1,6 @@
 import type { JournalEvent } from './journal';
 import type { ChatMessage } from './provider';
-import { IMAGE_CHARS } from '../body/images';
+import { imageChars } from '../body/images';
 import { episodes, type Episode } from './episodes';
 import { health, healthNote } from './health';
 import { known, knownText } from './known';
@@ -27,9 +27,9 @@ import { remembered, type Memory, type Merge, type QuarantineData, type Remember
 // So the part shown as it happened is held near a size chosen for that, far below the model's
 // limit, and what is older is in the logbook, where an episode takes a few lines.
 
-/** What a message counts for against the budget. An image counts a fixed amount, whatever its bytes: see IMAGE_CHARS. */
+/** What a message counts for against the budget. Image dimensions, not encoded byte length, set its vision cost. */
 export function sizeOf(m: ChatMessage): number {
-  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images?.length ?? 0) * IMAGE_CHARS;
+  return (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) + (m.images ?? []).reduce((sum, image) => sum + imageChars(image), 0);
 }
 
 /** Episodes are swapped for their memories in steps of this share of the room. Each step moves where a request first differs from the one before. */

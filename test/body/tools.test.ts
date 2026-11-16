@@ -410,7 +410,7 @@ test('look keeps a copy of the image under memory/images and returns the line it
   appendEvent(ctx.journal, 'gen', { type: 'tool.result', callId: 'c1', ok: true, output });
   const messages = buildMessages(readEvents(ctx.journal), 'S', undefined, { load: imageStore(root) });
   expect(messages.at(-1)).toEqual({
-    role: 'tool', tool_call_id: 'c1', content: lines[0]!, images: [{ name: lines[1]!.slice(22, -1), mime: 'image/png', data: PNG_BYTES.toString('base64') }],
+    role: 'tool', tool_call_id: 'c1', content: lines[0]!, images: [{ name: lines[1]!.slice(22, -1), mime: 'image/png', data: PNG_BYTES.toString('base64'), width: 1, height: 1 }],
   });
 });
 
