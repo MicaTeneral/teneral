@@ -333,6 +333,24 @@ t('the scan refuses private paths, paths outside the species\' layout, this inst
   }
 });
 
+t('a module already adopted in the live generation may be offered without weakening private paths', async () => {
+  const w = await world();
+  git(w.root, 'checkout', '-q', '-B', 'lineage/accepted', 'origin/main');
+  writeFiles(w.root, { 'heart/coordinator.ts': 'export const beat = "wait";\n' });
+  commitAll(w.root, 'accepted new module');
+  const current = git(w.root, 'rev-parse', 'HEAD');
+  writeFileSync(join(w.root, '.teneral', 'state.json'), `${JSON.stringify({ current, previous: null })}\n`);
+  git(w.root, 'checkout', '-q', 'origin/main');
+  offer(w.root, 'accepted-module', { 'heart/coordinator.ts': 'export const beat = "wait";\n', 'stranger/secret.ts': 'not accepted\n' });
+  writeFiles(w.root, { 'soul/identity.md': 'not public\n' });
+  git(w.root, 'add', '-f', 'soul/identity.md');
+  git(w.root, 'commit', '-q', '-m', 'private paths still cannot go out');
+  const tip = git(w.root, 'rev-parse', 'offer/accepted-module');
+  const found = scan(w.root, git(w.root, 'rev-parse', 'origin/main'), tip, []);
+  expect(found.findings.map(f => f.where)).toEqual(['stranger/secret.ts', 'soul/identity.md']);
+  expect(found.findings.map(f => f.where)).not.toContain('heart/coordinator.ts');
+});
+
 t('a clean branch passes the scan, a binary file is named as not looked into, and what the scan cannot see goes through', async () => {
   const w = await world();
   git(w.root, 'checkout', '-q', '-B', 'offer/clean', 'origin/main');
