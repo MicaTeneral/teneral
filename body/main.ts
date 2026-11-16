@@ -20,7 +20,7 @@ import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
-import { idleTicks, offered, ownSpend, reflect, reportAsk } from '../brain/agenda';
+import { idleTicks, offered, ownSpend, reflect, reportAsk, toAsk } from '../brain/agenda';
 import { known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
@@ -442,8 +442,11 @@ for (;;) {
       const looked = await reflect({ journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
       if (looked === 'woken') continue;
       const after = standing(readEvents(journal));
-      if (known(after).intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own'))) {
-        emit({ source: 'clock', text: `${clockText(new Date())} ${offered(known(after), Date.now(), idleTicks(after))}` });
+      const held = known(after);
+      // A reflection can create work that needs a word from the owner rather than a ready task.
+      // Offer that now too; otherwise even a newly formed question waits for the next heartbeat.
+      if (held.intentions.some((i) => !i.waits && (i.work?.status === 'queued' || i.origin === 'own')) || toAsk(held, Date.now()).length > 0) {
+        emit({ source: 'clock', text: `${clockText(new Date())} ${offered(held, Date.now(), idleTicks(after))}` });
       }
       continue;
     } catch (err) {

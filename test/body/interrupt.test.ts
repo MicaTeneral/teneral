@@ -160,6 +160,29 @@ test('closing the last ready commitment reflects and wakes new work immediately'
   expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
 }, 10_000);
 
+test('a reflection that needs an owner decision gets its question turn immediately', async () => {
+  let mark = '';
+  const l = life((n) => {
+    if (n === 1) return reply({ content: '', tool_calls: [tool('d1', 'done', { intention: mark, how: 'Finished.' })] });
+    if (n === 2) return says('Fixed.');
+    if (n === 3) return reply({ content: 'Unsure:\n- May I publish the prepared correction?' });
+    if (n === 4) return says('I3dbfbe44: may I publish the prepared correction?');
+    return never();
+  }, (journal) => {
+    const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The only ready commitment.', origin: 'own', episode: 'fixture' } });
+    mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
+  });
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'start');
+  await l.until('the reflection produces an unsure intention', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { unsure?: unknown }).unsure === true));
+  await l.until('the clock offers the question without a heartbeat', () => l.events().some(e => e.type === 'assistant' && e.text.startsWith('I3dbfbe44:')));
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(known(standing(readEvents(l.journal))).intentions.some(i => i.unsure === true && i.put !== undefined)).toBe(true);
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(4);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
+}, 10_000);
+
 test('foreground /quit aborts the running turn and exits with its interruption journaled', async () => {
   const l = life(() => never());
   await l.until('ready', () => l.types().includes('generation.ready'));
