@@ -2,6 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { github, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
+import { rayboard, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { subagent, subagents } from './subagent';
@@ -212,6 +213,11 @@ const sensors: Sensor[] = [
     () => agendaFor(readEvents(journal), Date.now(), reportHours * 3_600_000),
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
+  ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
+    url: process.env.TENERAL_RAYBOARD_URL,
+    token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
+    events: () => readEvents(journal),
+  })] : []),
   // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
   ...(process.env.TENERAL_WORKSPACE_WATCH === '1' ? [workspaceSensor({
     root: workspace,
