@@ -4,6 +4,7 @@ import { MEMORY_MARK } from './logbook';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
 import type { ChatMessage } from './provider';
 import { EPISODE_KIND } from './remembered';
+import { QUIET_REPLY } from './quiet';
 import type { SleepDeps, Slept } from './sleep';
 
 // A memory that only looks back gives its agent nothing to do. Forming a memory answers "what
@@ -422,8 +423,8 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
   if (todo.length === 0) {
-    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; if not, say so in one line.`;
-    return `${report}${ask}One bounded follow-up for existing waiting commitments, with their concrete next step or dependency:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nNext/dependency: ${i.work?.next ?? ''}`).join('\n')}\nCheck whether the dependency still holds before waiting again; do not retry an external action without checking its receipt or new evidence. If nothing can be advanced, leave the concrete dependency recorded.`;
+    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; otherwise answer exactly ${QUIET_REPLY}.`;
+    return `${report}${ask}One bounded follow-up for existing waiting commitments, with their concrete next step or dependency:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nNext/dependency: ${i.work?.next ?? ''}`).join('\n')}\nCheck whether the dependency still holds before waiting again; do not retry an external action without checking its receipt or new evidence. If nothing can be advanced, leave the concrete dependency recorded and answer exactly ${QUIET_REPLY}.`;
   }
   const rows = todo.slice(0, OFFERED).map((i) => {
     const why = i.due !== undefined && i.due <= today ? `[due ${i.due}, which has come] ` : i.origin === 'own' ? '[your own idea] ' : '';
@@ -434,6 +435,7 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     ...rows,
     'Take the first one you can act on now, within what your owner has allowed you, and do it: one thing in a tick. '
     + 'When it is finished, or turns out not to be worth doing, close it with `done` and say how it ended. If none can be acted on now, say why in one line; '
-    + 'a line you can never act on is better closed as dropped, or asked about, than passed over again.',
+    + 'a line you can never act on is better closed as dropped, or asked about, than passed over again. '
+    + `If you decide that no listed commitment can be acted on and have no useful question or finding, answer exactly ${QUIET_REPLY}: it is internal and produces no visible reply.`,
   ].join('\n');
 }

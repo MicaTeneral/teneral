@@ -5,6 +5,7 @@ import { peerName, readPeers } from './peers';
 import type { JournalEvent } from '../brain/journal';
 import { fromOwner } from '../brain/owned';
 import { INTERRUPT_SUFFIX, MEMORY_SUFFIX } from '../keeper/owner';
+import { QUIET_REPLY } from '../brain/quiet';
 
 export interface Stimulus {
   /**
@@ -64,7 +65,8 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
 export function clockText(date: Date): string {
   return `Clock tick at ${date.toISOString()}. Your owner has not written since their last message. ` +
     'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
-    'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks.';
+    'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks. ' +
+    `When you decide there is nothing to say or do, answer exactly ${QUIET_REPLY} on this clock turn: it settles the tick without adding a visible reply.`;
 }
 
 /** Exact routine heartbeat, not any clock stimulus carrying a substantive query. */

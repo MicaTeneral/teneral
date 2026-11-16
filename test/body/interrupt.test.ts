@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsTurn } from '../../brain/memory';
+import { QUIET_REPLY } from '../../brain/quiet';
+import { clockMayTick, clockText } from '../../body/sensors';
 import { known } from '../../brain/known';
 import { standing } from '../../brain/owned';
 import { appendEvent, readEvents, type JournalEvent } from '../../brain/journal';
@@ -115,6 +117,18 @@ const alive = (pid: number): boolean => {
     return false;
   }
 };
+
+test('a clock tick with nothing to say stores only the internal no-reply marker', async () => {
+  const l = life((n) => n === 1 ? says(QUIET_REPLY) : never());
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  appendEvent(l.journal, l.events()[0]!.gen, { type: 'stimulus', source: 'clock', text: clockText(new Date()) });
+  await l.until('the quiet marker', () => l.events().some(e => e.type === 'assistant' && e.text === QUIET_REPLY));
+  const idle = l.events().findLast(e => e.type === 'assistant')!;
+  expect(idle.toolCalls).toEqual([]);
+  expect(needsTurn(l.events())).toBe(false);
+  expect(clockMayTick(l.events(), join(l.dir, 'soul'))).toBe(true);
+  expect(l.asked).toHaveLength(1);
+}, 10_000);
 
 test('a terminal line read during a mutation turn is answered before generation hand-off', async () => {
   let release!: () => void;

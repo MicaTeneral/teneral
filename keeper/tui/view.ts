@@ -318,6 +318,8 @@ export interface Live {
   /** What the agent is doing, while it is doing something. */
   activity: Line | null;
   edit: Edit;
+  /** Active delegated workers: one row each, while their tool calls remain open. */
+  workers: { label: string; task: string }[];
   /** The footer's left side, the most needed first: the model, the directory, the generation. */
   about: string[];
   /** The footer's right side: one thing worth knowing, and how full the model's context is. Either may be empty. */
@@ -494,6 +496,9 @@ export function liveRows(v: Live): Line[] {
   let blank = true;
   let first = true;
   let activity = v.activity;
+  let workers = v.workers.map(w => clip([
+    { text: `  ${g.quiet} `, style: FAINT }, { text: `${w.label}: `, style: DIM }, { text: w.task, style: FAINT },
+  ], max, { text: g.ellipsis, style: FAINT }));
   let framed = true;
   let chipped = true;
   const build = (): Line[] => [
@@ -501,11 +506,13 @@ export function liveRows(v: Live): Line[] {
     ...pending,
     ...(pending.length > 0 && blank ? [[]] : []),
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
+    ...workers,
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
     ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer : []),
   ];
   const fits = (): boolean => build().length <= room;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
+  while (!fits() && workers.length > 0) workers = workers.slice(1);
   if (!fits()) blank = false;
   while (!fits() && listed > 3) listed -= 1;
   if (!fits()) first = false;

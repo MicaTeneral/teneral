@@ -63,6 +63,18 @@ test('thinking while a reply is owed, running <tool> while a call has no result,
   expect(word(...born, said('hi'), calling(), intent('c', 'ba\x1b[31msh\nmore', {}))).toBe('running bash more');
 });
 
+test('active subagents keep their tasks in status and clear on result or interruption', () => {
+  const born = [started(), ready(), birth(), reply('I am here.')];
+  const single = after(...born, said('delegate'), intent('s1', 'subagent', { task: 'Review the request boundary' }));
+  expect(single.workers).toEqual([{ callId: 's1', label: 'worker', task: 'Review the request boundary' }]);
+  const batch = stand(single, intent('batch', 'subagents', { jobs: [{ label: 'api', task: 'Review the API' }, { label: 'recovery', task: 'Check restart recovery' }] }));
+  expect(batch.workers.map(w => [w.label, w.task])).toEqual([['worker', 'Review the request boundary'], ['api', 'Review the API'], ['recovery', 'Check restart recovery']]);
+  expect(stand(batch, result('s1', true, '{}')).workers.map(w => w.label)).toEqual(['api', 'recovery']);
+  expect(stand(stand(batch, result('s1', true, '{}')), result('batch', true, '{}')).workers).toEqual([]);
+  expect(stand(batch, ev({ type: 'turn.interrupted' })).workers).toEqual([]);
+  expect(stand(batch, started(B)).workers).toEqual([]);
+});
+
 test('waiting for you: the last finished reply ended with a question mark, and nothing has arrived since', () => {
   const born = [started(), ready(), birth()];
   expect(word(...born, reply('What should I call you?'))).toBe('waiting for you');
@@ -146,6 +158,17 @@ test('a note the body keeps for itself is no entry on the screen and leaves wher
 });
 
 // --- the transcript ---
+
+test('an idle clock marker settles the turn but is not a visible or first reply', () => {
+  const events = [said('work'), reply('Done.'), ev({ type: 'stimulus', source: 'clock', text: 'tick' }), reply('[teneral: no reply]')];
+  const { t, s } = built(events);
+  expect(kinds(t)).toEqual(['owner', 'reply', 'quiet']);
+  expect(s.turn.busy).toBe(false);
+  expect(s.spoke).toBe(true);
+  const first = built([birth(), reply('[teneral: no reply]')]);
+  expect(first.s.spoke).toBe(false);
+  expect(kinds(first.t)).toEqual(['quiet']);
+});
 
 test('a tool call is one entry, completed by its result: outcome, duration, and the output kept for showing', () => {
   const { t } = built([said('go'), calling(100), intent('c1', 'bash', { command: 'ls -la\n  /tmp' }, 200), result('c1', true, 'a\nb\n', 1450),

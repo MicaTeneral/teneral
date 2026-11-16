@@ -273,6 +273,8 @@ const sensors: Sensor[] = [
 
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
+  // A quiet clock reply is settled by brain/loop.ts without ever streaming its internal marker.
+  const quietTick = readEvents(journal).findLast(e => e.type === 'stimulus')?.source === 'clock';
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -282,7 +284,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
-      onDelta: (t) => console.log(t),
+      onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
     });
