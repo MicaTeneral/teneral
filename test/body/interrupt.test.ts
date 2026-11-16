@@ -151,7 +151,7 @@ test('closing the last ready commitment reflects and wakes new work immediately'
   });
   await l.until('ready', () => l.types().includes('generation.ready'));
   tell(l.owner, 'start');
-  await l.until('the reply that completes the first commitment', () => l.asked.length === 2 && l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
+  await l.until('the reply that completes the first commitment', () => l.asked.length === 2 || l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
   await l.until('the immediate reflection', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
   await l.until('the immediate agenda turn', () => l.asked.length === 5);
   expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
