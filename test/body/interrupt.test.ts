@@ -154,11 +154,12 @@ test('a reply that records a waiting dependency still gets one bounded look ahea
   tell(l.owner, 'finish the repository change');
   await l.until('the dependency answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Waiting for the check.'));
   await l.until('the bounded look ahead despite open waiting work', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
-  expect(l.asked).toHaveLength(3);
-  await Bun.sleep(300);
-  expect(l.asked).toHaveLength(3);
+  await l.until('one bounded follow-up for the existing waiting work', () => l.asked.length === 4);
   expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(0);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
+  expect(l.events().find(e => e.type === 'stimulus' && e.source === 'clock')).toMatchObject({ text: expect.stringContaining('Wait for the existing check.') });
+  await Bun.sleep(300);
+  expect(l.asked).toHaveLength(4);
 }, 10_000);
 
 test('closing the last ready commitment reflects and wakes new work immediately', async () => {

@@ -61,3 +61,19 @@ test('reflection asks for a pulse for a newly ready task, not a recursive reflec
   expect(known(readEvents(journal)).intentions.some(i => i.origin === 'own')).toBe(true);
   expect(await heart.next()).toBe('turn');
 });
+
+test('an unchanged reflection gives one follow-up to existing waiting work, not another reflection', async () => {
+  const journal = setup();
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'terminal', text: 'Continue the repository work.' });
+  appendEvent(journal, 'g', { type: 'assistant', text: 'I have recorded the current dependency.', toolCalls: [] });
+  appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'Publish the verified work.', work: { status: 'waiting', next: 'Check whether the current review requirement has changed.', attempts: 0, resumeAt: 0 } } });
+  const heart = new Heart({ events: () => readEvents(journal), emit: s => appendEvent(journal, 'g', { type: 'stimulus', source: s.source, text: s.text }), reflect: async () => {}, remember: async () => false, onError: () => {} });
+  heart.completed(readEvents(journal));
+  expect(await heart.next()).toBe('reflect');
+  expect(await heart.next()).toBe('turn');
+  const pulse = readEvents(journal).find(e => e.type === 'stimulus' && e.source === 'clock');
+  expect(pulse?.type === 'stimulus' && pulse.text.includes('Check whether the current review requirement has changed.')).toBe(true);
+  expect(pulse?.type === 'stimulus' && pulse.text.includes('do not retry an external action without checking its receipt or new evidence')).toBe(true);
+  appendEvent(journal, 'g', { type: 'assistant', text: 'Nothing new yet.', toolCalls: [] });
+  expect(await heart.next()).toBe('wait');
+});

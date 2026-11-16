@@ -18,6 +18,11 @@ export function afterTurn(state: HeartState, events: JournalEvent[], enabled = t
 export function pulseNeeded(held: Known, now: number): boolean {
   return held.intentions.some(i => !i.waits && (i.work?.status === 'queued' || i.origin === 'own')) || toAsk(held, now).length > 0;
 }
+/** A reflection may add nothing new even though an earlier promise still has a concrete next
+ * step. Give that step one bounded look instead of silently waiting for a heartbeat. */
+export function followUpNeeded(held: Known): boolean {
+  return pulseNeeded(held, Date.now()) || held.intentions.some(i => !i.waits && i.work?.status === 'waiting');
+}
 export function agendaFor(events: JournalEvent[], now = Date.now(), reportMs?: number): string {
   const current = standing(events), held = known(current);
   return offered(held, now, idleTicks(current), reportAsk(current, now, reportMs));
@@ -53,7 +58,7 @@ export class Heart {
       try {
         await this.d.reflect();
         const after = standing(this.d.events());
-        if (pulseNeeded(known(after), this.d.now?.() ?? Date.now())) this.d.emit(agendaPulse(after, this.d.now?.()));
+        if (followUpNeeded(known(after))) this.d.emit(agendaPulse(after, this.d.now?.()));
       } catch (error) { this.d.onError(error); }
       return 'reflect';
     }

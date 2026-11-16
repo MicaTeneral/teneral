@@ -405,6 +405,7 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
   // a line that cannot be acted on waits for ever. What is due keeps its place; the rest comes round again in turn.
   const come = whole.filter((i) => i.due !== undefined && i.due <= today);
   const rest = whole.filter((i) => !come.includes(i));
+  const waiting = listed.filter((i) => i.work?.status === 'waiting' && !i.waits);
   const turn = rest.length <= OFFERED ? 0 : (Math.floor(idle / PASSED_TICKS) * OFFERED) % rest.length;
   const todo = [...come, ...rest.slice(turn), ...rest.slice(0, turn)];
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
@@ -420,7 +421,10 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'What you say in your reply here your owner reads when they next come to you, and no one else does. A reminder is one line, not the case made again. '
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
-  if (todo.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; if not, say so in one line.`;
+  if (todo.length === 0) {
+    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; if not, say so in one line.`;
+    return `${report}${ask}One bounded follow-up for existing waiting commitments, with their concrete next step or dependency:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nNext/dependency: ${i.work?.next ?? ''}`).join('\n')}\nCheck whether the dependency still holds before waiting again; do not retry an external action without checking its receipt or new evidence. If nothing can be advanced, leave the concrete dependency recorded.`;
+  }
   const rows = todo.slice(0, OFFERED).map((i) => {
     const why = i.due !== undefined && i.due <= today ? `[due ${i.due}, which has come] ` : i.origin === 'own' ? '[your own idea] ' : '';
     return `${i.mark} ${why}${line(i.text)}`;
