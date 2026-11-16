@@ -2,6 +2,7 @@ import { appendEvent, readEvents, type JournalEvent } from './journal';
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import type { Provider, Reply } from './provider';
 import { saysNoImages, saysTooLong } from './retry';
+import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
 
 export interface TurnDeps {
@@ -78,6 +79,9 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     // Re-read every round: a sensor may have journaled a stimulus while a tool ran.
     const events = readEvents(d.journal);
     shown = events.length;
+    // A reply may be followed by a stimulus that arrived while it was being made. This
+    // boundary keeps that stimulus owed if the process dies before its extra round.
+    appendEvent(d.journal, d.gen, { type: 'note', kind: SHOWN_KIND, data: { through: events.at(-1)?.id ?? null } });
     const system = d.system();
     let halved = false;
     let reply: Reply;

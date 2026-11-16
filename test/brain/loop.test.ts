@@ -31,7 +31,7 @@ test('a plain reply is journaled and ends the turn', async () => {
   const s = setup([{ text: 'hello', toolCalls: [] }]);
   const shown: string[] = [];
   expect(await runTurn({ ...s.deps, onText: (t) => shown.push(t) })).toBe('done');
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant']);
   expect(shown).toEqual(['hello']);
 });
 
@@ -45,8 +45,8 @@ test('the intent is journaled before the tool runs, the result after', async () 
 
   await runTurn(s.deps);
 
-  expect(typesWhenRun).toEqual(['stimulus', 'assistant', 'tool.intent']);
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'assistant']);
+  expect(typesWhenRun).toEqual(['stimulus', 'note', 'assistant', 'tool.intent']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'note', 'assistant']);
   expect(s.seen[1]!.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'ok' });
 });
 
@@ -112,7 +112,29 @@ test('a stimulus that arrives while the last reply is on its way gets another ro
   // The late stimulus sits before the first answer in the journal, so the request must not end on that answer.
   expect(seen[1]!.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
   expect(seen[1]!.at(-1)!.content).toContain('Something arrived while you were writing your last reply');
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'stimulus', 'assistant', 'assistant']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'stimulus', 'assistant', 'note', 'assistant']);
+});
+
+test('a late stimulus before a finished reply remains owed if the process dies before the extra round', async () => {
+  const s = setup([]);
+  let calls = 0;
+  const provider: Provider = async () => {
+    calls += 1;
+    if (calls > 1) throw new Error('simulated process death before the extra round');
+    appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'terminal', text: 'arrived during the answer' });
+    return { text: 'answer to the earlier question', toolCalls: [] };
+  };
+  await expect(runTurn({ ...s.deps, provider })).rejects.toThrow(/process death/);
+  const events = readEvents(s.journal);
+  expect(events.map(e => e.type)).toEqual(['stimulus', 'note', 'stimulus', 'assistant', 'note']);
+  // Discard the just-started extra round to model the actual crash window.
+  const crashed = events.slice(0, -1);
+  expect(needsTurn(crashed)).toBe(true);
+  // The restart answers the late event rather than treating the older answer as complete.
+  let seen: ChatMessage[] = [];
+  await runTurn({ ...s.deps, provider: async messages => { seen = messages; return { text: 'late answer', toolCalls: [] }; } });
+  expect(seen.some(m => m.role === 'user' && m.content === 'arrived during the answer')).toBe(true);
+  expect(needsTurn(readEvents(s.journal))).toBe(false);
 });
 
 test('a stem note that arrives while the last reply is on its way gets another round; other events do not', async () => {
@@ -146,10 +168,10 @@ test('after a mutation the rest of the reply is not run, and every call still ha
 
   expect(written).toBe(false);
   const events = readEvents(s.journal);
-  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'tool.result']);
-  expect(events[3]).toMatchObject({ callId: 'c1', ok: true, output: 'requested' });
-  expect(events[4]).toMatchObject({ callId: 'c2', ok: false });
-  expect((events[4] as { output: string }).output).toMatch(/not run.*mutation/);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.result']);
+  expect(events[4]).toMatchObject({ callId: 'c1', ok: true, output: 'requested' });
+  expect(events[5]).toMatchObject({ callId: 'c2', ok: false });
+  expect((events[5] as { output: string }).output).toMatch(/not run.*mutation/);
 });
 
 test('a tool that returns something other than text does not lose its result', async () => {
@@ -234,7 +256,7 @@ test('a second refusal, or a failure that is not about length, is not retried', 
   const tooLong = failing(new ProviderError('refused 413', 413, 'Request too large: reduce the length'));
   await expect(tooLong.run).rejects.toThrow(/413/);
   expect(tooLong.calls()).toBe(2);
-  expect(readEvents(tooLong.journal).map((e) => e.type)).toEqual(['stimulus']);
+  expect(readEvents(tooLong.journal).map((e) => e.type)).toEqual(['stimulus', 'note']);
   const others = [
     new ProviderError('unknown model', 400, 'unknown model'),
     new ProviderError('slow down', 429, 'token rate limit'),
@@ -258,7 +280,7 @@ test('at the round limit, something the model was never shown keeps the turn owe
   const s = setup([call, call], [noisy]);
   expect(await runTurn({ ...s.deps, maxRounds: 1 })).toBe('done');
   const events = readEvents(s.journal);
-  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'stimulus', 'tool.result']);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'stimulus', 'tool.result']);
   expect(needsTurn(events)).toBe(true);
   expect(s.seen).toHaveLength(1);
 });
@@ -326,7 +348,7 @@ test('a request refused because of its image is asked once more with a note in i
   // The round after the tool call does not try the image again.
   expect(seen[2]![1]).toEqual(seen[1]![1]!);
   // Journaled as any turn is: the refusal left no trace, and nothing is owed.
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'assistant']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'note', 'assistant']);
   expect(needsTurn(readEvents(s.journal))).toBe(false);
 });
 
@@ -336,7 +358,7 @@ test('a refusal that stays after the images are gone is passed on, and one about
   const s = withImage(async () => { calls += 1; throw always; });
   await expect(runTurn(s.deps)).rejects.toBe(always);
   expect(calls).toBe(2);
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note']);
 
   const plain = setup([]);
   let asked = 0;
@@ -374,7 +396,7 @@ test('interrupted while the model is asked: the request is cancelled, not tried 
   state.entered = () => setTimeout(() => controller.abort(), 10);
   expect(await runTurn({ ...s.deps, provider, signal: controller.signal })).toBe('interrupted');
   expect(state.calls).toBe(1);
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'turn.interrupted']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'turn.interrupted']);
   expect(needsTurn(readEvents(s.journal))).toBe(false);
 });
 
@@ -416,7 +438,7 @@ test('interrupted while a tool runs: the tool is told, its result says so, the c
   expect(started).toEqual(['echo', 'slow']);
   expect(s.seen).toHaveLength(1);
   const events = readEvents(s.journal);
-  expect(events.map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'tool.intent', 'tool.result', 'tool.result', 'tool.result', 'turn.interrupted']);
+  expect(events.map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'tool.intent', 'tool.result', 'tool.result', 'tool.result', 'turn.interrupted']);
   const results = events.flatMap((e) => (e.type === 'tool.result' ? [e] : []));
   expect(results[0]).toMatchObject({ callId: 'c1', ok: true, output: 'echo:{}' });
   expect(results[1]).toMatchObject({ callId: 'c2', ok: false });
@@ -476,7 +498,7 @@ test('a reply with tool calls that arrived as the owner interrupted is journaled
   };
   expect(await runTurn({ ...s.deps, provider, tools: [counted], signal: controller.signal })).toBe('interrupted');
   expect(ran).toBe(0);
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.result', 'tool.result', 'turn.interrupted']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.result', 'tool.result', 'turn.interrupted']);
   expect(paired(s.journal)).toBe(true);
 });
 
@@ -488,7 +510,7 @@ test('a finished reply that had already arrived ends the turn as done: the inter
     return { text: 'all done', toolCalls: [] };
   };
   expect(await runTurn({ ...s.deps, provider, signal: controller.signal })).toBe('done');
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant']);
 });
 
 test('a signal already aborted when the turn begins asks the model nothing', async () => {
@@ -526,7 +548,7 @@ test('a turn that is not interrupted is as it was: the signal changes nothing, a
   const s = setup([{ text: '', toolCalls: [{ id: 'c1', name: 'spy', args: {} }] }, { text: 'done', toolCalls: [] }], [spy]);
   expect(await runTurn({ ...s.deps, signal: controller.signal })).toBe('done');
   expect(handed).toEqual([controller.signal]);
-  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'assistant', 'tool.intent', 'tool.result', 'assistant']);
+  expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant', 'tool.intent', 'tool.result', 'note', 'assistant']);
   expect(readEvents(s.journal).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, output: 'ok' });
 });
 
