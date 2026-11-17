@@ -45,6 +45,23 @@ function working(s: Stage): void {
 
 // --- the list ---
 
+test('/publish is discoverable in the command menu and opens a read-only publication page; Ctrl-P is not a hidden publication shortcut', () => {
+  const s = stage(100, 35);
+  settled(s);
+  s.type('/');
+  const at = COMMANDS.findIndex((command) => command.name === '/publish');
+  expect(at).toBeGreaterThanOrEqual(0);
+  s.type(DOWN.repeat(at));
+  expect(listed(s)).toContain('[/publish]');
+  s.type(ENTER);
+  expect(flowed(s)).toContain('publication status');
+  expect(flowed(s)).toContain('does not publish anything');
+  expect(channel(s)).toEqual([]);
+  const before = s.all();
+  s.type(CTRL_P);
+  expect(s.all()).toBe(before);
+});
+
 test('a slash lists the commands under the box, and each letter leaves fewer; Up and Down, or Ctrl-P and Ctrl-N, move through them and round the ends; nothing of the list stays in the conversation', () => {
   const s = stage(80, 24);
   settled(s);

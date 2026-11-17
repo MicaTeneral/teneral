@@ -38,10 +38,10 @@ export function publication(p: Pick<Paths, 'candidate'>, env: NodeJS.ProcessEnv 
   }
 }
 
-/** What Ctrl-P and /publish show. It inspects git only; it never publishes or changes a ref. */
+/** What /publish shows. It inspects git only; it never publishes or changes a ref. */
 export function publicationLines(p: Pick<Paths, 'candidate'>, env: NodeJS.ProcessEnv = process.env): string[] {
   const state = publication(p, env);
-  if (state.commit === null) return ['Publication cannot be determined: the candidate checkout or its trusted species ref is unavailable.', 'Set TENERAL_UPSTREAM to the trusted <remote>/<branch> or local branch.'];
+  if (state.commit === null) return ['Publication cannot be determined: the candidate checkout or its trusted species ref is unavailable.', 'Set TENERAL_UPSTREAM to the trusted <remote>/<branch> or local branch.', 'This display does not publish anything.'];
   if (!state.pending) return [`Nothing is waiting: the candidate HEAD ${state.commit} is contained in the locally known ${state.species}.`, 'Fetch the species to make this comparison newer; no network request was made here.'];
   return [
     `${state.commit} is ahead of the locally known ${state.species}. This is not proof that GitHub has received it.`,

@@ -695,7 +695,6 @@ export class TalkScreen {
     if (key.kind === 'paste' && this.pasted(key.text)) return;
     if (key.kind === 'key') {
       if (key.name === 'tab') return this.toggleTools();
-      if (ctrl('p')) return this.command('/publish', '');
       if (ctrl('l')) return this.inline.invalidate();
       if (ctrl('r')) return this.reasoning();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
@@ -1141,7 +1140,7 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`publish ${shortSha(this.publishedCommit)} · Ctrl-P`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`unpublished ${shortSha(this.publishedCommit)} · /publish to view`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
