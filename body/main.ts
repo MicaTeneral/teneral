@@ -2,6 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { github, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
+import { rayboard, rayboardCa, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { subagent, subagents } from './subagent';
@@ -212,6 +213,12 @@ const sensors: Sensor[] = [
     () => agendaFor(readEvents(journal), Date.now(), reportHours * 3_600_000),
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
+  ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
+    url: process.env.TENERAL_RAYBOARD_URL,
+    token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
+    ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
+    events: () => readEvents(journal),
+  })] : []),
   // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
   ...(process.env.TENERAL_WORKSPACE_WATCH === '1' ? [workspaceSensor({
     root: workspace,
@@ -273,6 +280,8 @@ const sensors: Sensor[] = [
 
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
+  // A quiet clock reply is settled by brain/loop.ts without ever streaming its internal marker.
+  const quietTick = readEvents(journal).findLast(e => e.type === 'stimulus')?.source === 'clock';
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -282,7 +291,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       // Composed again every round: the agent may have just rewritten its soul.
       system: () => composeSystem(prompt, soulDir, journal),
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
-      onDelta: (t) => console.log(t),
+      onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
       signal: current.signal,
     });
@@ -384,11 +393,15 @@ for (;;) {
       continue;
     }
     const before = ownerArrived;
+    // The stimulus that woke this turn is already in the journal. Start after the last settled
+    // reply/interruption, not at the current end, and include any late work answered by the turn.
+    const beforeTurn = readEvents(journal);
+    const turnFrom = beforeTurn.findLastIndex(e => e.type === 'assistant' || e.type === 'turn.interrupted') + 1;
     working = true;
     const failed = await turn();
     working = false;
     settleWords();
-    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0');
+    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
     if (handoff !== null) {
       const events = readEvents(journal);
       const last = events.findLast(e => e.type === 'stimulus');

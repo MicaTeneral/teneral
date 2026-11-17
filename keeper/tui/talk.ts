@@ -12,6 +12,7 @@ import { known } from '../../brain/known';
 import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
+import { publication } from '../publication';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
 import {
@@ -232,6 +233,9 @@ export class TalkScreen {
   private tools = false;
   private name: string | null = null;
   private soulStamp = '?';
+  private publishedAt = 0;
+  private publishedCommit: string | null = null;
+  private publishPending = false;
   private ticks = 0;
   private readonly asks: Ask[] = [];
   /** One codec pipeline at a time; helper answers still arrive in their original order. */
@@ -1058,15 +1062,22 @@ export class TalkScreen {
     const s = this.standing;
     const word = stateWord(s, this.alive());
     const now = this.now();
+    if (now - this.publishedAt >= MEMORY_BADGE_MS) {
+      const p = publication(this.o.paths, this.o.env);
+      this.publishedAt = now;
+      this.publishedCommit = p.commit;
+      this.publishPending = p.pending;
+    }
     const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
     const clock = active && s.since !== null ? elapsed(now - s.since) : '';
     // What the brain says of the request under way, where it says anything: thought is told apart from a hang by this.
     // A request to the model while no turn is owed is the agent forming a memory (brain/sleep.ts): nothing else asks the model then.
     const remembering = word === 'resting' || word === 'waiting for you' ? this.beat(now, true) : '';
-    const beat = word === 'thinking' || word === 'waking' ? this.beat(now) : remembering;
+    const background = s.background || remembering !== '';
+    const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -1097,8 +1108,8 @@ export class TalkScreen {
     const activity: Line | null = failed !== null
       ? [{ text: `${g.warn} `, style: { fg: 'warn', bold: true } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} cannot get an answer from the model`, style: { fg: 'warn', bold: true } },
         { text: ` ${g.sep} ${failed.failures} in a row${wait === '' ? '' : ` ${g.sep} ${wait}`} ${g.sep} ${failed.message}`, style: { fg: 'dim' } }]
-      : active || remembering !== ''
-      ? [{ text: `${g.spinner[active ? spin : Math.floor(now / SPIN_MS) % g.spinner.length]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${active ? doing : 'remembering'}`, style: { bold: true } }, { text: `${clock === '' ? '' : ` ${g.sep} ${clock}`}${beat === '' ? '' : ` ${g.sep} ${beat}`}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
+      : active && !background
+      ? [{ text: `${g.spinner[spin]} `, style: { fg: 'brand' } }, { text: `${this.who === 'the agent' ? 'The agent' : this.who} is ${doing}`, style: { bold: true } }, { text: `${clock === '' ? '' : ` ${g.sep} ${clock}`}${beat === '' ? '' : ` ${g.sep} ${beat}`}`, style: { fg: 'dim' } }, { text: esc === '' ? '' : ` ${g.sep} ${esc}`, style: { fg: 'faint' } }]
       : null;
 
     const model = clean(this.o.env.TENERAL_MODEL ?? '').slice(0, 40);
@@ -1125,8 +1136,9 @@ export class TalkScreen {
       cols, rows, g,
       pending: laid,
       activity,
+      workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`publish pending ${shortSha(this.publishedCommit)}`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

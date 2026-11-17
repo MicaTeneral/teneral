@@ -4,6 +4,7 @@ import { appendEvent, journalSize, readEvents, readEventsFrom, type JournalEvent
 import { DEFAULT_BUDGET, buildMessages, stemNote, type Sight } from './memory';
 import { IMAGE_REFUSAL_KIND, imageChars, imageRoute, refusedImages, type ImageRoute } from '../body/images';
 import type { Provider, Reply } from './provider';
+import { QUIET_REPLY, ROUND_LIMIT_REPLY, quietReply } from './quiet';
 import { saysNoImages, saysTooLong } from './retry';
 import { SHOWN_KIND } from './shown';
 import type { Tool, ToolContext } from '../body/tools';
@@ -110,6 +111,9 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   let continued = false;
   const route = d.imageRoute;
   const journal = turnJournal(d.journal);
+  // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
+  // internal marker in that case, not its streamed words; keeper hides it in both clients.
+  const quietTick = journal.read().findLast(e => e.type === 'stimulus')?.source === 'clock';
   const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();
@@ -163,11 +167,12 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
     }
     // The usage and the summary of the reasoning are for the owner and the record. buildMessages never reads them back.
     const journaledCalls = reply.cutOff === true && reply.partialCalls !== undefined ? reply.partialCalls : reply.toolCalls;
+    const quiet = quietTick && reply.toolCalls.length === 0 && quietReply(reply.text);
     appendEvent(d.journal, d.gen, {
-      type: 'assistant', text: reply.text, toolCalls: journaledCalls,
+      type: 'assistant', text: quiet ? QUIET_REPLY : reply.text, toolCalls: journaledCalls,
       ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.reasoning ? { reasoning: reply.reasoning } : {}),
     });
-    if (reply.text !== '' && !streamed) d.onText?.(reply.text);
+    if (reply.text !== '' && !streamed && !quiet) d.onText?.(reply.text);
     if (reply.cutOff === true && !continued && round + 1 < (d.maxRounds ?? 50)) {
       // The fragment is in the next request. No tool call from a cut-off reply was run.
       // The request boundary makes the continuation owed across a crash between these calls.
@@ -240,6 +245,6 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   // mark that as answered; without it the turn stays owed and the caller starts another.
   journal.refresh();
   if (arrivedSince(journal.read(), shown)) return 'done';
-  appendEvent(d.journal, d.gen, { type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] });
+  appendEvent(d.journal, d.gen, { type: 'assistant', text: ROUND_LIMIT_REPLY, toolCalls: [] });
   return 'done';
 }

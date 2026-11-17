@@ -34,6 +34,18 @@ test('a completed ordinary turn asks for one look; clock and interruption do not
   expect(stopped.look).toBe(false);
 });
 
+test('a scheduled work turn preserves an already requested look without starting another', () => {
+  const state: HeartState = { look: true, pulse: false };
+  const events = setup();
+  appendEvent(events, 'g', { type: 'stimulus', source: 'work', text: 'Resume a waiting commitment.' });
+  appendEvent(events, 'g', { type: 'assistant', text: 'Checked the dependency.', toolCalls: [] });
+  afterTurn(state, readEvents(events));
+  expect(state.look).toBe(true);
+  const fresh: HeartState = { look: false, pulse: false };
+  afterTurn(fresh, readEvents(events));
+  expect(fresh.look).toBe(false);
+});
+
 test('an owner pulse is coalesced and does not call the model by itself', async () => {
   const journal = setup();
   const pulses: string[] = [];

@@ -7,6 +7,7 @@ import { OWNER_REASON } from '../../../keeper/back';
 import { git } from '../../../immune/gates';
 import type { EventBody } from '../../../brain/journal';
 import { readEvents } from '../../../brain/journal';
+import { clockText } from '../../../body/sensors';
 import { IMAGE_MAX_BYTES } from '../../../keeper/tui/images';
 import { ENTRY_LIMIT } from '../../../keeper/tui/model';
 import { ago, lineage } from '../../../keeper/tui/talk';
@@ -1500,22 +1501,37 @@ test('while the agent is thinking, the line over the input box says what the mod
   expect(line()).toContain('Mica is thinking');
 });
 
-test('while nothing is asked of it, a request to the model is the agent remembering, and the line says so; a pulse left behind long ago says nothing', () => {
-  const s = stage(110, 30, { name: 'Mica' });
+test('a routine clock turn is a footer status, not the main activity prompt', () => {
+  const s = stage(160, 30, { name: 'Mica' });
   settled(s);
-  const line = (): string => rows(s.live()).find((row) => row.includes('Mica is')) ?? '';
-  expect(line()).toBe('');
+  s.journal({ type: 'stimulus', source: 'clock', text: clockText(new Date(T0 + 1000)) }, 1000);
+  const live = s.live();
+  expect(live).not.toContain('Mica is thinking');
+  expect(rows(live).at(-1)).toContain('background: agenda');
+  s.journal({ type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] }, 2000);
+  expect(s.live()).not.toContain('round limit reached');
+  expect(rows(s.live()).at(-1)).not.toContain('background: agenda');
+});
+
+test('background memory work is only a footer status, not the primary prompt or its streaming text', () => {
+  const s = stage(140, 30, { name: 'Mica' });
+  settled(s);
+  expect(s.live()).not.toContain('Mica is');
+  expect(rows(s.live()).at(-1)).not.toContain('background: remembering');
   // The screen's clock, which is what a real pulse is stamped by.
   const now = T0 + s.clock.at;
   mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
   writeFileSync(s.p.pulse, JSON.stringify({ at: new Date(now).toISOString(), asked: new Date(now - 2000).toISOString(), step: 'writing', received: 300, tail: 'My owner asked me to set up the mail' }));
   s.clock.at += 400;
-  expect(line()).toContain('Mica is remembering');
-  expect(line()).toContain('the model is writing: …My owner asked me to set up the mail');
-  expect(line()).not.toContain('esc to interrupt');
+  const live = s.live();
+  expect(live).not.toContain('Mica is remembering');
+  expect(live).not.toContain('the model is writing');
+  expect(live).not.toContain('My owner asked me to set up the mail');
+  expect(rows(live).at(-1)).toContain('background: remembering');
+  expect(live).not.toContain('esc to interrupt');
   // The same file, three minutes on: its body is gone, and nothing is going on.
   s.clock.at += 3 * 60_000;
-  expect(line()).toBe('');
+  expect(rows(s.live()).at(-1)).not.toContain('background: remembering');
   unlinkSync(s.p.pulse);
 });
 

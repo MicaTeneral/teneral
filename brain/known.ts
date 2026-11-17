@@ -192,7 +192,9 @@ export function known(events: JournalEvent[]): Known {
     } else if (e.kind === WORK_KIND) {
       const item = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
       const work = workState(d);
-      if (item !== undefined && work !== undefined) item.work = work;
+      // A late progress note must not reopen a commitment after `done` (including a same-tick
+      // scheduler checkpoint). Its evidence remains in the journal, but it is no longer runnable.
+      if (item !== undefined && work !== undefined && item.ended === undefined) item.work = work;
     } else if (e.kind === ALLOWED_KIND) {
       const idea = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
       if (idea !== undefined && idea.unsure === true && text(d.words)) {
@@ -208,6 +210,9 @@ export function known(events: JournalEvent[]): Known {
         ended.ended = ended.waits ? (ended.unsure === true ? 'refused' : 'answered') : d.ended === 'dropped' ? 'dropped' : 'done';
         ended.endedAt = e.ts;
         ended.endedGen = e.gen;
+        // Closed commitments no longer have an executable state. Keeping the checkpoint as
+        // `queued` made a late scheduler note resurrect work after the done record.
+        delete ended.work;
       }
       gone.add(d.intention);
     } else if (e.kind === FORGET_KIND) {

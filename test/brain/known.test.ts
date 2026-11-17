@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAP_MS } from '../../brain/episodes';
-import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
+import { appendEvent, readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
 import { EXAM_KIND, questionsOf } from '../../brain/exam';
 import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, OWN_CHARS, byMark, known, knownText } from '../../brain/known';
 import { buildMessages } from '../../brain/memory';
@@ -49,6 +49,28 @@ test('an intention is open until a record says it was done, and a fact held unti
   const events = [a, b, f, ev({ type: 'note', kind: DONE_KIND, data: { intention: a.id, how: 'sent' } }), ev({ type: 'note', kind: FORGET_KIND, data: { ids: [f.id], why: 'wrong' } })];
   expect(known(events)).toMatchObject({ facts: [], intentions: [expect.objectContaining({ text: 'Ask about the staging quota', mark: `I${b.id.slice(0, 8)}` })] });
   expect(known([a]).intentions[0]).toMatchObject({ due: '2026-11-20' });
+});
+
+test('done removes executable work, even when a scheduler checkpoint arrives later', async () => {
+  const open = ev({ type: 'note', kind: INTENTION_KIND, data: {
+    text: 'Finish the verified transition',
+    work: { status: 'queued', next: 'Verify the result.', attempts: 0, resumeAt: 0 },
+  } });
+  const ctx = context(journalOf([open]));
+  const mark = known([open]).intentions[0]!.mark;
+  await tool('done').run({ intention: mark, how: 'Verified and closed.' }, ctx);
+  // A pre-done scheduler write may already have been appended by the time it runs.
+  appendEvent(ctx.journal, 'g', { type: 'note', kind: 'memory.work.v1', data: {
+    intention: open.id, work: { status: 'queued', next: 'Verify the result.', attempts: 1, resumeAt: 0 },
+  } });
+  const held = known(readEvents(ctx.journal));
+  expect(held.intentions).toEqual([]);
+  expect(held.closed[0]).toMatchObject({ ended: 'done' });
+  expect(held.closed[0]!.work).toBeUndefined();
+  // The same protection holds for the work tool's own completion path.
+  const ctx2 = context(journalOf([open]));
+  await tool('work').run({ status: 'done', task: 'Finish the verified transition', next: 'Verified.' }, ctx2);
+  expect(known(readEvents(ctx2.journal)).closed[0]!.work).toBeUndefined();
 });
 
 test('a note that is not a whole fact or intention is not one', () => {

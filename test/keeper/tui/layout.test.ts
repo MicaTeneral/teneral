@@ -16,7 +16,7 @@ const text = (rows: Line[]): string[] => rows.map((row) => plain(row).trimEnd())
 
 function live(cols: number, rows: number, more: Partial<Live> = {}): Live {
   return {
-    cols, rows, g: G, pending: [], activity: null, edit: EMPTY,
+    cols, rows, g: G, pending: [], activity: null, workers: [], edit: EMPTY,
     about: ['gpt-6.1-sol', 'resting', '…/data/work/teneral', 'generation 3 a1b2c3d'], tip: '/help lists the keys and commands', context: 'context 8% (71.9k/1.05M)', hint: '', ...more,
   };
 }
@@ -44,6 +44,16 @@ test('while something is under way it stands over the box: what has not finished
     activity: [{ text: '⠹ ' }, { text: 'Mica is running bash' }, { text: ' · 0:07' }],
   })));
   expect(rows.slice(0, 5)).toEqual(['', '  ▪ bash  command: sleep 5', '', '⠹ Mica is running bash · 0:07', '╭─────────────────────────────────────────────────────────────────────────────╮']);
+});
+
+test('active workers have one task row each and clear with their calls', () => {
+  const workers = [{ label: 'api-review', task: 'Compare the proposed interface with the existing client' }, { label: 'safety', task: 'Inspect retry boundaries' }];
+  const shown = text(liveRows(live(100, 30, { workers })));
+  expect(shown).toContain('  ◦ api-review: Compare the proposed interface with the existing client');
+  expect(shown).toContain('  ◦ safety: Inspect retry boundaries');
+  expect(text(liveRows(live(100, 30, { workers: [] }))).some(row => row.includes('api-review'))).toBe(false);
+  // A small live region keeps the input usable instead of filling it with worker status.
+  expect(text(liveRows(live(50, 8, { workers }))).some(row => row.includes('api-review'))).toBe(false);
 });
 
 test('the input grows with its text to eight rows and shows the ones around the cursor; attached images are chips inside the box, and the footer says how to take one off', () => {

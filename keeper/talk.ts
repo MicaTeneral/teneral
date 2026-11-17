@@ -7,6 +7,7 @@ import { ownerCommand } from '../species/offer';
 import { planNotice } from '../brain/providers';
 import { cageNotice } from '../immune/approval';
 import { installRoot, paths } from '../stem/supervisor';
+import { quietReply } from '../brain/quiet';
 
 // The owner's terminal: `./one talk` runs this inside the agent's container. What is typed goes to
 // the agent as files in the owner directory (keeper/owner.ts); what the agent says is read back
@@ -64,6 +65,8 @@ export function render(e: JournalEvent): string | null {
   switch (eventName(e.type)) {
     case 'assistant': {
       const text = plain(asText(f.text)).trim();
+      // An idle clock tick is settled, but has no conversational reply.
+      if (quietReply(text)) return null;
       // The blank line after it keeps one reply apart from the next thing.
       return text === '' ? null : `${text}\n`;
     }

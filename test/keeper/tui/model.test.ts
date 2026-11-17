@@ -3,6 +3,7 @@ import { OWNER_REASON } from '../../../keeper/back';
 import type { EventBody, JournalEvent } from '../../../brain/journal';
 import { ENTRY_LIMIT, Transcript, UNBORN, endsWithQuestion, isMutationTool, stand, stateWord, unfinished, type Entry, type Standing } from '../../../keeper/tui/model';
 import { soulName, soulNameIn } from '../../../keeper/tui/talk';
+import { clockText } from '../../../body/sensors';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -61,6 +62,18 @@ test('thinking while a reply is owed, running <tool> while a call has no result,
   expect(word(...born, said('hi'), calling(), intent('c', 'bash', {}), result('other', true, 'ok'))).toBe('running bash');
   // A hostile tool name cannot write anything but its letters into the header.
   expect(word(...born, said('hi'), calling(), intent('c', 'ba\x1b[31msh\nmore', {}))).toBe('running bash more');
+});
+
+test('active subagents keep their tasks in status and clear on result or interruption', () => {
+  const born = [started(), ready(), birth(), reply('I am here.')];
+  const single = after(...born, said('delegate'), intent('s1', 'subagent', { task: 'Review the request boundary' }));
+  expect(single.workers).toEqual([{ callId: 's1', label: 'worker', task: 'Review the request boundary' }]);
+  const batch = stand(single, intent('batch', 'subagents', { jobs: [{ label: 'api', task: 'Review the API' }, { label: 'recovery', task: 'Check restart recovery' }] }));
+  expect(batch.workers.map(w => [w.label, w.task])).toEqual([['worker', 'Review the request boundary'], ['api', 'Review the API'], ['recovery', 'Check restart recovery']]);
+  expect(stand(batch, result('s1', true, '{}')).workers.map(w => w.label)).toEqual(['api', 'recovery']);
+  expect(stand(stand(batch, result('s1', true, '{}')), result('batch', true, '{}')).workers).toEqual([]);
+  expect(stand(batch, ev({ type: 'turn.interrupted' })).workers).toEqual([]);
+  expect(stand(batch, started(B)).workers).toEqual([]);
 });
 
 test('waiting for you: the last finished reply ended with a question mark, and nothing has arrived since', () => {
@@ -146,6 +159,29 @@ test('a note the body keeps for itself is no entry on the screen and leaves wher
 });
 
 // --- the transcript ---
+
+test('an idle clock marker settles the turn but is not a visible or first reply', () => {
+  const events = [said('work'), reply('Done.'), ev({ type: 'stimulus', source: 'clock', text: 'tick' }), reply('[teneral: no reply]')];
+  const result = built(events);
+  expect(kinds(result.t)).toEqual(['owner', 'reply', 'quiet']);
+  expect(result.s.turn.busy).toBe(false);
+  expect(result.s.spoke).toBe(true);
+  const first = built([birth(), reply('[teneral: no reply]')]);
+  expect(first.s.spoke).toBe(false);
+  expect(kinds(first.t)).toEqual(['quiet']);
+  const stopped = built([birth(), reply('Hello.'), said('work'), reply('[round limit reached; waiting for the next stimulus]')]);
+  expect(kinds(stopped.t)).toEqual(['quiet', 'reply', 'owner']);
+  expect(stopped.s.turn.busy).toBe(false);
+  expect(stopped.s.spoke).toBe(true);
+});
+
+test('a routine clock turn is background status; the next direct request is foreground', () => {
+  const idle = after(started(), ready(), birth(), reply('Hello.'), ev({ type: 'stimulus', source: 'clock', text: clockText(new Date(1_800_000_000_000)) }));
+  expect(idle.background).toBe(true);
+  expect(stateWord(idle, UP)).toBe('thinking');
+  const direct = stand(idle, said('show me this directly'));
+  expect(direct.background).toBe(false);
+});
 
 test('a tool call is one entry, completed by its result: outcome, duration, and the output kept for showing', () => {
   const { t } = built([said('go'), calling(100), intent('c1', 'bash', { command: 'ls -la\n  /tmp' }, 200), result('c1', true, 'a\nb\n', 1450),

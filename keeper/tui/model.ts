@@ -3,6 +3,8 @@ import { eventName, type JournalEvent } from '../../brain/journal';
 import { AT_REST, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
+import { quietReply } from '../../brain/quiet';
+import { routineClock } from '../../body/sensors';
 
 // What the talk client knows, built from journal events one at a time: the transcript as a list
 // of entries, and where the agent stands. Nothing here reads a file or draws. Like the plain
@@ -100,9 +102,21 @@ export interface Standing {
    * where the body tries at once. Null again as soon as anything comes of a request.
    */
   trouble: { message: string; failures: number; retryAt: number | null } | null;
+  /** Active no-tools workers and the task each is doing, recoverable from the journal. */
+  workers: { callId: string; label: string; task: string }[];
+  /** The current turn is only an ordinary clock tick, not the owner's foreground request. */
+  background: boolean;
 }
 
-export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null, trouble: null };
+export const UNBORN: Standing = { turn: AT_REST, since: null, spoke: false, tool: null, mutation: null, asked: false, current: null, known: [], usage: null, trouble: null, workers: [], background: false };
+
+function workerTask(args: unknown): { label: string; task: string } | null {
+  if (typeof args !== 'object' || args === null) return null;
+  const a = args as Record<string, unknown>;
+  const task = typeof a.task === 'string' ? cut(flat(clean(a.task)), 200) : '';
+  if (task === '') return null;
+  return { label: typeof a.label === 'string' ? cut(flat(clean(a.label)), 64) : 'worker', task };
+}
 
 /** A journaled `usage`, when it is one: two counts that are numbers, and maybe a third. */
 function usageOf(value: unknown): Standing['usage'] {
@@ -130,20 +144,39 @@ export function stand(s: Standing, e: JournalEvent): Standing {
     if (c !== '' && !next.known.includes(c)) next = { ...next, known: [...next.known, c] };
   };
   switch (eventName(e.type)) {
-    case 'stimulus':
-      return { ...next, asked: false };
+    case 'stimulus': {
+      const source = asText(f.source);
+      return { ...next, asked: false, background: source === 'clock' && routineClock(asText(f.text)) };
+    }
     case 'assistant': {
       const text = asText(f.text).trim();
       const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
-      const words = text !== '' && !text.startsWith(NOT_FROM_MODEL);
-      return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
+      const words = text !== '' && !text.startsWith(NOT_FROM_MODEL) && !quietReply(text);
+      return { ...next, trouble: null, tool: null, spoke: s.spoke || words, usage: usageOf(f.usage) ?? s.usage, background: !next.turn.busy ? false : next.background, asked: calls === 0 && text !== '' ? words && endsWithQuestion(text) : s.asked };
     }
-    case 'tool.intent':
-      return { ...next, tool: { callId: asText(f.callId), name: cut(flat(clean(asText(f.name))), 40) } };
-    case 'tool.result':
-      return s.tool !== null && s.tool.callId === asText(f.callId) ? { ...next, tool: null } : next;
+    case 'tool.intent': {
+      const name = cut(flat(clean(asText(f.name))), 40);
+      const callId = asText(f.callId);
+      const workers = name === 'subagent' || name === 'subagents'
+        ? s.workers.filter(w => w.callId !== callId) : s.workers;
+      if (name === 'subagent') {
+        const task = workerTask(f.args);
+        if (task) workers.push({ callId, ...task });
+      } else if (name === 'subagents') {
+        const jobs = typeof f.args === 'object' && f.args !== null && Array.isArray((f.args as { jobs?: unknown }).jobs) ? (f.args as { jobs: unknown[] }).jobs : [];
+        for (let i = 0; i < jobs.length; i++) {
+          const task = workerTask(jobs[i]);
+          if (task) workers.push({ callId: `${callId}:${i}`, ...task });
+        }
+      }
+      return { ...next, tool: { callId, name }, workers };
+    }
+    case 'tool.result': {
+      const callId = asText(f.callId);
+      return { ...next, tool: s.tool?.callId === callId ? null : s.tool, workers: next.workers.filter(w => w.callId !== callId && !w.callId.startsWith(`${callId}:`)) };
+    }
     case 'turn.interrupted':
-      return { ...next, trouble: null, tool: null, asked: false };
+      return { ...next, trouble: null, tool: null, asked: false, workers: [] };
     case 'note': {
       if (f.kind !== 'turn.failed' || typeof f.data !== 'object' || f.data === null) return next;
       const d = f.data as Record<string, unknown>;
@@ -156,7 +189,7 @@ export function stand(s: Standing, e: JournalEvent): Standing {
       return { ...next, mutation: null, asked: false };
     case 'generation.started':
       know(f.commit);
-      return { ...next, current: asText(f.commit) || s.current, tool: null, trouble: null };
+      return { ...next, current: asText(f.commit) || s.current, tool: null, trouble: null, workers: [] };
     case 'generation.ready':
       know(e.gen);
       return next;
@@ -335,7 +368,7 @@ export class Transcript {
         if (reasoning !== '' && !text.startsWith(NOT_FROM_MODEL)) {
           this.push({ kind: 'reasoning', text: reasoning.length > REASONING_CHARS ? `${reasoning.slice(0, REASONING_CHARS)} [...]` : reasoning });
         }
-        if (text === '') return;
+        if (text === '' || quietReply(text)) return;
         if (text.startsWith(NOT_FROM_MODEL)) {
           this.push({ kind: 'warning', text: cut(text.slice(NOT_FROM_MODEL.length).trim(), REPLY_CHARS) });
           return;

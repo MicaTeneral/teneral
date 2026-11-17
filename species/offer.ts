@@ -249,6 +249,17 @@ export function scan(root: string, base: string, tip: string, secrets: readonly 
   const findings: Finding[] = [];
   const binary = new Set<string>();
   const layout = new Set(git(root, 'ls-tree', '-z', '--name-only', base).split('\0').filter(Boolean));
+  // A directory first adopted into this individual's accepted live generation is not an unknown
+  // private layout merely because the species has not merged it yet. This is a narrow receipt of
+  // the existing approval/promotion, not permission to publish other new top-level paths.
+  try {
+    const current = JSON.parse(readFileSync(join(root, '.teneral', 'state.json'), 'utf8')) as { current?: unknown };
+    if (typeof current.current === 'string' && COMMIT.test(current.current)) {
+      for (const entry of git(root, 'ls-tree', '-z', '--name-only', current.current).split('\0').filter(Boolean)) {
+        if (/^[a-z][a-z0-9_-]*$/.test(entry)) layout.add(entry);
+      }
+    }
+  } catch { /* no accepted state: the species layout alone decides */ }
   for (const commit of git(root, 'rev-list', '--reverse', `${base}..${tip}`).split('\n').filter(Boolean)) {
     const message = inText(git(root, 'log', '-1', '--format=%an <%ae>%n%B', commit), secrets);
     if (message !== null) findings.push({ commit, where: 'the commit message', what: message });
