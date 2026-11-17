@@ -83,7 +83,7 @@ function toolPath(ctx: ToolContext, given: string): string {
   const candidate = resolve(ctx.workspace, given);
   const real = realpathMissing(candidate);
   const inside = (path: string, root: string): boolean => path === root || path.startsWith(root + '/');
-  if (!inside(real, realpathSync(ctx.workspace)) && !inside(real, realpathSync(ctx.soul))) {
+  if (!inside(real, realpathMissing(ctx.workspace)) && !inside(real, realpathMissing(ctx.soul))) {
     throw new Error('path is outside the workspace and soul');
   }
   return real;
