@@ -7,7 +7,7 @@
 │   Directory    /home/owner/work/teneral                                                         │
 │   Individual   5e1f0a9c                                                                         │
 │   Generation   1st · a1b2c3d · has lived in 1                                                   │
-│   Model        gpt-6.1-sol · OpenAI-compatible endpoint
+│   Model        gpt-6.1-sol · OpenAI-compatible endpoint                                         │
 │   Version      teneral 0.0.0
 │   Born         2027-01-15 07:59 UTC · 1 min ago
 │   Sensors      clock every 30 min · inbox · your terminal
@@ -37,3 +37,4 @@
 │ › half a line                                           │
 ╰─────────────────────────────────────────────────────────╯
  gpt-6.1-sol  memory well · exam pending  …/work/teneral
+ Publish  Down selects · Enter opens  local publication st…

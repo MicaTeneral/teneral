@@ -38,6 +38,15 @@ test('the live region: a blank row, the input in its box across the width, and t
   expect(bare.at(-1)).toHaveLength(99);
 });
 
+test('the bottom menu names its visible action and how to reach it; selecting it moves the cursor off the input without changing it', () => {
+  const rows = liveRows(live(100, 24, { menu: { label: 'Publish', detail: 'ed2fe702 not in origin/main · view only', selected: false } }));
+  expect(text(rows).at(-1)).toContain('Publish  Down selects · Enter opens  ed2fe702 not in origin/main · view only');
+  const selected = liveRows(live(100, 24, { inputFocused: false, menu: { label: 'Publish', detail: 'ed2fe702 not in origin/main · view only', selected: true } }));
+  expect(text(selected).at(-1)).toContain('Publish  Enter opens  ed2fe702 not in origin/main · view only');
+  expect(selected.at(-1)!.some((span) => span.text === 'Publish' && span.style?.inverse)).toBe(true);
+  expect(selected.some((row) => row.some((span) => span.style?.inverse && span.text === ' '))).toBe(false);
+});
+
 test('while something is under way it stands over the box: what has not finished, then what the agent is doing', () => {
   const rows = text(liveRows(live(80, 24, {
     pending: [[{ text: '  ▪ bash  command: sleep 5' }]],

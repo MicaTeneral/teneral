@@ -46,3 +46,4 @@
 | >                                                                           |
 +-----------------------------------------------------------------------------+
  gpt-6.1-sol        attached: image 1 | Backspace at the start removes the last
+ Publish  Down selects | Enter opens  local publication status | view only

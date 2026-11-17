@@ -23,6 +23,8 @@ const taken = (s: Stage): void => {
   for (const name of readdirSync(s.p.owner)) if (!name.startsWith('.')) unlinkSync(join(s.p.owner, name));
 };
 const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
+/** Only what has scrolled into the conversation, excluding the redrawn bottom menu. */
+const transcript = (s: Stage): string => rows(s.all()).filter((row) => row.includes('── publication status')).join('\n');
 
 /** A life already under way, at rest. */
 function settled(s: Stage): void {
@@ -45,21 +47,38 @@ function working(s: Stage): void {
 
 // --- the list ---
 
-test('/publish is discoverable in the command menu and opens a read-only publication page; Ctrl-P is not a hidden publication shortcut', () => {
+test('Publish is a visible bottom-menu action: Down selects it, Enter opens the read-only page, and the input is unchanged', () => {
   const s = stage(100, 35);
   settled(s);
-  s.type('/');
-  const at = COMMANDS.findIndex((command) => command.name === '/publish');
-  expect(at).toBeGreaterThanOrEqual(0);
-  s.type(DOWN.repeat(at));
-  expect(listed(s)).toContain('[/publish]');
+  expect(rows(s.live()).at(-1)).toContain('Publish');
+  expect(rows(s.live()).at(-1)).toContain('Down selects · Enter opens');
+  s.type(DOWN);
+  expect(rows(s.live()).at(-1)).toContain('Publish');
+  expect(rows(s.live()).at(-1)).toContain('Enter opens');
   s.type(ENTER);
   expect(flowed(s)).toContain('publication status');
   expect(flowed(s)).toContain('does not publish anything');
   expect(channel(s)).toEqual([]);
-  const before = s.all();
-  s.type(CTRL_P);
-  expect(s.all()).toBe(before);
+  expect(typed(s)).toEqual(['›']);
+  expect(transcript(s).split('\n')).toHaveLength(1);
+  s.type(DOWN);
+  s.type(ESC);
+  expect(typed(s)).toEqual(['›']);
+  s.type(DOWN);
+  s.type(UP);
+  s.type('not sent');
+  s.type(ENTER);
+  expect(channel(s)).toEqual([['.txt', 'not sent']]);
+  taken(s);
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(transcript(s).split('\n')).toHaveLength(2);
+  // Once back in the editor, Down is history again rather than a hidden command shortcut.
+  s.say('older', 1500);
+  s.type(UP);
+  expect(typed(s)).toEqual(['› older']);
+  s.type(DOWN);
+  expect(typed(s)).toEqual(['›']);
 });
 
 test('a slash lists the commands under the box, and each letter leaves fewer; Up and Down, or Ctrl-P and Ctrl-N, move through them and round the ends; nothing of the list stays in the conversation', () => {
@@ -109,7 +128,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   // A letter no command goes on with: no list, and the footer is back.
   s.type('x');
   expect(listed(s)).toEqual([]);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  resting/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  resting/);
   s.type(BACKSPACE);
   expect(listed(s)).toEqual(['[/history]']);
   s.type(BACKSPACE.repeat(3));
@@ -166,7 +185,7 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   // Something has to follow /image: Enter completes, and waits for the path.
   s.type(`/i${ENTER}`);
   expect(typed(s)).toEqual(['› /image']);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol/);
   expect(s.all()).not.toContain('attaches an image file');
   // The whole name, as before this list was there: /image alone says what it wants.
   s.type(`${CTRL_U}/image${ENTER}`);
@@ -516,7 +535,7 @@ test('with images attached the list stands under the box that holds them, and a 
   s.type(ENTER);
   expect(flowed(s)).toContain('From now on each tool call is shown');
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1/), '›']);
-  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1/);
+  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1/);
 });
 
 test('a locale that is not UTF-8 gets the list in ASCII', () => {

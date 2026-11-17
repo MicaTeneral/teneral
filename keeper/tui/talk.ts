@@ -236,6 +236,8 @@ export class TalkScreen {
   private publishedAt = 0;
   private publishedCommit: string | null = null;
   private publishPending = false;
+  /** Focus in the visible bottom menu, rather than in the input editor. */
+  private menuSelected = false;
   private ticks = 0;
   private readonly asks: Ask[] = [];
   /** One codec pipeline at a time; helper answers still arrive in their original order. */
@@ -663,6 +665,17 @@ export class TalkScreen {
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
     if (ctrl('c')) return this.close(0);
+    if (this.menuSelected) {
+      if (key.kind === 'key' && key.name === 'enter' && !key.alt && !key.shift) {
+        this.menuSelected = false;
+        return this.command('/publish', '');
+      }
+      if (key.kind === 'key' && (key.name === 'up' || key.name === 'escape') && !key.ctrl && !key.alt && !key.shift) {
+        this.menuSelected = false;
+        return;
+      }
+      return;
+    }
     const list = this.offered();
     if (key.kind === 'key' && key.name === 'escape' && !key.ctrl && !key.alt && !key.shift) {
       // Esc belongs to what is nearest the owner's hands: an open list is closed by it, and only with none open does it reach the agent.
@@ -688,6 +701,12 @@ export class TalkScreen {
     }
     if (this.held !== null) {
       this.held.push(key);
+      return;
+    }
+    // Down on an untouched input reaches the visible bottom action. It never steals a history
+    // navigation or a command-list choice, and the editor keeps ordinary Down for a multi-line draft.
+    if (key.kind === 'key' && key.name === 'down' && !key.ctrl && !key.alt && !key.shift && this.edit.text === '' && this.edit.chips.length === 0) {
+      this.menuSelected = true;
       return;
     }
     if (ctrl('d') && this.edit.text === '' && this.edit.chips.length === 0) return this.close(0);
@@ -1079,7 +1098,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.menuSelected}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -1140,10 +1159,12 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`unpublished ${shortSha(this.publishedCommit)} · /publish to view`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      inputFocused: !this.menuSelected,
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
+      menu: { label: 'Publish', detail: this.publishPending && this.publishedCommit !== null ? `${shortSha(this.publishedCommit)} not in ${this.o.env.TENERAL_UPSTREAM ?? 'the species'} · view only` : 'local publication status · view only', selected: this.menuSelected },
       list,
     }));
   }

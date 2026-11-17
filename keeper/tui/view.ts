@@ -318,6 +318,8 @@ export interface Live {
   /** What the agent is doing, while it is doing something. */
   activity: Line | null;
   edit: Edit;
+  /** Whether the input owns the visible cursor. False while a bottom-menu action is selected. */
+  inputFocused?: boolean;
   /** Active delegated workers: one row each, while their tool calls remain open. */
   workers: { label: string; task: string }[];
   /** The footer's left side, the most needed first: the model, the directory, the generation. */
@@ -327,6 +329,8 @@ export interface Live {
   context: string;
   /** Under the footer's left side: what is attached, or what is being waited for. May be empty. */
   hint: string;
+  /** A real bottom-menu action. The label is always visible; Enter opens it when selected. */
+  menu?: { label: string; detail: string; selected: boolean } | null;
   /** The commands offered for what is being typed, while they are: under the box, where the footer otherwise is. */
   list?: Offered | null;
 }
@@ -476,7 +480,7 @@ export function liveRows(v: Live): Line[] {
   const command = mark(v.edit.text);
   const typed = text.rows.map((row, i): Line => [
     { text: i === 0 && text.above === 0 ? `${g.prompt} ` : '  ', style: { fg: 'accent', bold: true } },
-    ...inputRow(row, i === text.row ? text.col : null, command === null ? null : { ...command, from: command.from - text.starts[i]!, to: command.to - text.starts[i]! }),
+    ...inputRow(row, i === text.row && v.inputFocused !== false ? text.col : null, command === null ? null : { ...command, from: command.from - text.starts[i]!, to: command.to - text.starts[i]! }),
   ]);
   const box = panel([...chips, ...typed], max, g, FAINT);
   const bare = panel(typed, max, g, FAINT);
@@ -491,6 +495,8 @@ export function liveRows(v: Live): Line[] {
     return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
   };
   const footer: Line[] = list !== null ? [] : [footerRow(v, max)];
+  // The slash list is itself the bottom menu while open; never draw a second competing one.
+  const menu = list === null ? v.menu ?? null : null;
   // What a small screen gives up, in this order, until the region fits.
   let pending = v.pending;
   let blank = true;
@@ -501,6 +507,7 @@ export function liveRows(v: Live): Line[] {
   ], max, { text: g.ellipsis, style: FAINT }));
   let framed = true;
   let chipped = true;
+  let bottom = menu;
   const build = (): Line[] => [
     ...(blank ? [[]] : []),
     ...pending,
@@ -509,8 +516,16 @@ export function liveRows(v: Live): Line[] {
     ...workers,
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
     ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer : []),
+    ...(bottom !== null ? [clip([
+      { text: ' ' },
+      { text: bottom.label, style: { fg: 'ink', bg: 'accent', bold: true, inverse: bottom.selected } },
+      { text: `  ${bottom.selected ? 'Enter opens' : 'Down selects' + sep + 'Enter opens'}`, style: bottom.selected ? { fg: 'ink', bg: 'accent' } : FAINT },
+      { text: `  ${bottom.detail.replaceAll('·', g.sep)}`, style: bottom.selected ? { fg: 'paper', bg: 'slab' } : DIM },
+    ], max, { text: g.ellipsis, style: DIM })] : []),
   ];
   const fits = (): boolean => build().length <= room;
+  // On a short screen the visible action matters more than the supplementary status line.
+  if (!fits() && bottom !== null) first = false;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   while (!fits() && workers.length > 0) workers = workers.slice(1);
   if (!fits()) blank = false;
