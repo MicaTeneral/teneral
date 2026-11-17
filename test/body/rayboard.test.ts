@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { JournalEvent } from '../../brain/journal';
-import { rayboardPoller, rayboardToken, rayboardUrl, RAYBOARD_SOURCE } from '../../body/rayboard';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { rayboardCa, rayboardPoller, rayboardToken, rayboardUrl, RAYBOARD_SOURCE } from '../../body/rayboard';
 import type { Stimulus } from '../../body/sensors';
 const event = (s: Stimulus): JournalEvent => ({ v: 1, id: String(s.text), ts: '2026-01-01T00:00:00.000Z', gen: 'test', type: 'stimulus', ...s });
 const note = (seq: number) => ({ seq, ts: '2026-01-01T00:00:00.000Z', type: 'task.assigned', subject: 'T-1', sender: 'operator', text: 'untrusted work' });
@@ -26,6 +29,24 @@ test('delivers before exact acknowledgement and recovers a prefix from the journ
 test('failed emission leaves the notification unread and does not advance acknowledgement', async () => {
   const f = fixture(); const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send }, () => { throw new Error('journal failed'); });
   await p.poll(); expect(f.calls).toEqual([{ peek: true }]);
+});
+test('a configured certificate authority is required on every inbox request', async () => {
+  const f = fixture(); const seen: unknown[] = [];
+  const send = (async (url: string | URL | Request, init?: RequestInit) => { seen.push((init as any)?.tls); return f.send(url, init); }) as typeof fetch;
+  const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', ca: 'certificate', events: () => [], send }, () => {});
+  await p.poll();
+  expect(seen).toEqual([{ ca: 'certificate' }, { ca: 'certificate' }]);
+});
+test('certificate authorities are read from a separate file and must be PEM', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rayboard-ca-'));
+  try {
+    const path = join(dir, 'ca.pem');
+    writeFileSync(path, 'not a certificate');
+    expect(() => rayboardCa(path)).toThrow('PEM');
+    writeFileSync(path, '-----BEGIN CERTIFICATE-----\nkey material\n-----END CERTIFICATE-----\n');
+    expect(rayboardCa(path)).toContain('BEGIN CERTIFICATE');
+    expect(rayboardCa(undefined)).toBeUndefined();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('bad input and stopped workers cannot emit or acknowledge', async () => {
   const f = fixture([{}]); const notices: Stimulus[] = [];
