@@ -134,13 +134,17 @@ export async function outletOf(i: Install, hub: Hub, send?: typeof fetch): Promi
   if (typeof login !== 'string' || !/^[A-Za-z0-9._-]+$/.test(login)) throw new Error('GitHub did not say whose token this is, so the fork cannot be found. TENERAL_FORK in .env names it, as owner/name');
   const slug = `${login}/${hub.slug.split('/')[1]}`;
   if (slug === hub.slug) return own;
+  let repo: { full_name?: unknown; fork?: unknown; parent?: { full_name?: unknown } } | null;
   try {
-    const repo = await api(hub, i.auth, 'GET', `/repos/${slug}`, undefined, send) as { fork?: unknown; parent?: { full_name?: unknown } } | null;
-    if (repo?.fork === true && repo.parent?.full_name === hub.slug) return { url: urlOf(slug), slug, owner: login, fork: true };
-    throw new Error(`${slug} exists and is not a fork of ${hub.slug}. If the fork has another name, TENERAL_FORK in .env names it, as owner/name`);
+    repo = await api(hub, i.auth, 'GET', `/repos/${slug}`, undefined, send) as { full_name?: unknown; fork?: unknown; parent?: { full_name?: unknown } } | null;
   } catch (err) {
     if (!(err instanceof GitHubError) || err.status !== 404) throw err;
+    repo = null;
   }
+  if (repo?.fork === true && repo.parent?.full_name === hub.slug) return { url: urlOf(slug), slug, owner: login, fork: true };
+  // A renamed or transferred default repository may redirect back to the species itself. That is
+  // the maintainer case below; a different existing repository must never be mistaken for a fork.
+  if (repo !== null && repo.full_name !== hub.slug) throw new Error(`${slug} exists and is not a fork of ${hub.slug}. If the fork has another name, TENERAL_FORK in .env names it, as owner/name`);
   const species = await api(hub, i.auth, 'GET', `/repos/${hub.slug}`, undefined, send) as { permissions?: { push?: unknown } } | null;
   if (species?.permissions?.push === true) return own;
   throw new Error(`${login} has no fork of ${hub.slug} yet. Your owner makes one, with one click, at https://github.com/${hub.slug}/fork; then run this again. The approval still stands`);
