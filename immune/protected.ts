@@ -1,7 +1,7 @@
 /**
  * The paths a mutation changes on the agent's own word: its body (what it acts with), its brain (what
- * it thinks and remembers with: the model's provider, memory, the turn), the tests of both and its list
- * of work. A trailing slash means anything inside that directory; anything else is one exact file.
+ * it thinks and remembers with: the model's provider, memory, the turn), its heart (what moves it when
+ * nothing is asked of it), the tests of the three and its list of known faults. A trailing slash means anything inside that directory; anything else is one exact file.
  *
  * Every other path may change as well, but only in a commit the owner approved (immune/approval.ts).
  * This is an allowlist on purpose: a file nobody thought to list (a new config file, a new
