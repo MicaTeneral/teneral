@@ -34,6 +34,38 @@ test('write creates parent directories and read returns the content', async () =
   expect(await tool('read').run({ path: 'a/b.txt' }, ctx)).toBe('hello');
 });
 
+test('write creates an initially absent soul directory', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const ctx = context(workspace);
+  const soul = join(mkdtempSync(join(tmpdir(), 'teneral-data-')), 'absent', 'soul');
+  ctx.soul = soul;
+  const file = join(soul, 'identity.md');
+
+  await tool('write').run({ path: file, content: 'hello' }, ctx);
+
+  expect(await tool('read').run({ path: file }, ctx)).toBe('hello');
+});
+
+test('file tools contain traversal and absolute paths when the soul root is absent', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'teneral-ws-'));
+  const ctx = context(workspace);
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'teneral-outside-'));
+  ctx.soul = join(outsideRoot, 'absent', 'soul');
+  const outside = join(outsideRoot, 'secret.txt');
+  writeFileSync(outside, 'untouched');
+  for (const path of ['../escape.txt', outside, 'new/../../escape.txt']) {
+    for (const name of ['read', 'write', 'edit']) {
+      const args = name === 'read' ? { path } : name === 'write' ? { path, content: 'bad' } : { path, old: 'a', new: 'b' };
+      await expect(tool(name).run(args, ctx)).rejects.toThrow(/outside the workspace and soul/);
+    }
+  }
+  const linkedOutside = join(mkdtempSync(join(tmpdir(), 'teneral-link-')), 'outside-link');
+  symlinkSync(outsideRoot, linkedOutside, 'dir');
+  await expect(tool('write').run({ path: join(linkedOutside, 'new', 'file.txt'), content: 'bad' }, ctx)).rejects.toThrow(/outside/);
+  expect(readFileSync(outside, 'utf8')).toBe('untouched');
+  expect(existsSync(ctx.soul)).toBe(false);
+});
+
 test('edit replaces one occurrence and refuses none or several', async () => {
   const ctx = context(mkdtempSync(join(tmpdir(), 'teneral-ws-')));
   await tool('write').run({ path: 'f.txt', content: 'one two two' }, ctx);
