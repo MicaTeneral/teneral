@@ -479,7 +479,7 @@ export class TalkScreen {
     let waits = '';
     try {
       const events = standing(readEvents(this.o.paths.journal));
-      badge = healthBadge(health(events, now));
+      badge = healthBadge(health(events, now)) || 'memory well · exam pending';
       const count = known(events).intentions.filter((i) => i.waits && i.to === undefined).length;
       waits = count === 0 ? '' : `${count} for you`;
     } catch { /* a journal that cannot be read says nothing of the memory */ }

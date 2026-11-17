@@ -97,7 +97,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `╭${'─'.repeat(97)}╮`,
     `│ ›${' '.repeat(95)}│`,
     `╰${'─'.repeat(97)}╯`,
-    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
+    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b$/),
   ]);
   // The terminal's own cursor is hidden at the top of the live region; the one the owner sees is drawn in the box.
   expect(s.term.vt.cursorVisible).toBe(false);
@@ -291,6 +291,7 @@ test('reasoning and context use are shown when the body journals them, and nothi
   const without = s.all();
   expect(without).not.toMatch(/○|context/);
   expect(rows(s.live())).toHaveLength(5);
+  s.term.resize(160, 30);
 
   s.say('and how many lines?', 4000);
   s.journal(more({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }], reasoning: 'The owner wants a count. I should not guess: `wc -l` gives it exactly.\n\nThen report the total only.', usage: { input: 70_200, output: 1700, cached: 64_000 } }), 5000);
@@ -309,13 +310,13 @@ test('reasoning and context use are shown when the body journals them, and nothi
   expect(s.all()).toContain('what it thought, in 2 stretches');
   expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
-  expect(rows(s.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 9% \(90\.3k\/1\.05M\)$/);
+  expect(rows(s.live()).at(-1)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
   expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
   // A model whose window is not known: the count alone.
   const other = stage(100, 30, { env: { TENERAL_MODEL: 'some-local-model' } });
   settled(other);
   other.journal(more({ type: 'assistant', text: 'Hm.', toolCalls: [], usage: { input: 12_345, output: 55 } }), 0);
-  expect(rows(other.live()).at(-1)).toMatch(/ gen 1 a1b2c3d {3,}context 12\.4k$/);
+  expect(rows(other.live()).at(-1)).toMatch(/memory well · exam pending.*context 12\.4k$/);
 });
 
 // --- resizing ---
@@ -401,7 +402,9 @@ test('a mutation accepted: mutating while the stem checks, then a notice with bo
   const all = s.all();
   expectFrame('mutation-accepted-80x30', all);
   expect(all).toContain('┃ mutation accepted  a1b2c3d → e5f6a7b\n\n● I am in the new body. Names stay with me now.');
-  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  …\/work\/teneral  gen 2 e5f6a7b/);
+  expect(s.live()).toMatch(/ gpt-6\.1-sol  resting  memory well · exam pending  …\/work\/teneral/);
+  s.term.resize(110, 30);
+  expect(s.live()).toContain('gen 2 e5f6a7b');
 });
 
 test('a mutation rejected: the gate by name, and the end of its output as several readable rows behind the notice\'s edge', () => {
@@ -1044,7 +1047,7 @@ test('/help, /generations and /plain print a page into the conversation; an unkn
 });
 
 test('the footer turns through tips, each naming a real key or command, and gives up what does not fit, the least needed first', () => {
-  const s = stage(130, 30, { helper: 'xclip' });
+  const s = stage(160, 30, { helper: 'xclip' });
   settled(s);
   const seen = new Set<string>();
   for (let i = 0; i < 13; i++) {
@@ -1058,9 +1061,9 @@ test('the footer turns through tips, each naming a real key or command, and give
   ]);
   s.clock.at = 0;
   s.term.resize(70, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  …/work/teneral  gen 1 a1b2c3d');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
   s.term.resize(50, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  …/work/teneral');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
   s.term.resize(30, 30);
   expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
 });
@@ -1539,7 +1542,7 @@ test('the status line says how the memory stands and what the last exam came to,
   const s = stage(120, 30, { name: 'Mica' });
   settled(s);
   const footer = (): string => rows(s.live()).at(-1) ?? '';
-  expect(footer()).not.toContain('memory');
+  expect(footer()).toContain('memory well · exam pending');
   const at = new Date(T0 - 58_000).toISOString();
   const end = new Date(T0 - 50_000).toISOString();
   const journaled = readFileSync(s.p.journal, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { id: string; type: string });
