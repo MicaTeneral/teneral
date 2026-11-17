@@ -1,10 +1,13 @@
 import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
-import { github, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
+import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
 import { rayboard, rayboardCa, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
+import { speciesRef } from '../species/species';
+import { githubRemote } from '../species/github';
+import { git } from '../immune/gates';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -97,6 +100,16 @@ const mailConfigPath = process.env.TENERAL_MAIL_CONFIG_FILE ?? join(workspace, '
 const zulipOwnerSetting = process.env.TENERAL_ZULIP_OWNER_ID?.trim() ?? '';
 const zulipOwnerNumber = /^\d+$/.test(zulipOwnerSetting) ? Number(zulipOwnerSetting) : 0;
 const zulipOwnerId = Number.isSafeInteger(zulipOwnerNumber) && zulipOwnerNumber > 0 ? zulipOwnerNumber : undefined;
+// Only commits observed on the owner's explicitly resolved species ref become update proposals.
+// Other watched repositories remain ordinary untrusted activity. GitHub never grants mutation approval.
+let upstream: { repository: string; branch: string } | undefined;
+try {
+  const species = speciesRef(workspace, process.env.TENERAL_UPSTREAM);
+  if (!('problem' in species) && species.remote) {
+    const repository = process.env.TENERAL_SPECIES_REPO ?? githubRemote(git(workspace, 'remote', 'get-url', species.remote.name))?.slug;
+    if (repository) upstream = { repository: githubRepository(repository), branch: species.remote.branch };
+  }
+} catch { /* A missing local ref still leaves ordinary public repository sensing available. */ }
 // Public read-only repository activity. Empty disables it; no GitHub credential is read or sent.
 // A comma-separated setting preserves the old single-repository configuration.
 const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || process.env.TENERAL_GITHUB_REPOSITORY?.trim() || 'RayforceDB/rayforce,RayforceDB/teneral').split(',').map(s => s.trim()).filter(Boolean);
@@ -230,7 +243,7 @@ const sensors: Sensor[] = [
     checkpoint: (cursor: WorkspaceCursor) => appendEvent(journal, gen, { type: 'note', kind: WORKSPACE_CURSOR_KIND, data: cursor }),
   })] : []),
   ...githubRepositories.map(repository => github({
-    repository,
+    repository, upstream,
     events: () => readEvents(journal),
     checkpoint: (cursor: GithubCursor) => {
       // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
