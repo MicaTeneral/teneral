@@ -102,21 +102,37 @@ export async function api(
   hub: Hub, auth: string, method: 'GET' | 'POST', path: string, body?: unknown, send: typeof fetch = fetch,
 ): Promise<unknown> {
   const token = readToken(auth);
+  const init: RequestInit = {
+    method,
+    headers: {
+      accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': API_VERSION, 'user-agent': userAgent(),
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(30_000),
+    // Only a same-origin canonical repository redirect is followed, by hand. The token is never
+    // automatically forwarded to another origin, and POST requests are never repeated.
+    redirect: 'manual',
+  };
   let res: Response;
   try {
-    res = await send(`${hub.api}${path}`, {
-      method,
-      headers: {
-        accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': API_VERSION, 'user-agent': userAgent(),
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(30_000),
-      // The token goes only where it was sent: an answer that points elsewhere is not followed with it.
-      redirect: 'error',
-    });
+    res = await send(`${hub.api}${path}`, init);
   } catch (err) {
     throw new GitHubError(0, `GitHub could not be reached at ${hub.api} (${err instanceof Error ? err.message : String(err)}). Nothing was changed there by this request; run it again when the network is back`);
+  }
+  if (method === 'GET' && body === undefined && [301, 302, 303, 307, 308].includes(res.status)) {
+    const location = res.headers.get('location');
+    if (location === null) throw new GitHubError(res.status, refusal(hub, res.status, '', false));
+    const destination = new URL(location, hub.api);
+    if (destination.origin !== new URL(hub.api).origin || !/^\/(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/?$/.test(destination.pathname)) {
+      throw new GitHubError(res.status, refusal(hub, res.status, '', false));
+    }
+    await res.body?.cancel().catch(() => {});
+    try {
+      res = await send(destination, init);
+    } catch (err) {
+      throw new GitHubError(0, `GitHub could not be reached at ${hub.api} (${err instanceof Error ? err.message : String(err)}). Nothing was changed there by this request; run it again when the network is back`);
+    }
   }
   let parsed: unknown = null;
   const raw = await res.text().catch(() => '');
