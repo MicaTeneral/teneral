@@ -12,7 +12,7 @@ import { known } from '../../brain/known';
 import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
-import { publication } from '../publication';
+import { publication, publicationLines } from '../publication';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
 import {
@@ -695,6 +695,7 @@ export class TalkScreen {
     if (key.kind === 'paste' && this.pasted(key.text)) return;
     if (key.kind === 'key') {
       if (key.name === 'tab') return this.toggleTools();
+      if (ctrl('p')) return this.command('/publish', '');
       if (ctrl('l')) return this.inline.invalidate();
       if (ctrl('r')) return this.reasoning();
       if (ctrl('d')) { this.edit = edit(this.edit, { kind: 'key', name: 'delete' }) ?? this.edit; return; }
@@ -845,6 +846,8 @@ export class TalkScreen {
         }
         return this.page('what the model was asked for', lines);
       }
+      case '/publish':
+        return this.page('publication status', publicationLines(this.o.paths, this.o.env));
       case '/heart':
         // The body turns this owner line into one bounded pulse; it is not a second running turn.
         return this.send('/heart');
@@ -1138,7 +1141,7 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`publish pending ${shortSha(this.publishedCommit)}`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`publish ${shortSha(this.publishedCommit)} · Ctrl-P`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

@@ -26,6 +26,7 @@ export const COMMANDS: readonly Command[] = [
   { name: '/generations', hint: '', about: 'the generations this individual has lived in', plain: false },
   { name: '/history', hint: '', about: 'print the earlier conversation that was read from the journal', plain: false },
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
+  { name: '/publish', hint: '', about: 'inspect commits not yet in the species', also: 'Ctrl-P', plain: false },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
   { name: '/heart', hint: '', about: 'give the agenda one pulse now', plain: true },
