@@ -591,6 +591,46 @@ t('an owner with no right to write to the species publishes through their fork: 
   expect(second).not.toBe(commit);
 });
 
+t('a maintainer with a redirected repository that is not a fork publishes to the species', async () => {
+  const w = await world('auto');
+  const i = install(w.root);
+  const hub = hubOf(w.root, i.s);
+  await w.hub.mode({ login: 'carol', push: true });
+  const canonical = { full_name: SLUG, fork: false, permissions: { push: true } };
+  const ownerRepository = (async (url: string | URL | Request, init?: RequestInit) => {
+    const parsed = new URL(url instanceof Request ? url.url : url);
+    if (parsed.pathname === '/repos/carol/teneral') return new Response(JSON.stringify(canonical), { status: 200, headers: { 'content-type': 'application/json' } });
+    return fetch(url, init);
+  }) as typeof fetch;
+  expect(await outletOf(i, hub, ownerRepository)).toMatchObject({ slug: SLUG, fork: false });
+  await w.hub.mode({ push: false });
+  await expect(outletOf(i, hub, ownerRepository)).rejects.toThrow(/has no fork/);
+});
+
+t('GitHub canonical repository redirects are followed without sending the token elsewhere', async () => {
+  const w = await world('auto');
+  const i = install(w.root);
+  const hub = hubOf(w.root, i.s);
+  let crossOrigin = false;
+  const other = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (req) => { crossOrigin = true; expect(req.headers.has('authorization')).toBe(false); return new Response('should not be called'); } });
+  const redirect = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === '/repos/carol/teneral') return new Response(null, { status: 301, headers: { location: '/repositories/42' } });
+      if (url.pathname === '/repositories/42') return Response.json({ full_name: SLUG, fork: false });
+      return new Response(null, { status: 404 });
+    },
+  });
+  try {
+    const answer = await api({ ...hub, api: redirect.url.origin }, join(i.root, '.teneral', 'auth'), 'GET', '/repos/carol/teneral');
+    expect(answer).toMatchObject({ full_name: SLUG, fork: false });
+    await expect(api(hub, join(i.root, '.teneral', 'auth'), 'GET', '/repos/carol/teneral', undefined, (async () => new Response(null, { status: 307, headers: { location: `${other.url.origin}/steal` } })) as unknown as typeof fetch)).rejects.toThrow(/GitHub answered 307/);
+    expect(crossOrigin).toBe(false);
+  } finally { redirect.stop(true); other.stop(true); }
+});
+
 t('the fork is the one TENERAL_FORK names when it is named; a repository of the owner\'s that is no fork of the species is refused; a maintainer with no fork pushes to the species', async () => {
   const w = await world('auto');
   const i = install(w.root);
@@ -600,6 +640,16 @@ t('the fork is the one TENERAL_FORK names when it is named; a repository of the 
   // Another account that may push there and has no fork: a maintainer.
   await w.hub.mode({ login: 'carol', push: true });
   expect(await outletOf(i, hub)).toMatchObject({ slug: SLUG, fork: false });
+  // A default repository that exists but is no fork does not disqualify a maintainer.
+  const unrelated = new Response(JSON.stringify({ full_name: 'carol/teneral', fork: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const ownerRepository = (async (url: string | URL | Request, init?: RequestInit) => new URL(url instanceof Request ? url.url : url).pathname === '/repos/carol/teneral'
+    ? unrelated.clone()
+    : fetch(url, init)) as typeof fetch;
+  expect(await outletOf(i, hub, ownerRepository)).toMatchObject({ slug: SLUG, fork: false });
+  // Without species push, the same unrelated repository does not masquerade as a fork.
+  await w.hub.mode({ push: false });
+  await expect(outletOf(i, hub, ownerRepository)).rejects.toThrow(/has no fork/);
+  await w.hub.mode({ push: true });
   // Named outright: nothing is asked of GitHub.
   const asked = (await w.hub.state()).seen.length;
   expect(await outletOf({ ...i, s: { ...i.s, TENERAL_FORK: 'dave/other', TENERAL_FORK_URL: 'http://127.0.0.1:9/x.git' } }, hub))
