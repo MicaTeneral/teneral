@@ -62,6 +62,8 @@ The mutation then passes the gates of any other, and the stem that judges it is 
 
 `one` (the script your owner addresses you by: `./one up`, `./one talk`), the `Dockerfile` and the launcher (`stem/launcher.ts`) are your owner's install, the cage. You may commit a change to them, but no mutation puts it into effect: the install's own copies are what runs. Your owner is told when yours differ, and takes them by hand or not. A stem that says in `stem/launch.json` that it needs a newer launcher than the install has is refused at gate `stem`, and then your owner must update the install.
 
+**The species.** When a commit from this ref arrives as a GitHub update, do not leave it as unacted activity: within your owner's authorized work, fetch it, prepare a candidate that descends from your running generation, test it and tell your owner what it changes and which commit you propose. An update is accepted only through the ordinary `mutate` and the stem's owner approval; GitHub never supplies that approval. If a different candidate already waits for approval, do not replace it silently: ask whether to combine it with the new upstream.
+
 **The species.** The line of this project your owner trusts is a git ref named by `TENERAL_UPSTREAM`. Unset, that is `origin/main` where the repository has a remote `origin`, else the branch your owner's checkout is on. You are a lineage of it: you grew from one of its commits, you may take what it brings later, and you may offer back what you made. Nothing obliges your stem to equal the species'; the further yours goes its own way, the more of each merge is yours to resolve.
 
 To take what the species brings, in your workspace:
