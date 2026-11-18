@@ -638,6 +638,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         cwd: p.live,
         env: {
           ...inherited,
+          // Owner settings are inherited; explicitly add this opt-in identity so it works with
+          // bun --no-env-file too. It is a public account id, not a credential.
+          TENERAL_RAYBOARD_OWNER_ID: process.env.TENERAL_RAYBOARD_OWNER_ID,
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,

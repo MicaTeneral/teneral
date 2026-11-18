@@ -618,24 +618,28 @@ process.exit(0);
 test('the body is told which provider is configured and where sign-ins are kept, and gets no token of the stem\'s making', async () => {
   const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
 const names = Object.keys(process.env).filter((name) => name.startsWith('TENERAL_')).sort().join(' ');
-appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_AUTH, names].join('|') });
+appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_AUTH, names, process.env.TENERAL_RAYBOARD_OWNER_ID].join('|') });
 process.exit(0);
 ` });
   const p = paths(dir);
   expect(p.auth).toBe(join(dir, '.teneral', 'auth'));
   const before = process.env.TENERAL_PROVIDER;
+  const ownerBefore = process.env.TENERAL_RAYBOARD_OWNER_ID;
   process.env.TENERAL_PROVIDER = 'chatgpt';
+  process.env.TENERAL_RAYBOARD_OWNER_ID = 'u_configured_owner';
   try {
     expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   } finally {
     if (before === undefined) delete process.env.TENERAL_PROVIDER; else process.env.TENERAL_PROVIDER = before;
+    if (ownerBefore === undefined) delete process.env.TENERAL_RAYBOARD_OWNER_ID; else process.env.TENERAL_RAYBOARD_OWNER_ID = ownerBefore;
   }
-  const [provider, auth, names] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
+  const [provider, auth, names, rayboardOwner] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
+  expect(rayboardOwner).toBe('u_configured_owner');
   expect(provider).toBe('chatgpt');
   expect(auth).toBe(p.auth);
   // The whole list of what the stem itself sets: one place, bodyEnv, decides it. The names left out are the owner's
   // settings: where these tests are run in an install, Bun reads them from its .env and the body inherits them.
-  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_TAIL_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS', 'TENERAL_ZULIP_OWNER_ID'];
+  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_TAIL_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS', 'TENERAL_ZULIP_OWNER_ID', 'TENERAL_RAYBOARD_OWNER_ID'];
   expect(names!.split(' ').filter((name) => !owners.includes(name))).toEqual([
     'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER', 'TENERAL_PULSE',
     'TENERAL_SOUL', 'TENERAL_WORKSPACE',
