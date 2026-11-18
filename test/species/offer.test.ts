@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import {
   scan, settings, sign, slugOf, speciesHead, speciesRef, witness,
 } from '../../species/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../species/offerkey';
+import * as github from '../../species/github';
 import { APPROVALS_DIR, APPROVAL_SUFFIX, approve, approved, tell } from '../../keeper/owner';
 import { FREE, HELD, isProtected } from '../../immune/protected';
 import { userAgent } from '../../brain/providers';
@@ -805,6 +806,30 @@ t('a token GitHub does not accept, a missing permission, a limit and a dead netw
   expect(readEvents(join(w.root, 'memory', 'journal.jsonl')).map((e) => e.type)).toEqual(['offer.published']);
   expect(approved(i.owner, commit)).toBe(false);
 }, SLOW);
+
+t('a stuck remote git operation says what publish is doing and fails promptly instead of blocking input for ten minutes', async () => {
+  const w = await world('auto');
+  const i = install(w.root);
+  offer(w.root, 'greeting', GREETING);
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  const stuck = spyOn(github, 'gitRemote').mockImplementation(() => ({ code: 1, stdout: Buffer.alloc(0), stderr: '', timedOut: true }));
+  const progress: string[] = [];
+  let out;
+  try { out = await publish(i, 'offer/greeting', { progress: (line) => progress.push(line) }); }
+  finally { stuck.mockRestore(); }
+  expect(out.status).toBe(1);
+  expect(out.text).toContain('timed out');
+  expect(out.text).toContain('Nothing was published');
+  expect(progress.some((line) => line.includes('Checking the species head'))).toBe(true);
+  expect(git(w.bare, 'for-each-ref', 'refs/heads/contrib')).toBe('');
+
+  const printed: string[] = [];
+  const cliStuck = spyOn(github, 'gitRemote').mockImplementation(() => ({ code: 1, stdout: Buffer.alloc(0), stderr: '', timedOut: true }));
+  try { expect(await main(['publish', 'offer/greeting'], w.root, (line) => printed.push(line), (line) => printed.push(line))).toBe(1); }
+  finally { cliStuck.mockRestore(); }
+  expect(printed.some((line) => line.includes('Checking the species head (up to 15 seconds)'))).toBe(true);
+  expect(printed.some((line) => line.includes('timed out') && line.includes('Nothing was published'))).toBe(true);
+}, 50_000);
 
 t('a pull request that is already open for the branch (422) is found and named, and shows the new commit', async () => {
   const w = await world('auto');
