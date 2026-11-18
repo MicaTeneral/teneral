@@ -2,7 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
-import { rayboard, rayboardCa, rayboardToken } from './rayboard';
+import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { speciesRef } from '../species/species';
@@ -254,6 +254,8 @@ const sensors: Sensor[] = [
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
   ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
     url: process.env.TENERAL_RAYBOARD_URL,
+    // No implicit binding: the owner chooses which API-verified account can speak for them.
+    ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => readEvents(journal),
