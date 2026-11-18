@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runTurn, journalSuffixReads } from '../../brain/loop';
+import { runTurn, journalSuffixReads, noOpCall, NO_OP_RESULT } from '../../brain/loop';
+import { NO_OP_REPLY, QUIET_REPLY } from '../../brain/quiet';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
@@ -742,4 +743,45 @@ test('completion cannot silently shrink an established outcome', async () => {
   await work.run({ task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation' }, s.ctx);
   await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
   expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
+});
+
+test('calls that do nothing are recognised, and nothing else is', () => {
+  for (const command of ['true', ' true ', ':', 'exit 0', 'exit', '', 'true;']) expect(noOpCall({ name: 'bash', args: { command, name: 'tick-stop-now' } })).toBe(true);
+  expect(noOpCall({ name: 'bash', args: {} })).toBe(true);
+  for (const command of ['false', 'true && rm x', 'ls', 'exit 1', 'echo true']) expect(noOpCall({ name: 'bash', args: { command } })).toBe(false);
+  expect(noOpCall({ name: 'echo', args: { command: 'true' } })).toBe(false);
+});
+
+const bash = (id: string, command = 'true') => ({ id, name: 'bash', args: { command, name: id } });
+
+test('a clock turn that only calls `true` is settled quietly on the second such round, and nothing is run', async () => {
+  let ran = 0;
+  const shell: Tool = { spec: { name: 'bash', description: '', parameters: {} }, async run() { ran++; return 'exit 0'; } };
+  const s = setup([
+    { text: '', toolCalls: [bash('settle-clock-tick')] },
+    { text: QUIET_REPLY, toolCalls: [bash('end-clock-tick')] },
+    { text: 'never asked', toolCalls: [] },
+  ], [shell]);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'clock', text: 'tick' });
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(ran).toBe(0);
+  expect(s.seen.length).toBe(2);
+  const events = readEvents(s.journal);
+  expect(events.filter(e => e.type === 'tool.intent')).toEqual([]);
+  expect(events.filter(e => e.type === 'tool.result').map(e => e.type === 'tool.result' && e.output)).toEqual([NO_OP_RESULT, NO_OP_RESULT]);
+  expect(events.at(-1)).toMatchObject({ type: 'assistant', text: QUIET_REPLY, toolCalls: [] });
+  // What the model was told after the first one.
+  expect(JSON.stringify(s.seen[1])).toContain('A turn ends with a reply that has no tool call');
+});
+
+test('outside a clock turn the stop is visible, and a real call between no-ops resets the count', async () => {
+  const s = setup([
+    { text: '', toolCalls: [bash('a')] },
+    { text: '', toolCalls: [bash('b', 'echo hi')] },
+    { text: '', toolCalls: [bash('c')] },
+    { text: '', toolCalls: [bash('d', ':')] },
+  ], [{ spec: { name: 'bash', description: '', parameters: {} }, async run() { return 'hi'; } }]);
+  expect(await runTurn(s.deps)).toBe('done');
+  expect(s.seen.length).toBe(4);
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: NO_OP_REPLY });
 });
