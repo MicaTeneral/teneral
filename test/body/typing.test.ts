@@ -80,3 +80,25 @@ test('an interrupted in-flight turn stops typing in finally', async () => {
   expect(result).toBe('interrupted');
   expect(states).toEqual([true, false]);
 });
+
+test('Rayboard typing is scoped to an actual conversation and uses the accepted agent contract', async () => {
+  const { rayboardTypingTarget, rayboardTyping } = await import('../../body/typing');
+  const events: JournalEvent[] = [];
+  const cases = [
+    ['mention', 'c_6ayj5jkn', true], ['comment', 'T-477', true], ['dm', 'dm:a_4c5z3ehc:a_c8g6uodu', true],
+    ['comment', 'u_k2wxzyex', false], ['task.done', 'T-477', false], ['message', 'private', false],
+  ] as const;
+  for (const [type, subject, expected] of cases) {
+    const e = { type: 'stimulus', source: 'agent:rayboard', text: 'notice\n' + JSON.stringify({ type, subject }) } as Extract<JournalEvent, {type:'stimulus'}>;
+    expect(rayboardTypingTarget(e, 'http://127.0.0.1:9', join(dir, 'rayboard-token')) !== undefined).toBe(expected);
+  }
+  expect(rayboardTypingTarget({ type: 'stimulus', source: 'clock', text: '' } as Extract<JournalEvent, {type:"stimulus"}>, 'http://127.0.0.1:9', 'none')).toBeUndefined();
+  const tokenPath = join(dir, 'rayboard-token'); await Bun.write(tokenPath, 'test-token');
+  const calls: { body: any; token: string }[] = [];
+  const typing = rayboardTyping({ refreshMs: 10, target: () => rayboardTypingTarget({ type: 'stimulus', source: 'agent:rayboard', text: 'notice\n' + JSON.stringify({ type: 'mention', subject: 'c_6ayj5jkn' }) } as Extract<JournalEvent, {type:"stimulus"}>, 'http://127.0.0.1:9', tokenPath), send: (async (_url, init) => { calls.push({ body: JSON.parse(String(init?.body)), token: String(init?.headers && (init.headers as any).Authorization) }); return new Response('{"ok":true}'); }) as typeof fetch });
+  typing(true); await Bun.sleep(25); typing(false); await Bun.sleep(20);
+  expect(calls.length).toBeGreaterThanOrEqual(3);
+  expect(calls[0]?.body).toEqual({ to: 'c_6ayj5jkn', composing: true, hold: 60 });
+  expect(calls.at(-1)?.body).toEqual({ to: 'c_6ayj5jkn', composing: false });
+  expect(calls.every(c => c.token === 'Bearer test-token')).toBe(true);
+});

@@ -37,7 +37,7 @@ import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { Heart, agendaFor, heartCommand } from '../heart/coordinator';
-import { zulipTypingScope } from './typing';
+import { zulipTypingScope, rayboardTypingScope } from './typing';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -312,7 +312,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
-      onTyping: typing,
+      onTyping: (stimulus) => { const z = typing(stimulus), r = rayboardTypingScope(stimulus); return active => { z(active); r(active); }; },
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;

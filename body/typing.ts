@@ -88,3 +88,50 @@ export function zulipTyping(o: TypingOptions): TypingStatus {
     void drain();
   };
 }
+
+export type RayboardTypingTarget = { url: string; tokenFile: string; subject: string };
+
+export function rayboardTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus' }>, url = process.env.TENERAL_RAYBOARD_URL, tokenFile = process.env.TENERAL_RAYBOARD_TOKEN_FILE): RayboardTypingTarget | undefined {
+  if (e?.source !== 'agent:rayboard' || !url || !tokenFile) return;
+  const n = (() => { try { return JSON.parse(e.text.slice(e.text.indexOf('\n') + 1)); } catch { return null; } })();
+  if (!n || !['message', 'mention', 'comment', 'dm'].includes(n.type) || typeof n.subject !== 'string') return;
+  if (!/^(?:T-[1-9][0-9]*|dm:(?:a|u)_[a-z0-9]{8}:(?:a|u)_[a-z0-9]{8}|c_[a-z0-9]{8})$/.test(n.subject)) return;
+  return { url, tokenFile, subject: n.subject };
+}
+
+/** An agent report uses the accepted server contract, including its bounded long-composition hold. */
+export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefined; send?: typeof fetch; refreshMs?: number; signal?: AbortSignal }): TypingStatus {
+  const refreshMs = o.refreshMs ?? 30_000;
+  let active = false, stopped = false, timer: ReturnType<typeof setInterval> | undefined;
+  const send = async (composing: boolean): Promise<void> => {
+    const target = o.target();
+    if (!target || (stopped && composing)) return;
+    try {
+      const token = (await Bun.file(target.tokenFile).text()).trim();
+      if (!token) return;
+      await (o.send ?? fetch)(target.url + '/api/call/typing', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: target.subject, composing, ...(composing ? { hold: 60 } : {}) }), redirect: 'error', signal: AbortSignal.timeout(5_000) });
+    } catch { /* the answer must not depend on a presence indicator */ }
+  };
+  const abort = () => status(false);
+  o.signal?.addEventListener('abort', abort, { once: true });
+  const status = (next: boolean) => {
+    if (stopped || o.signal?.aborted) next = false;
+    if (next && !o.target()) return;
+    if (next && !active) {
+      active = true;
+      void send(true);
+      timer = setInterval(() => void send(true), refreshMs);
+    }
+    if (!next) {
+      stopped = true; active = false;
+      if (timer) clearInterval(timer);
+      o.signal?.removeEventListener('abort', abort);
+      void send(false);
+    }
+  };
+  return status;
+}
+
+export function rayboardTypingScope(e?: Extract<JournalEvent, { type: 'stimulus' }>): TypingStatus {
+  return rayboardTyping({ target: () => rayboardTypingTarget(e) });
+}
