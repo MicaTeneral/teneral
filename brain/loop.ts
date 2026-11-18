@@ -37,6 +37,8 @@ export interface TurnDeps {
   signal?: AbortSignal;
   /** How long a running tool gets to stop by itself after that, before the turn ends without it. Default: two seconds. */
   abandonMs?: number;
+  /** Begin/end external composition for this turn's exact stimulus; absent or undefined means no indicator. */
+  onTyping?: (stimulus?: Extract<JournalEvent, { type: 'stimulus' }>) => (active: boolean) => void;
 }
 
 const ABANDON_MS = 2000;
@@ -109,6 +111,18 @@ export function noOpCall(call: { name: string; args: unknown }): boolean {
 export const NO_OP_RESULT = 'Not run: this call does nothing. A turn ends with a reply that has no tool call in it; on a clock turn with nothing to do, that reply is exactly ' + QUIET_REPLY + '. A second round of calls like this ends the turn for you.';
 
 export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
+  const stimulus = d.signal?.aborted ? undefined : readEvents(d.journal).findLast((e): e is Extract<JournalEvent, { type: 'stimulus' }> => e.type === 'stimulus');
+  const typing = d.onTyping?.(stimulus);
+  typing?.(true);
+  try {
+    return await runTurnInner(d);
+  } finally {
+    // The external status is best effort and bounded. It is never allowed to hold the reply or crash the body.
+    typing?.(false);
+  }
+}
+
+async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
   const interrupted = (): 'interrupted' => {
     appendEvent(d.journal, d.gen, { type: 'turn.interrupted' });
     return 'interrupted';

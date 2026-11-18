@@ -37,6 +37,7 @@ import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { Heart, agendaFor, heartCommand } from '../heart/coordinator';
+import { zulipTypingScope } from './typing';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -299,6 +300,7 @@ const sensors: Sensor[] = [
 async function turn(): Promise<{ error: unknown } | null> {
   // A quiet clock reply is settled by brain/loop.ts without ever streaming its internal marker.
   const quietTick = ['clock', 'agent:rayboard'].includes(readEvents(journal).findLast(e => e.type === 'stimulus')?.source ?? '');
+  const typing = zulipTypingScope(zulipCredentialPath);
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -310,6 +312,7 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
+      onTyping: typing,
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;

@@ -62,7 +62,9 @@ test('a channel stimulus carries its reply target and a completed external respo
 test('rayboard reply takes the target from the journaled stimulus, not a supplied destination', async () => {
   const stimulus = event({ source: RAYBOARD_SOURCE, text: 'Rayboard notification 41\nnotice\n{"seq":41,"type":"mention","subject":"c_6ayj5jkn","sender":"person","text":"person in #general: why?","ts":"2026-01-01T00:00:00.000Z"}' });
   const ctx = { id: 'mica', events: () => [stimulus] } as unknown as ToolContext;
-  expect(rayboardTarget({ type: 'message', subject: 'dm:a_one:u_two', text: 'x' })).toBe('dm:a_one:u_two');
+  expect(rayboardTarget({ type: 'message', subject: 'dm:a_12345678:u_87654321', text: 'x' })).toBe('dm:a_12345678:u_87654321');
+  expect(rayboardTarget({ type: 'dm', subject: 'dm:a_12345678:u_87654321', text: 'x' })).toBe('dm:a_12345678:u_87654321');
+  expect(rayboardTarget({ type: 'dm', subject: 'dm:attacker:person', text: 'x' })).toBeUndefined();
   const calls: Record<string, unknown>[] = [];
   const tool = rayboardReplyTool({ url: () => 'https://board.example', token: () => 'test-token', send: (async (_url: unknown, init?: RequestInit) => {
     calls.push(JSON.parse(String(init?.body)));

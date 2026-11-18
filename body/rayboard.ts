@@ -75,7 +75,7 @@ export function rayboardTarget(n: Row): string | undefined {
     const channel = prefix.split(' in ').at(-1);
     if (channel && /^#[a-z0-9_-]{2,32}$/.test(channel)) return channel;
   }
-  if ((n.type === 'message' || n.type === 'mention') && /^dm:/.test(String(n.subject))) return String(n.subject);
+  if ((n.type === 'message' || n.type === 'mention' || n.type === 'dm') && /^dm:(?:a|u)_[a-z0-9]{8}:(?:a|u)_[a-z0-9]{8}$/.test(String(n.subject))) return String(n.subject);
   if (typeof n.subject === 'string' && /^T-[1-9][0-9]*$/.test(n.subject)) return n.subject;
   return undefined;
 }
