@@ -100,16 +100,16 @@ export function rayboardTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus
 }
 
 /** An agent report uses the accepted server contract, including its bounded long-composition hold. */
-export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefined; send?: typeof fetch; refreshMs?: number; signal?: AbortSignal }): TypingStatus {
+export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefined; lastTarget?: RayboardTypingTarget; send?: typeof fetch; refreshMs?: number; signal?: AbortSignal }): TypingStatus {
   const refreshMs = o.refreshMs ?? 30_000;
   let active = false, stopped = false, timer: ReturnType<typeof setInterval> | undefined;
   const send = async (composing: boolean): Promise<void> => {
     const target = o.target();
-    if (!target || (stopped && composing)) return;
+    if (composing && (!target || stopped)) return;
     try {
-      const token = (await Bun.file(target.tokenFile).text()).trim();
+      const token = (await Bun.file((target ?? o.lastTarget)!.tokenFile).text()).trim();
       if (!token) return;
-      await (o.send ?? fetch)(target.url + '/api/call/typing', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: target.subject, composing, ...(composing ? { hold: 60 } : {}) }), redirect: 'error', signal: AbortSignal.timeout(5_000) });
+      await (o.send ?? fetch)((target ?? o.lastTarget)!.url + '/api/call/typing', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: (target ?? o.lastTarget)!.subject, composing, ...(composing ? { hold: 60 } : {}) }), redirect: 'error', signal: AbortSignal.timeout(5_000) });
     } catch { /* the answer must not depend on a presence indicator */ }
   };
   const abort = () => status(false);
@@ -118,6 +118,7 @@ export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefin
     if (stopped || o.signal?.aborted) next = false;
     if (next && !o.target()) return;
     if (next && !active) {
+      o.lastTarget = o.target();
       active = true;
       void send(true);
       timer = setInterval(() => void send(true), refreshMs);

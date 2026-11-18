@@ -102,3 +102,13 @@ test('Rayboard typing is scoped to an actual conversation and uses the accepted 
   expect(calls.at(-1)?.body).toEqual({ to: 'c_6ayj5jkn', composing: false });
   expect(calls.every(c => c.token === 'Bearer test-token')).toBe(true);
 });
+
+test('Rayboard stop uses the last destination when the signal or environment has already gone', async () => {
+  const { rayboardTyping } = await import('../../body/typing');
+  const tokenPath = join(dir, 'rayboard-last-token'); await Bun.write(tokenPath, 'test-token');
+  let target: any = { url: 'http://127.0.0.1:9', tokenFile: tokenPath, subject: 'T-477' };
+  const bodies: any[] = [];
+  const send = (async (_url: any, init: any) => { bodies.push(JSON.parse(init.body)); return new Response('{"ok":true}'); }) as typeof fetch;
+  const typing = rayboardTyping({ target: () => target, send }); typing(true); target = undefined; typing(false); await Bun.sleep(15);
+  expect(bodies.map(b => [b.to,b.composing])).toEqual([['T-477',true],['T-477',false]]);
+});
