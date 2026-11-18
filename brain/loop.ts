@@ -126,7 +126,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   const journal = turnJournal(d.journal);
   // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
-  const quietTick = journal.read().findLast(e => e.type === 'stimulus')?.source === 'clock';
+  const quietTick = ['clock', 'agent:rayboard'].includes(journal.read().findLast(e => e.type === 'stimulus')?.source ?? '');
   const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   // Rounds in a row made of nothing but calls that do nothing (noOpCall). The second ends the turn.
   let idleRounds = 0;

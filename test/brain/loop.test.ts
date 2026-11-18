@@ -30,6 +30,15 @@ const echo: Tool = {
   async run(args) { return `echo:${JSON.stringify(args)}`; },
 };
 
+test('a rayboard turn can end silently after its reply tool has an external receipt', async () => {
+  const s = setup([{ text: QUIET_REPLY, toolCalls: [] }]);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'agent:rayboard', text: 'Rayboard notification 41\nchannel question' });
+  const shown: string[] = [];
+  expect(await runTurn({ ...s.deps, onText: t => shown.push(t) })).toBe('done');
+  expect(readEvents(s.journal).at(-1)?.type).toBe('assistant');
+  expect(shown).toEqual([]);
+});
+
 test('a plain reply is journaled and ends the turn', async () => {
   const s = setup([{ text: 'hello', toolCalls: [] }]);
   const shown: string[] = [];

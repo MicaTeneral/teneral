@@ -116,7 +116,7 @@ const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || p
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past };
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: () => readEvents(journal) };
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -298,7 +298,7 @@ const sensors: Sensor[] = [
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
   // A quiet clock reply is settled by brain/loop.ts without ever streaming its internal marker.
-  const quietTick = readEvents(journal).findLast(e => e.type === 'stimulus')?.source === 'clock';
+  const quietTick = ['clock', 'agent:rayboard'].includes(readEvents(journal).findLast(e => e.type === 'stimulus')?.source ?? '');
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();

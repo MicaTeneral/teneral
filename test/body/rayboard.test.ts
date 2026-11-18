@@ -3,7 +3,8 @@ import type { JournalEvent } from '../../brain/journal';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { rayboardCa, rayboardPoller, rayboardToken, rayboardUrl, RAYBOARD_SOURCE } from '../../body/rayboard';
+import { rayboardCa, rayboardPoller, rayboardReplyTool, rayboardTarget, rayboardToken, rayboardUrl, RAYBOARD_SOURCE } from '../../body/rayboard';
+import type { ToolContext } from '../../body/tools';
 import type { Stimulus } from '../../body/sensors';
 const event = (s: Stimulus): JournalEvent => ({ v: 1, id: String(s.text), ts: '2026-01-01T00:00:00.000Z', gen: 'test', type: 'stimulus', ...s });
 const note = (seq: number) => ({ seq, ts: '2026-01-01T00:00:00.000Z', type: 'task.assigned', subject: 'T-1', sender: 'operator', text: 'untrusted work' });
@@ -47,6 +48,30 @@ test('certificate authorities are read from a separate file and must be PEM', ()
     expect(rayboardCa(path)).toContain('BEGIN CERTIFICATE');
     expect(rayboardCa(undefined)).toBeUndefined();
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('a channel stimulus carries its reply target and a completed external response stays out of the terminal', async () => {
+  const f = fixture([{ seq: 41, ts: '2026-01-01T00:00:00.000Z', type: 'mention', subject: 'c_6ayj5jkn', sender: 'person', text: 'person in #general: why?' }]);
+  const notices: Stimulus[] = [];
+  const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send }, s => notices.push(s));
+  await p.poll();
+  expect(notices[0]!.text).toContain('exact channel with rayboard_reply');
+  expect(rayboardTarget({ type: 'mention', subject: 'c_6ayj5jkn', text: 'person in #general: why?' })).toBe('#general');
+  expect(rayboardTarget({ type: 'mention', subject: 'T-12', text: 'person in T-12: update' })).toBe('T-12');
+  expect(rayboardTarget({ type: 'task.assigned', subject: 'T-12', text: 'assigned' })).toBe('T-12');
+});
+test('rayboard reply takes the target from the journaled stimulus, not a supplied destination', async () => {
+  const stimulus = event({ source: RAYBOARD_SOURCE, text: 'Rayboard notification 41\nnotice\n{"seq":41,"type":"mention","subject":"c_6ayj5jkn","sender":"person","text":"person in #general: why?","ts":"2026-01-01T00:00:00.000Z"}' });
+  const ctx = { id: 'mica', events: () => [stimulus] } as unknown as ToolContext;
+  expect(rayboardTarget({ type: 'message', subject: 'dm:a_one:u_two', text: 'x' })).toBe('dm:a_one:u_two');
+  const calls: Record<string, unknown>[] = [];
+  const tool = rayboardReplyTool({ url: () => 'https://board.example', token: () => 'test-token', send: (async (_url: unknown, init?: RequestInit) => {
+    calls.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true, result: { seq: 42 } }));
+  }) as unknown as typeof fetch });
+  expect(await tool.run({ notification: 41, content: 'Real answer' }, ctx)).toContain('sent to #general');
+  expect(calls).toEqual([{ to: '#general', body: 'Real answer', request_id: 'teneral-mica-41' }]);
+  await expect(tool.run({ notification: 41, content: 'other' }, { ...ctx, events: () => [] })).rejects.toThrow('existing Rayboard stimulus');
+  await expect(tool.run({ notification: 41, content: '' }, ctx)).rejects.toThrow('content');
 });
 test('bad input and stopped workers cannot emit or acknowledge', async () => {
   const f = fixture([{}]); const notices: Stimulus[] = [];
