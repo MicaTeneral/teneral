@@ -26,21 +26,30 @@ interface Options {
   ownerId?: number;
   /** Copies fetched bytes into the content-addressed image store; absent, attachments stay text. */
   keepImage?: (bytes: Buffer) => string | Promise<string>;
+  /** Test seam only: how long a poll pass may hold the busy latch before it is force-released.
+   * Never set in production. */
+  pollDeadlineMs?: number;
 }
 
 const MAX_ATTACHMENTS = 4;
 /** Uploaded image references from Zulip's HTML, never arbitrary links in the message text. */
 function imagePaths(content: string): string[] {
-  return [...content.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)]
-    .map(m => m[2]!.replaceAll('&amp;', '&'))
-    .concat([...content.matchAll(/<a\b[^>]*\bhref=(["'])([^"']+)\1/gi)].map(m => m[2]!.replaceAll('&amp;', '&')))
+  // Zulip renders an inline image as <img src="/user_uploads/thumbnail/..."><br> with the
+  // full-resolution original in data-original-src; the inline src is often a downscaled
+  // thumbnail that the download filter would discard. Read both attributes.
+  const imgSrc = [...content.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  const imgOriginal = [...content.matchAll(/<img\b[^>]*\bdata-original-src=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  const anchors = [...content.matchAll(/<a\b[^>]*\bhref=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  return [...imgOriginal, ...imgSrc, ...anchors]
+    .map(p => p.replaceAll('&amp;', '&'))
     .filter(path => path.startsWith('/user_uploads/') && !path.startsWith('/user_uploads/thumbnail/') && !path.startsWith('//'))
     .slice(0, MAX_ATTACHMENTS);
 }
 async function renderedMessage(c: Credentials, id: number, content: string, send: typeof fetch): Promise<string> {
-  // Zulip omits attachment HTML when apply_markdown=false. Render only this verified owner's
-  // current message by its API id, never a sender- or content-supplied identifier.
-  if (!/\/user_uploads\//.test(content)) return '';
+  // Zulip omits attachment HTML when apply_markdown=false, so the rendered form (not the raw
+  // markdown) is authoritative for attachment URLs. Fetch it for any verified-owner message
+  // the caller asked us to scan; imagePaths() decides whether the result references uploads.
+  // The id is this authenticated owner's own message id, never a sender- or content-supplied one.
   const rendered = await send(new URL(`/api/v1/messages/${id}`, c.site), {
     headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
     redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -83,12 +92,38 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       if (Number.isSafeInteger(id)) cursor = Math.max(cursor, id);
     }
   }
+  // The poll body can await an emit that wakes a long turn. Every HTTP call is bounded by an
+  // AbortSignal, but the overall pass still gets a generous deadline so that if any await never
+  // resolves, `busy` cannot stay latched and silently stop the sensor: the next interval retries.
+  const POLL_DEADLINE_MS = o.pollDeadlineMs ?? 120_000;
   async function poll() {
     if (stopped || busy) return;
     busy = true;
+    let finished = false;
+    const watchdog = setTimeout(() => {
+      if (!finished && !stopped) {
+        console.error('[zulip] DM poll exceeded its deadline; releasing the busy latch so the sensor retries.');
+        busy = false;
+      }
+    }, POLL_DEADLINE_MS);
     try {
       const c = o.credentials();
       if (!c) return;
+      // Never trust the in-memory cursor above what the journal proves was emitted. A previous
+      // pass can be interrupted between counting a message and emitting it (the emit below is
+      // journaled and may wake a long turn); its id then sat in `cursor` but never reached the
+      // journal. Rewinding to the durable floor each poll re-fetches such messages instead of
+      // skipping them — this is what kept a DM sent just above the last emitted id from being
+      // lost when the process stopped mid-turn.
+      let floor = 0;
+      for (const e of o.events()) {
+        if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
+          const line = e.text.split('\n', 1)[0] ?? '';
+          const id = Number(line.split(/\s+/).pop());
+          if (Number.isSafeInteger(id)) floor = Math.max(floor, id);
+        }
+      }
+      if (cursor < floor) cursor = floor;
       const key = JSON.stringify([c.site, c.email, c.api_key]);
       if (identity?.key !== key) {
         identity = undefined;
@@ -147,7 +182,17 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         const verifiedOwner = o.ownerId !== undefined && m.sender_id === o.ownerId;
         // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
         // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
-        const images = verifiedOwner && o.keepImage ? await attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch) : [];
+        // An attachment that is not a showable image (e.g. a .md upload) must not throw here:
+        // it sits inside the batch loop, so one bad attachment would abort the whole pass and
+        // silently drop every other pending message. Degrade to a text note instead.
+        let images: string[] = [];
+        if (verifiedOwner && o.keepImage) {
+          try {
+            images = await attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch);
+          } catch {
+            images = ['[Zulip attachment could not be shown]'];
+          }
+        }
         emit({
           // Authority comes from this authenticated id comparison, not from message content.
           source: verifiedOwner ? OWNER_SOURCE : SOURCE,
@@ -167,7 +212,11 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     } catch {
       if (!failed && !stopped) console.error('[zulip] DM poll failed; will retry (credentials and response omitted).');
       failed = true;
-    } finally { busy = false; }
+    } finally {
+      finished = true;
+      clearTimeout(watchdog);
+      busy = false;
+    }
   }
   return { poll, stop: () => { stopped = true; } };
 }
