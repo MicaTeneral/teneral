@@ -183,3 +183,21 @@ test('the indicator starts with the turn, is refreshed, and its stop never overt
   await Bun.sleep(10);
   expect(sent).toHaveLength(2);
 });
+
+test('a Zulip message names what was attached to it, and chat_fetch takes only such an upload, bounded, to a file outside the workspace', async () => {
+  const { files } = await import('../../body/zulip');
+  expect(files('see [notes.txt](/user_uploads/2/ab/notes.txt) and [x](https://evil.example/user_uploads/x) and [t](/user_uploads/thumbnail/2/ab/x.png)')).toEqual(['/user_uploads/2/ab/notes.txt']);
+  const { chatFetch } = await import('../../body/chat-tools');
+  const z = zulipAt((url) => (url.pathname === '/user_uploads/2/ab/notes.txt' ? new Response('port = 5000\n', { headers: { 'content-type': 'text/plain; charset=utf-8' } })
+    : url.pathname.endsWith('big.bin') ? new Response('x', { headers: { 'content-length': '9000000' } }) : new Response('{}', { status: 404 })));
+  const got = String(await chatFetch.run({ service: 'zulip', file: '/user_uploads/2/ab/notes.txt' }, z.ctx));
+  expect(got).toContain('(text/plain, 12 bytes)');
+  expect(got).toContain('port = 5000');
+  expect(got).toMatch(/saved as \S*teneral-chat-files\/[0-9a-f]{16}-notes\.txt /);
+  expect(got).not.toContain(z.ctx.workspace);
+  for (const bad of ['https://evil.example/x', '/api/v1/users', '/user_uploads/../api/v1/users', '/user_uploads/thumbnail/2/x.png']) {
+    await expect(chatFetch.run({ service: 'zulip', file: bad }, z.ctx)).rejects.toThrow('a path beginning /user_uploads/');
+  }
+  await expect(chatFetch.run({ service: 'zulip', file: '/user_uploads/2/ab/big.bin' }, z.ctx)).rejects.toThrow('larger than 5 MB');
+  await expect(chatFetch.run({ service: 'zulip', file: '/user_uploads/2/ab/gone.txt' }, z.ctx)).rejects.toThrow('Zulip HTTP 404');
+});

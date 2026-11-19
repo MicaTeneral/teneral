@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { IMAGE_MAX_BYTES } from './images';
 import type { JournalEvent } from '../brain/journal';
 import type { Sensor, Stimulus } from './sensors';
-import { chat, type ChatMessage, type ChatWords, type Speaker } from './chat';
+import { chat, type ChatMessage, type ChatWords, type Mode, type Speaker } from './chat';
 
 interface Credentials { site: string; email: string; api_key: string }
 export function zulipCredentials(path: string): Credentials | undefined {
@@ -38,6 +38,8 @@ interface Options {
   who?: (speakers: Speaker[]) => string;
   /** Asked once for each stream a message comes from, with who the service says is subscribed: see `entered` in body/chat.ts. */
   entered?: (stream: { id: string; name: string }, members: { id: string; name: string; bot?: boolean }[] | null) => string;
+  /** How the agent listens in a stream: see `mode` in body/chat.ts. */
+  mode?: (stream: { id: string; name: string }) => Mode;
   /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
   wide?: boolean;
   /** Of the event queue: a request waits at the server until something happens, instead of returning at once. */
@@ -46,6 +48,10 @@ interface Options {
   now?: () => number;
 }
 
+/** The uploads a message links to, as Zulip names them, at most six. */
+export function files(content: string): string[] {
+  return [...new Set([...content.matchAll(/\]\((\/user_uploads\/[^)\s]{1,300})\)/g)].map((m) => m[1]!))].filter((path) => !path.startsWith('/user_uploads/thumbnail/')).slice(0, 6);
+}
 const BOTS_REFRESH_MS = 3_600_000;
 const BOTS_RETRY_MS = 5 * 60_000;
 /** Failed polls in a row after which the connection is said to have been down. */
@@ -129,6 +135,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const attention = chat({
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
+    ...(o.mode ? { mode: o.mode } : {}),
   });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
@@ -158,6 +165,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         mentioned, self: false,
         timestamp: m.timestamp, ...(Number.isSafeInteger(m.timestamp) ? { at: new Date(m.timestamp * 1000).toISOString() } : {}),
         ...(m.last_edit_timestamp ? { edited: true } : {}), content: text(m.content, 6000),
+        // What anyone attached is named, never fetched: the agent asks for a file when it wants it (chat_fetch).
+        ...(files(text(m.content, 6000)).length > 0 ? { files: files(text(m.content, 6000)) } : {}),
       }),
       // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
       // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
