@@ -106,7 +106,7 @@ async function attachments(c: Credentials, content: string, keep: Options['keepI
 }
 export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   let identity: { key: string; id: number; name: string } | undefined;
-  let cursor = 0, stopped = false, busy = false, failed = false;
+  let cursor = 0, stopped = false, busy = false, failed = false, again = false;
   const now = (): number => o.now?.() ?? Date.now();
   let bots: Set<number> | undefined, botsAt = 0;
   /** Where listening began when nothing had ever been heard: kept in memory, since no stimulus holds it yet. */
@@ -212,7 +212,10 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     }
   }
   async function poll() {
-    if (stopped || busy) return;
+    if (stopped) return;
+    // A queue bell during an active fetch is work still to do, not a reason to overlap requests.
+    // One pending bit coalesces any number of bells; without it a DM could wait for the 30 s fallback.
+    if (busy) { again = true; return; }
     busy = true;
     try {
       const c = o.credentials();
@@ -307,7 +310,14 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       failed = true;
       if (failures === 0) downSince = now();
       failures += 1;
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (again) {
+        again = false;
+        // Schedule after the current turn, so an active queue callback is never re-entered inline.
+        queueMicrotask(() => { if (!stopped) void poll(); });
+      }
+    }
   }
   return {
     poll, stop: () => { stopped = true; },
@@ -386,6 +396,8 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
   let cursor: ZulipQueueCursor | undefined, restoredFor: string | undefined, identity: { key: string; id: number } | undefined;
   const keyOf = (c: Credentials) => JSON.stringify([c.site, c.email, c.api_key]);
   let stopped = false, busy = false, failed = false;
+  let waiting: AbortController | undefined;
+  let expiry = false;
   const delivered = new Set<string>();
   function restore(c: Credentials) {
     if (restoredFor === keyOf(c)) return;
@@ -418,6 +430,27 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       throw new Error('Zulip reaction request failed');
     }
     return result;
+  }
+  /** A long poll has its own cancellable signal. Stopping the sensor must not leave it waiting for a minute. */
+  async function events(c: Credentials, query: string, ms: number): Promise<any> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    waiting = controller;
+    try {
+      const response = await send(new URL(`/api/v1/events?${query}`, c.site), {
+        redirect: 'error', signal: controller.signal,
+        headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        if (result?.code === 'BAD_EVENT_QUEUE_ID') return { expired: true };
+        throw new Error('Zulip event request failed');
+      }
+      return result;
+    } finally {
+      clearTimeout(timer);
+      if (waiting === controller) waiting = undefined;
+    }
   }
   async function poll(): Promise<boolean> {
     if (stopped || busy) return false;
@@ -460,8 +493,15 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         } catch { /* a malformed historical stimulus is not delivered evidence */ }
       }
       // Waiting at the server, a request returns the moment something happens, or after about a minute and a half with a heartbeat.
-      const result = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: active.queueId, last_event_id: String(active.eventId), ...(o.block ? {} : { dont_block: 'true' }) })}`, {}, o.block ? 110_000 : 15_000);
-      if (result.expired) { cursor = undefined; return true; }
+      const result = await events(c, new URLSearchParams({ queue_id: active.queueId, last_event_id: String(active.eventId), ...(o.block ? {} : { dont_block: 'true' }) }).toString(), o.block ? 110_000 : 15_000);
+      if (result.expired) {
+        cursor = undefined;
+        // A queue expiring is expected during sleep/restarts; say it once, without ids or credentials.
+        if (!expiry && !stopped) console.error('[zulip] event queue expired; registering a new queue and recovering messages from their own cursor');
+        expiry = true;
+        return true;
+      }
+      expiry = false;
       if (!Array.isArray(result.events)) throw new Error('Invalid Zulip event list');
       const reactions = result.events.filter((event: any) => event?.type === 'reaction').sort((a: any, b: any) => a.id - b.id);
       if (reactions.length > MAX_REACTIONS) throw new Error('Zulip reaction batch limit');
@@ -507,13 +547,14 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       // A wide queue moves with every message and heartbeat: only what bears on a reaction is worth a note.
       if (!o.wide || reactions.some((event: any) => event.id > active.eventId)) o.checkpoint?.({ ...active, eventId });
       if (o.wide) cursor = { ...active, eventId };
+      if (failed && !stopped) console.error('[zulip] event queue connected again');
       failed = false;
       return true;
     } catch {
-      if (!failed && !stopped) console.error('[zulip] reaction queue failed; will retry (credentials and response omitted).');
+      if (!stopped && !failed) console.error('[zulip] reaction queue failed; will retry (credentials and response omitted).');
       failed = true;
       return false;
     } finally { busy = false; }
   }
-  return { poll, stop: () => { stopped = true; } };
+  return { poll, stop: () => { stopped = true; waiting?.abort(); } };
 }
