@@ -8,6 +8,7 @@ import { ProviderError, type ChatMessage, type Provider, type Reply } from '../.
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
 import { decideBudget } from '../../body/adaptive-budget';
+
 import { appendEvent, readEvents } from '../../brain/journal';
 import { buildMessages } from '../../brain/memory';
 
@@ -29,6 +30,15 @@ const echo: Tool = {
   spec: { name: 'echo', description: '', parameters: {} },
   async run(args) { return `echo:${JSON.stringify(args)}`; },
 };
+
+test('a rayboard turn can end silently after its reply tool has an external receipt', async () => {
+  const s = setup([{ text: QUIET_REPLY, toolCalls: [] }]);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'agent:rayboard', text: 'Rayboard notification 41\nchannel question' });
+  const shown: string[] = [];
+  expect(await runTurn({ ...s.deps, onText: t => shown.push(t) })).toBe('done');
+  expect(readEvents(s.journal).at(-1)?.type).toBe('assistant');
+  expect(shown).toEqual([]);
+});
 
 test('a plain reply is journaled and ends the turn', async () => {
   const s = setup([{ text: 'hello', toolCalls: [] }]);
@@ -778,33 +788,6 @@ test('completion cannot silently shrink an established outcome', async () => {
   expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
 });
 
-test('only a line typed at the owner\'s terminal must be answered in words; any other wake may end quietly', async () => {
-  const { mayStayQuiet } = await import('../../brain/loop');
-  expect(mayStayQuiet('terminal')).toBe(false);
-  expect(mayStayQuiet('birth')).toBe(false);
-  expect(mayStayQuiet(undefined)).toBe(false);
-  for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
-});
-
-test('a turn says it is being written for from its first moment to its last, also when it throws', async () => {
-  const { runTurn } = await import('../../brain/loop');
-  const { appendEvent } = await import('../../brain/journal');
-  const { mkdtempSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  const { tmpdir } = await import('node:os');
-  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-typing-')), 'journal.jsonl');
-  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 9' });
-  const seen: string[] = [];
-  const base = { journal, gen: 'g', tools: [], system: () => 'SYS', ctx: { journal, gen: 'g', mutationCommit: null } as never,
-    onTyping: (s?: { source: string }) => (on: boolean) => { seen.push(`${s?.source} ${on}`); } };
-  await runTurn({ ...base, provider: async () => { seen.push('asked'); return { text: 'Here.', toolCalls: [] }; } });
-  expect(seen).toEqual(['agent:zulip true', 'asked', 'agent:zulip false']);
-  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 10' });
-  await expect(runTurn({ ...base, provider: async () => { throw new Error('provider down'); } })).rejects.toThrow('provider down');
-  expect(seen.slice(3)).toEqual(['agent:zulip true', 'agent:zulip false']);
-});
-
-
 test('calls that do nothing are recognised, and nothing else is', () => {
   for (const command of ['true', ' true ', ':', 'exit 0', 'exit', '', 'true;']) expect(noOpCall({ name: 'bash', args: { command, name: 'tick-stop-now' } })).toBe(true);
   expect(noOpCall({ name: 'bash', args: {} })).toBe(true);
@@ -834,7 +817,7 @@ test('a clock turn that only calls `true` is settled quietly on the second such 
   expect(JSON.stringify(s.seen[1])).toContain('A turn ends with a reply that has no tool call');
 });
 
-test('outside a clock turn the stop is visible, and a real call between no-ops resets the count', async () => {
+test('at the owner terminal the stop is visible, and a real call between no-ops resets the count', async () => {
   const s = setup([
     { text: '', toolCalls: [bash('a')] },
     { text: '', toolCalls: [bash('b', 'echo hi')] },
@@ -845,3 +828,31 @@ test('outside a clock turn the stop is visible, and a real call between no-ops r
   expect(s.seen.length).toBe(4);
   expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: NO_OP_REPLY });
 });
+
+test('only a line typed at the owner\'s terminal must be answered in words; any other wake may end quietly', async () => {
+  const { mayStayQuiet } = await import('../../brain/loop');
+  expect(mayStayQuiet('terminal')).toBe(false);
+  expect(mayStayQuiet('birth')).toBe(false);
+  expect(mayStayQuiet(undefined)).toBe(false);
+  for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
+});
+
+test('a turn says it is being written for from its first moment to its last, also when it throws', async () => {
+  const { runTurn } = await import('../../brain/loop');
+  const { appendEvent } = await import('../../brain/journal');
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-typing-')), 'journal.jsonl');
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 9' });
+  const seen: string[] = [];
+  const base = { journal, gen: 'g', tools: [], system: () => 'SYS', ctx: { journal, gen: 'g', mutationCommit: null } as never,
+    onTyping: (s?: { source: string }) => (on: boolean) => { seen.push(`${s?.source} ${on}`); } };
+  await runTurn({ ...base, provider: async () => { seen.push('asked'); return { text: 'Here.', toolCalls: [] }; } });
+  expect(seen).toEqual(['agent:zulip true', 'asked', 'agent:zulip false']);
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 10' });
+  await expect(runTurn({ ...base, provider: async () => { throw new Error('provider down'); } })).rejects.toThrow('provider down');
+  expect(seen.slice(3)).toEqual(['agent:zulip true', 'agent:zulip false']);
+});
+
+

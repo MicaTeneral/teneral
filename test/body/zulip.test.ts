@@ -185,7 +185,7 @@ test('a message whose stimulus could not be journaled is fetched and told again'
   expect(notices[1]!.text).toStartWith('Zulip private 2\n');
 });
 
-import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
+import { zulipLive, zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
 
 test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
   const notices: Stimulus[] = [];
@@ -709,6 +709,87 @@ test('a queue registered for reactions alone is not taken up as the bell: after 
   const resumed = zulipReactionPoller({ credentials, events: () => [{ ...narrow, data: kept[0] } as JournalEvent], send, wide: true }, () => {});
   await resumed.poll();
   expect(registered).toEqual(['new']);
+});
+
+test('a queue bell while a fetch is busy is run after it, without overlapping requests', async () => {
+  const got: Stimulus[] = [];
+  let release!: () => void;
+  const first = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0, concurrent = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (url.pathname === '/api/v1/messages') {
+      reads++;
+      concurrent++;
+      expect(concurrent).toBe(1);
+      if (reads === 1) await first;
+      concurrent--;
+      return new Response(JSON.stringify({ messages: reads === 1 ? [] : [{ id: reads - 1, sender_id: 7, sender_full_name: 'Ann', type: 'private', content: 'hello', flags: [] }] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send }, s => got.push(s));
+  const running = p.poll();
+  await Bun.sleep(0);
+  expect(reads).toBe(1);
+  // Any number of bells while busy coalesce into exactly one follow-up fetch.
+  await Promise.all([p.poll(), p.poll(), p.poll()]);
+  expect(reads).toBe(1);
+  release();
+  await running;
+  for (let n = 0; n < 100 && got.length === 0; n++) await Bun.sleep(1);
+  expect(reads).toBe(2);
+  expect(got.map(s => s.text.split('\n', 1)[0])).toEqual(['Zulip private 1']);
+  p.stop();
+});
+
+test('stopping the queue aborts its in-flight long poll and does not log a connection failure', async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(' ')); };
+  try {
+    let signal: AbortSignal | undefined;
+    const send = (async (url: URL, init: RequestInit = {}) => {
+      if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+      if (url.pathname === '/api/v1/register') return new Response(JSON.stringify({ queue_id: 'q', last_event_id: 0 }));
+      if (url.searchParams.get('dont_block') === 'true') return new Response(JSON.stringify({ events: [] }));
+      signal = init.signal ?? undefined;
+      return await new Promise<Response>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    }) as unknown as typeof fetch;
+    const q = zulipReactionPoller({ credentials, events: () => [], send, wide: true, block: true }, () => {});
+    await q.poll();
+    const waiting = q.poll();
+    for (let n = 0; n < 100 && signal === undefined; n++) await Bun.sleep(1);
+    q.stop();
+    expect(await waiting).toBe(false);
+    expect(signal?.aborted).toBe(true);
+    expect(errors).toEqual([]);
+  } finally { console.error = original; }
+});
+
+test('queue failures back off and recovery is observable without ids, credentials or message contents', async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(' ')); };
+  try {
+    let calls = 0;
+    const send = (async (url: URL) => {
+      if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+      calls++;
+      if (calls === 1) return new Response(JSON.stringify({ queue_id: 'q', last_event_id: 0 }));
+      if (calls === 2) return new Response(JSON.stringify({ events: [] }));
+      if (calls === 3) return new Response('{}', { status: 502 });
+      return new Response(JSON.stringify({ events: [] }));
+    }) as unknown as typeof fetch;
+    const q = zulipReactionPoller({ credentials, events: () => [], send, wide: true, block: true }, () => {});
+    expect(await q.poll()).toBe(true); // registered
+    expect(await q.poll()).toBe(false); // one failure: caller backs off
+    expect(await q.poll()).toBe(true); // recovery
+    expect(errors.some(line => line.includes('reaction queue failed'))).toBe(true);
+    expect(errors.some(line => line.includes('event queue connected again'))).toBe(true);
+    expect(errors.join('\n')).not.toContain('fake');
+    q.stop();
+  } finally { console.error = original; }
 });
 
 test('each direct conversation is a place of its own, by who is in it besides the agent, and every message taken is reported for the record', async () => {
