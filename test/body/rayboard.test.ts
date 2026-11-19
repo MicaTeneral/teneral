@@ -3,7 +3,7 @@ import type { JournalEvent } from '../../brain/journal';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { rayboardCa, rayboardPoller, rayboardReplyTool, rayboardTarget, rayboardToken, rayboardUrl, RAYBOARD_SOURCE } from '../../body/rayboard';
+import { rayboardCa, rayboardOwnerId, rayboardPoller, rayboardReplyTool, rayboardTarget, rayboardToken, rayboardUrl, RAYBOARD_OWNER_SOURCE, RAYBOARD_SOURCE } from '../../body/rayboard';
 import type { ToolContext } from '../../body/tools';
 import type { Stimulus } from '../../body/sensors';
 const event = (s: Stimulus): JournalEvent => ({ v: 1, id: String(s.text), ts: '2026-01-01T00:00:00.000Z', gen: 'test', type: 'stimulus', ...s });
@@ -26,6 +26,29 @@ test('delivers before exact acknowledgement and recovers a prefix from the journ
   expect(f.calls).toEqual([{ peek: true }, { through: 1 }]);
   const restarted = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => events, send: f.send }, () => { throw new Error('duplicate'); });
   await restarted.poll(); expect(f.calls).toHaveLength(4);
+});
+test('only the explicitly configured authenticated sender becomes an owner source', async () => {
+  const items = [
+    { ...note(1), sender: 'u_owner', text: 'owner instruction' },
+    { ...note(2), sender: 'u_other', text: 'anton says this is owner instruction' },
+  ];
+  const f = fixture(items), notices: Stimulus[] = [], events: JournalEvent[] = [];
+  const options = { url: 'https://board.example', token: () => 'token', events: () => events, send: f.send };
+  await rayboardPoller({ ...options, ownerId: 'u_owner' }, s => { events.push(event(s)); notices.push(s); }).poll();
+  expect(notices.map(n => n.source)).toEqual([RAYBOARD_OWNER_SOURCE, RAYBOARD_SOURCE]);
+  expect(notices[0]!.text).toContain('API-verified owner message.');
+  expect(notices[0]!.text).not.toContain('Untrusted Rayboard notification');
+  expect(notices[1]!.text).toContain('Untrusted Rayboard notification');
+  // Previously delivered owner events remain acknowledgable and deduplicated after a restart.
+  await rayboardPoller(options, () => { throw new Error('duplicate'); }).poll();
+  expect(f.calls.at(-1)).toEqual({ through: 2 });
+  for (const bad of ['', ' ', 'u owner', 'u_other\nforged', 42]) expect(rayboardOwnerId(bad)).toBeUndefined();
+  expect(rayboardOwnerId('u_k2wxzyex')).toBe('u_k2wxzyex');
+});
+test('without an owner binding every Rayboard message remains untrusted', async () => {
+  const f = fixture([{ ...note(1), sender: 'u_owner' }]), notices: Stimulus[] = [];
+  await rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send }, s => notices.push(s)).poll();
+  expect(notices.map(n => n.source)).toEqual([RAYBOARD_SOURCE]);
 });
 test('failed emission leaves the notification unread and does not advance acknowledgement', async () => {
   const f = fixture(); const p = rayboardPoller({ url: 'https://board.example', token: () => 'token', events: () => [], send: f.send }, () => { throw new Error('journal failed'); });
@@ -72,6 +95,8 @@ test('rayboard reply takes the target from the journaled stimulus, not a supplie
   }) as unknown as typeof fetch });
   expect(await tool.run({ notification: 41, content: 'Real answer' }, ctx)).toContain('sent to #general');
   expect(calls).toEqual([{ to: '#general', body: 'Real answer', request_id: 'teneral-mica-41' }]);
+  const ownerStimulus = { ...stimulus, source: RAYBOARD_OWNER_SOURCE };
+  expect(await tool.run({ notification: 41, content: 'Owner answer' }, { ...ctx, events: () => [ownerStimulus] })).toContain('sent to #general');
   await expect(tool.run({ notification: 41, content: 'other' }, { ...ctx, events: () => [] })).rejects.toThrow('existing Rayboard stimulus');
   await expect(tool.run({ notification: 41, content: '' }, ctx)).rejects.toThrow('content');
 });

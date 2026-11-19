@@ -810,10 +810,15 @@ export function approvePending(i: Install, prefix: string): Outcome {
   if (typeof r === 'string') return { status: 1, text: r };
   if (consent(i.s) === 'off') return { status: 1, text: 'TENERAL_PUBLISH is off in .env: nothing goes out, approved or not. Change that first.' };
   approve(i.owner, r.commit);
+  const command = r.what === 'witness' ? `bun species/offer.ts witness ${r.pr}` : `bun species/offer.ts publish ${r.branch}`;
+  const line = r.what === 'witness'
+    ? `I approved witness commit ${short(r.commit)} for pull request #${r.pr}. Run ${command} and report the result.`
+    : `I approved offer commit ${short(r.commit)}. Run ${command} and report the result.`;
+  tell(i.owner, line);
   return {
     status: 0,
-    text: r.what === 'witness' ? `Approved: ${short(r.commit)}, the head of pull request #${r.pr}, may be run here and a report on it posted. The agent does that when it next runs the witness command; tell it.`
-      : `Approved: ${short(r.commit)} (${r.branch}) may be published. The agent does that when it next runs the publish command; tell it. If the branch changes, this approval is for nothing.`,
+    text: r.what === 'witness' ? `Approved: ${short(r.commit)}, the head of pull request #${r.pr}, may be run here and a report on it posted. The agent was told to run the witness command.`
+      : `Approved: ${short(r.commit)} (${r.branch}) may be published. The agent was told to run the publish command. If the branch changes, this approval is for nothing.`,
   };
 }
 

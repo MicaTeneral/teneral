@@ -473,6 +473,9 @@ t('the owner sees what waits and approves it by the start of its commit, in the 
   expect(ownerCommand(w.root, `/approve ${commit.slice(0, 7)}`)!.join(' ')).toContain('may be published');
   expect(approved(i.owner, commit)).toBe(true);
   expect(readdirSync(join(i.owner, APPROVALS_DIR))).toEqual([`${commit}${APPROVAL_SUFFIX}`]);
+  const wake = readdirSync(i.owner).filter((name) => !name.startsWith('.'));
+  expect(wake).toHaveLength(1);
+  expect(readFileSync(join(i.owner, wake[0]!), 'utf8')).toContain('bun species/offer.ts publish offer/greeting');
   expect(pending(i)).toEqual([]);
   // A commit that failed its check is not something to approve.
   const bad = offer(w.root, 'bad', GREETING, 'no description\n');
@@ -497,7 +500,11 @@ t('both talk clients answer /offers and /approve themselves and never send them 
   expect(notes.join('\n')).toContain('may be published');
   expect(approved(i.owner, commit)).toBe(true);
   const lines = readdirSync(i.owner).filter((name) => !name.startsWith('.'));
-  expect(lines.map((name) => readFileSync(join(i.owner, name), 'utf8'))).toEqual(['and a line for the agent']);
+  const delivered = lines.map((name) => readFileSync(join(i.owner, name), 'utf8'));
+  expect(delivered).toHaveLength(2);
+  expect(delivered).toContain('and a line for the agent');
+  expect(delivered.some((line) => line.startsWith('I approved offer commit ') && line.includes('bun species/offer.ts publish offer/greeting'))).toBe(true);
+  expect(delivered.some((line) => line.startsWith('/approve'))).toBe(false);
   // Piped in, they are lines like any other: a script does not approve.
   rmSync(join(i.owner, APPROVALS_DIR), { recursive: true });
   let asked = 0;
@@ -515,7 +522,9 @@ t('both talk clients answer /offers and /approve themselves and never send them 
   s.type(`/approve ${commit.slice(0, 7)}\r`);
   expect(s.all()).toContain('may be published');
   expect(approved(s.p.owner, commit)).toBe(true);
-  expect(readdirSync(s.p.owner).filter((name) => !name.startsWith('.'))).toEqual([]);
+  const screenLines = readdirSync(s.p.owner).filter((name) => !name.startsWith('.'));
+  expect(screenLines).toHaveLength(1);
+  expect(readFileSync(join(s.p.owner, screenLines[0]!), 'utf8')).toContain('bun species/offer.ts publish offer/greeting');
 });
 
 // --- publish ---
@@ -862,6 +871,9 @@ t('a witness fetches the pull request, runs nothing until its owner approves tha
   expect((await w.hub.state()).comments).toEqual([]);
   expect(pending(two).map((r) => `${r.what} ${r.pr} ${r.commit}`)).toEqual([`witness 1 ${commit}`]);
   expect(ownerCommand(root, `/approve ${commit.slice(0, 8)}`)!.join(' ')).toContain('pull request #1');
+  const witnessWake = readdirSync(two.owner).filter((name) => !name.startsWith('.'));
+  expect(witnessWake).toHaveLength(1);
+  expect(readFileSync(join(two.owner, witnessWake[0]!), 'utf8')).toContain('bun species/offer.ts witness 1');
 
   const out = await witness(two, 1, { gates, also: 'test -f body/greeting.ts && test ! -e .env' });
   expect(out.text).toContain('Posted: https://github.invalid/species/teneral/pull/1#issuecomment-1');

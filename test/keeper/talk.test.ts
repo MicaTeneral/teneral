@@ -34,6 +34,8 @@ test('a reply prints as its text, and a reply that only calls tools prints as no
   expect(render(calling())).toBeNull();
   expect(render(reply('  \n'))).toBeNull();
   expect(render(ev({ type: 'assistant', text: 'Looking.', toolCalls: [{ id: 'c', name: 'bash', args: {} }] }))).toBe('Looking.\n');
+  expect(render(reply(Array.from({ length: 42 }, () => '[teneral: no reply]').join('\n\n')))).toBeNull();
+  expect(render(reply('[teneral: no reply]\nThis is a real reply.'))).toBe('[teneral: no reply]\nThis is a real reply.\n');
 });
 
 test('a tool call prints as one short line: its name and its arguments, clipped', () => {

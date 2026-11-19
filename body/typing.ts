@@ -97,7 +97,7 @@ export function zulipTyping(o: TypingOptions): TypingStatus {
 export type RayboardTypingTarget = { url: string; tokenFile: string; subject: string };
 
 export function rayboardTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus' }>, url = process.env.TENERAL_RAYBOARD_URL, tokenFile = process.env.TENERAL_RAYBOARD_TOKEN_FILE): RayboardTypingTarget | undefined {
-  if (e?.source !== 'agent:rayboard' || !url || !tokenFile) return;
+  if ((e?.source !== 'agent:rayboard' && e?.source !== 'owner:rayboard') || !url || !tokenFile) return;
   const n = (() => { try { return JSON.parse(e.text.slice(e.text.indexOf('\n') + 1)); } catch { return null; } })();
   if (!n || !['message', 'mention', 'comment', 'dm'].includes(n.type) || typeof n.subject !== 'string') return;
   if (!/^(?:T-[1-9][0-9]*|dm:(?:a|u)_[a-z0-9]{8}:(?:a|u)_[a-z0-9]{8}|c_[a-z0-9]{8})$/.test(n.subject)) return;

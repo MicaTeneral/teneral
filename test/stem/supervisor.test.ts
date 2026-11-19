@@ -526,6 +526,36 @@ try { process.kill(Number(process.env.TEST_ORPHAN), 0); process.exit(9); } catch
   }
 });
 
+test('the body of a crashed supervisor is stopped before a replacement takes over', async () => {
+  const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const state = init(dir);
+  const p = paths(dir);
+  const cmd = ['bun', 'body/main.ts'];
+  const orphan = Bun.spawn([process.execPath, process.execPath, 'body/main.ts'], {
+    cwd: p.live, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore',
+    env: { ...process.env, TEST_ORPHAN_BODY: '1' },
+  });
+  // Wait for exec so the identity check sees the same argv a normal body start records.
+  for (let i = 0; i < 100; i++) {
+    try {
+      const argv = readFileSync(`/proc/${orphan.pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+      if (argv[1] === 'body/main.ts') break;
+    } catch { /* it has not execed yet */ }
+    await Bun.sleep(5);
+  }
+  try {
+    // A killed writer can leave a valid pid/generation line without its trailing command list.
+    // When /proc cannot identify it, a live recorded pid is kept and the supervisor refuses to
+    // start another writer beside it. On Linux, an identified former body is stopped normally.
+    const result = await supervise({ root: dir, ...QUIET, killGraceMs: 200 });
+    expect(result).toBe('stopped');
+    expect(orphan.killed || orphan.exitCode !== null || orphan.signalCode !== null).toBe(true);
+    expect(existsSync(p.child)).toBe(false);
+  } finally {
+    orphan.kill('SIGKILL');
+  }
+});
+
 test('a recorded child whose pid now belongs to some other program is left alone', async () => {
   const { dir } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
   const state = init(dir);
@@ -618,24 +648,28 @@ process.exit(0);
 test('the body is told which provider is configured and where sign-ins are kept, and gets no token of the stem\'s making', async () => {
   const { dir } = makeRepo({ 'body/main.ts': `${HEAD}
 const names = Object.keys(process.env).filter((name) => name.startsWith('TENERAL_')).sort().join(' ');
-appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_AUTH, names].join('|') });
+appendEvent(journal, gen, { type: 'stimulus', source: 'test', text: [process.env.TENERAL_PROVIDER, process.env.TENERAL_AUTH, names, process.env.TENERAL_RAYBOARD_OWNER_ID].join('|') });
 process.exit(0);
 ` });
   const p = paths(dir);
   expect(p.auth).toBe(join(dir, '.teneral', 'auth'));
   const before = process.env.TENERAL_PROVIDER;
+  const ownerBefore = process.env.TENERAL_RAYBOARD_OWNER_ID;
   process.env.TENERAL_PROVIDER = 'chatgpt';
+  process.env.TENERAL_RAYBOARD_OWNER_ID = 'u_configured_owner';
   try {
     expect(await supervise({ root: dir, ...QUIET })).toBe('stopped');
   } finally {
     if (before === undefined) delete process.env.TENERAL_PROVIDER; else process.env.TENERAL_PROVIDER = before;
+    if (ownerBefore === undefined) delete process.env.TENERAL_RAYBOARD_OWNER_ID; else process.env.TENERAL_RAYBOARD_OWNER_ID = ownerBefore;
   }
-  const [provider, auth, names] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
+  const [provider, auth, names, rayboardOwner] = (readEvents(p.journal).find((e) => e.type === 'stimulus') as { text: string }).text.split('|');
+  expect(rayboardOwner).toBe('u_configured_owner');
   expect(provider).toBe('chatgpt');
   expect(auth).toBe(p.auth);
   // The whole list of what the stem itself sets: one place, bodyEnv, decides it. The names left out are the owner's
   // settings: where these tests are run in an install, Bun reads them from its .env and the body inherits them.
-  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_TAIL_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS', 'TENERAL_ZULIP_OWNER_ID', 'TENERAL_MAIL_CONFIG_FILE', 'TENERAL_LEGACY_WORK_FILE', 'TENERAL_RAYBOARD_URL', 'TENERAL_RAYBOARD_TOKEN_FILE', 'TENERAL_RAYBOARD_CA_FILE', 'TENERAL_ZULIP_CREDENTIALS_FILE'];
+  const owners = ['TENERAL_API_KEY', 'TENERAL_BASE_URL', 'TENERAL_MODEL', 'TENERAL_HEARTBEAT_MINUTES', 'TENERAL_CONTEXT_CHARS', 'TENERAL_TAIL_CHARS', 'TENERAL_UPSTREAM', 'TENERAL_SPECIES', 'TENERAL_PUBLISH', 'TENERAL_CHECK_MINUTES', 'TENERAL_SMOKE_SECONDS', 'TENERAL_ZULIP_OWNER_ID', 'TENERAL_MAIL_CONFIG_FILE', 'TENERAL_LEGACY_WORK_FILE', 'TENERAL_RAYBOARD_URL', 'TENERAL_RAYBOARD_TOKEN_FILE', 'TENERAL_RAYBOARD_CA_FILE', 'TENERAL_RAYBOARD_OWNER_ID', 'TENERAL_ZULIP_CREDENTIALS_FILE'];
   expect(names!.split(' ').filter((name) => !owners.includes(name))).toEqual([
     'TENERAL_AUTH', 'TENERAL_GEN', 'TENERAL_ID', 'TENERAL_INBOX', 'TENERAL_JOURNAL', 'TENERAL_OWNER', 'TENERAL_PEERS', 'TENERAL_PROVIDER', 'TENERAL_PULSE',
     'TENERAL_SOUL', 'TENERAL_WORKSPACE',
@@ -1075,6 +1109,29 @@ test('promoting a generation with another stem ends the supervisor, which asks f
   expect(git(p.live, 'rev-parse', 'HEAD')).toBe(seed);
   expect(logs.at(-1)).toContain('has a stem of its own; handing over to it');
   expect(existsSync(p.lock)).toBe(false);
+});
+
+test('a generation that hands over while its child is stopping cannot leave two bodies answering', async () => {
+  const { dir, p } = withStem({ 'stem/k.ts': 'export const k = 2;\n' }, `${READY_THEN('')}
+process.on('SIGTERM', () => { appendEvent(journal, gen, { type: 'note', kind: 'test.stop.v1', data: 'stopping' }); setTimeout(() => process.exit(0), 150); });
+setInterval(() => {}, 1000);
+`);
+  // Make the slow-to-stop child observable after the old supervisor has handed over.
+  const original = readFileSync(p.candidate + '/body/main.ts', 'utf8');
+  expect(original).toContain("process.on('SIGTERM'");
+  const running = supervise({ root: dir, ...QUIET, killGraceMs: 2_000 });
+  let child: { pid: number } | null = null;
+  for (let i = 0; i < 400; i++) {
+    const events = readEvents(p.journal);
+    if (events.some(e => e.type === 'note' && e.kind === 'test.stop.v1')) break;
+    if (existsSync(p.child)) child = JSON.parse(readFileSync(p.child, 'utf8')) as { pid: number };
+    if (events.some(e => e.type === 'generation.promoted')) break;
+    await Bun.sleep(10);
+  }
+  // The handoff must not return while the body it was responsible for can still write.
+  expect(await running).toBe('relaunch');
+  expect(child).not.toBeNull();
+  expect(() => process.kill(child!.pid, 0)).toThrow();
 });
 
 test('a generation that changes its body alone is run by the stem that promoted it, with no trial', async () => {
