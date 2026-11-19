@@ -19,6 +19,8 @@ test('typing target comes from the exact typed external stimulus, not old traffi
   expect(zulipTypingTarget(readEvents(journal).at(-1) as Extract<JournalEvent, {type:"stimulus"}>)).toEqual({ type: 'stream', stream_id: 547285, topic: 'general chat' });
   appendEvent(journal, 'g', msg('agent:zulip', 'stream'));
   expect(zulipTypingTarget(readEvents(journal).at(-1) as Extract<JournalEvent, {type:"stimulus"}>)).toEqual({ type: 'stream', stream_id: 547285, topic: 'general chat' });
+  appendEvent(journal, 'g', msg('agent:zulip', 'edit'));
+  expect(zulipTypingTarget(readEvents(journal).at(-1) as Extract<JournalEvent, {type:"stimulus"}>)).toEqual({ type: 'stream', stream_id: 547285, topic: 'general chat' });
 });
 
 test('ambient stream typing follows the last complete message in its batch', () => {

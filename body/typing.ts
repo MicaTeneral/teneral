@@ -9,7 +9,7 @@ export function zulipTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus' }
   const first = e.text.split('\n', 1)[0];
   // Old arrivals before the typed-private/mention distinction have no route: fail silent rather
   // than guessing a recipient from history or a name in the content.
-  if (!/^Zulip (private|mention|stream) [1-9][0-9]*$/.test(first ?? '')) return;
+  if (!/^Zulip (private|mention|stream|edit) [1-9][0-9]*$/.test(first ?? '')) return;
   const lines = e.text.split('\n').slice(2);
   // Ambient traffic is batched: use its last complete message, so typing stays in that exact topic.
   let m: Record<string, unknown> | undefined;
