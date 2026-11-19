@@ -37,8 +37,8 @@ import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { enter, meet, whoLines } from './participants';
-import type { Speaker } from './chat';
-import { typingFor } from './chat-tools';
+import type { Mode, Speaker } from './chat';
+import { QUIET_RUN, modeOf, typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
 function env(name: string): string {
@@ -160,6 +160,22 @@ let retryAt: number | null = null;
 /** The already-requested mutation to hand to the stem once no foreground terminal line is unanswered. */
 let handoff: string | null = null;
 const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
+
+/**
+ * How the agent listens in a channel, for any service: what it chose, or what its own silence
+ * there shows (body/chat-tools.ts). Asked for every message of a busy channel, so the answer is
+ * kept for a minute rather than worked out from the whole journal each time.
+ */
+const listened = new Map<string, { at: number; mode: Mode }>();
+function listening(service: string, channel: { id: string; name: string }): Mode {
+  const key = `${service}:${channel.id}`;
+  const kept = listened.get(key);
+  if (kept !== undefined && Date.now() - kept.at < 60_000) return kept.mode;
+  const now = modeOf(readEvents(journal), service, channel);
+  if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
+  listened.set(key, { at: Date.now(), mode: now.mode });
+  return now.mode;
+}
 
 /**
  * Who speaks in what a chat sensor is about to show: everyone not met before is recorded, and each
@@ -311,6 +327,7 @@ const sensors: Sensor[] = [
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
     ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
+    mode: (stream) => listening('zulip', stream),
     entered: (stream, members) => enter(journal, gen, readEvents(journal), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {

@@ -1,5 +1,7 @@
 import { join } from 'node:path';
-import { dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { Tool, ToolContext } from './tools';
 import { zulipCredentials } from './zulip';
 import { MaybeSent, chatReply, register, type ChatService } from './chat-tools';
@@ -110,6 +112,7 @@ const userId = (value: string): number => {
   return Number(value);
 };
 const HISTORY_CHARS = 2000;
+const FILE_MAX_BYTES = 5_000_000;
 
 /** Zulip, as the generic chat tools use it (body/chat-tools.ts). */
 export const zulipService: ChatService = {
@@ -161,6 +164,24 @@ export const zulipService: ChatService = {
     const topics = (await zulipRequest(ctx.workspace, `users/me/${found.stream_id}/topics`)).topics;
     if (!Array.isArray(topics)) throw new Error('Invalid topics');
     return `Topics of #${found.name}, newest first:\n` + (topics.slice(0, 60).map((t: any) => `- ${String(t.name).slice(0, 200)} (last message zulip:${t.max_id})`).join('\n') || '(none yet)');
+  },
+  async fetch(ctx, file) {
+    // Only an upload of this organisation, by the path a message named it with: never an address from prose.
+    if (!/^\/user_uploads\/[A-Za-z0-9_./%+-]{1,300}$/.test(file) || file.includes('..') || file.startsWith('/user_uploads/thumbnail/')) throw new Error('name the file as the message showed it under files: a path beginning /user_uploads/');
+    const c = zulipCredentials(process.env.TENERAL_ZULIP_CREDENTIALS_FILE ?? join(ctx.workspace, '.teneral', 'zulip.json'));
+    if (!c) throw new Error('Zulip is not configured');
+    const r = await fetch(new URL(file, c.site), { headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    if (!r.ok) throw new Error(`Zulip HTTP ${r.status}; response omitted`);
+    if (Number(r.headers.get('content-length')) > FILE_MAX_BYTES) throw new Error(`the file is larger than ${FILE_MAX_BYTES / 1_000_000} MB`);
+    const bytes = Buffer.from(await r.arrayBuffer());
+    if (bytes.length > FILE_MAX_BYTES) throw new Error(`the file is larger than ${FILE_MAX_BYTES / 1_000_000} MB`);
+    // Kept outside the workspace, under a name made of its content: it is somebody else's file, not part of the agent's code.
+    const dir = join(tmpdir(), 'teneral-chat-files');
+    mkdirSync(dir, { recursive: true });
+    const name = (file.split('/').pop() ?? 'file').replace(/[^A-Za-z0-9._-]/g, '_').slice(-80);
+    const path = join(dir, `${createHash('sha256').update(bytes).digest('hex').slice(0, 16)}-${name}`);
+    writeFileSync(path, bytes, { mode: 0o600 });
+    return { path, type: (r.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!.trim(), bytes: bytes.length };
   },
   typing(stimulus, workspace) {
     const to = typingTarget(stimulus);
