@@ -362,30 +362,62 @@ const REST_RETRY_MS = 15 * 60_000;
 let restNotBefore = 0;
 
 /**
- * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
- * that is over and has none (brain/sleep.ts). Whatever arrives meanwhile cancels the request and
- * is answered first. Returns false when there was nothing to remember, or no use in trying now.
+ * A request of rest that is under way: a memory, a wider memory, a look ahead. It is begun only at
+ * rest, but something arriving does not end it. The turn that answers what arrived runs beside it,
+ * and what the request formed is journaled when no turn is running: a note that changed what a
+ * turn is shown, in the middle of it, would cost the turn its provider's cache. A request thrown
+ * away at the first message is paid for and comes to nothing, which is how most of them ended.
+ * TENERAL_BACKGROUND=serial brings back the old way: whatever arrives cancels it.
+ */
+let background: { done: Promise<boolean>; stop: AbortController } | null = null;
+const beside = process.env.TENERAL_BACKGROUND !== 'serial';
+const stopBackground = (): void => { background?.stop.abort(); };
+/** What a request beside a turn formed, waiting for the turn to end. */
+const formed: Parameters<typeof appendEvent>[2][] = [];
+function journalFormed(): void {
+  for (const body of formed.splice(0)) appendEvent(journal, gen, body);
+}
+
+/**
+ * What the agent does at rest: it forms one memory, of the oldest episode that is over and has
+ * none, or does the next thing of that kind (brain/sleep.ts). Returns false when there was nothing
+ * to do, or no use in trying now; true also when something arrived while the request goes on.
  */
 async function rest(): Promise<boolean> {
-  if (Date.now() < restNotBefore) return false;
-  const woken = new AbortController();
-  wake = () => woken.abort();
+  if (background === null) {
+    if (Date.now() < restNotBefore) return false;
+    const stop = new AbortController();
+    const done = sleep({
+      journal, gen, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
+      // While a turn runs, the pulse file says what the turn is doing, not this.
+      provider: (messages, specs, options) => provider(messages, specs, { ...options, mayPulse: () => !working }),
+      system: () => composeSystem(prompt, soulDir, journal),
+      signal: stop.signal,
+      append: (body) => { if (working) formed.push(body); else appendEvent(journal, gen, body); },
+    }).then((slept) => {
+      const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
+      if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
+      return slept !== 'nothing';
+    }, (err) => {
+      if (stop.signal.aborted) return true;
+      // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
+      console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
+      restNotBefore = Date.now() + REST_RETRY_MS;
+      return false;
+    }).finally(() => {
+      background = null;
+      // The loop may be asleep with more to remember: let it look again.
+      idleWake?.();
+    });
+    background = { done, stop };
+  }
+  const { done, stop } = background;
+  let arrived!: () => void;
+  const woken = new Promise<true>((resolve) => { arrived = () => resolve(true); });
+  wake = beside ? arrived : () => { stop.abort(); arrived(); };
   resting = true;
   try {
-    const slept = await sleep({
-      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
-      system: () => composeSystem(prompt, soulDir, journal),
-      signal: woken.signal,
-    });
-    const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
-    if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
-    return slept !== 'nothing';
-  } catch (err) {
-    if (woken.signal.aborted) return true;
-    // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
-    console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
-    restNotBefore = Date.now() + REST_RETRY_MS;
-    return false;
+    return await Promise.race([done, woken]);
   } finally {
     wake = null;
     resting = false;
@@ -452,6 +484,7 @@ for (;;) {
     working = true;
     const failed = await turn();
     working = false;
+    journalFormed();
     settleWords();
     heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
     if (handoff !== null) {
@@ -468,6 +501,8 @@ for (;;) {
       continue;
     }
     const { error } = failed;
+    // A provider that refused the turn must not be asked for anything else beside it.
+    stopBackground();
     const kind = failureKind(error);
     failures += 1;
     streak = { kind, count: kind === streak.kind ? streak.count + 1 : 1 };
@@ -540,5 +575,7 @@ for (;;) {
   await idle(untilRest > 0 ? untilRest + 1000 : undefined);
 }
 
+stopBackground();
+journalFormed();
 for (const stop of stops) stop();
 process.exit(0);
