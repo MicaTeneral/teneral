@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const dir = mkdtempSync(join(tmpdir(), 'mica-typing-'));
+async function until<T>(read: () => readonly T[], count: number): Promise<void> {
+  for (let attempt = 0; attempt < 100 && read().length < count; attempt++) await Bun.sleep(1);
+}
 const journal = join(dir, 'journal.jsonl');
 const msg = (source: string, type: string, text = 'hello') => ({ type: 'stimulus' as const, source, text: `Zulip ${type} 42\nowner\n${JSON.stringify({ sender_id: 997799, type: type === 'private' ? 'private' : 'stream', stream_id: 547285, topic: 'general chat', content: text })}` });
 
@@ -105,7 +108,7 @@ test('Rayboard typing is scoped to an actual conversation and uses the accepted 
   const tokenPath = join(dir, 'rayboard-token'); await Bun.write(tokenPath, 'test-token');
   const calls: { body: any; token: string }[] = [];
   const typing = rayboardTyping({ refreshMs: 10, target: () => rayboardTypingTarget({ type: 'stimulus', source: 'agent:rayboard', text: 'notice\n' + JSON.stringify({ type: 'mention', subject: 'c_6ayj5jkn' }) } as Extract<JournalEvent, {type:"stimulus"}>, 'http://127.0.0.1:9', tokenPath), send: (async (_url, init) => { calls.push({ body: JSON.parse(String(init?.body)), token: String(init?.headers && (init.headers as any).Authorization) }); return new Response('{"ok":true}'); }) as typeof fetch });
-  typing(true); await Bun.sleep(25); typing(false); await Bun.sleep(20);
+  typing(true); await until(() => calls, 2); typing(false); await until(() => calls, calls.length + 1);
   expect(calls.length).toBeGreaterThanOrEqual(3);
   expect(calls[0]?.body).toEqual({ to: 'c_6ayj5jkn', composing: true, hold: 60 });
   expect(calls.at(-1)?.body).toEqual({ to: 'c_6ayj5jkn', composing: false });
@@ -118,6 +121,6 @@ test('Rayboard stop uses the last destination when the signal or environment has
   let target: any = { url: 'http://127.0.0.1:9', tokenFile: tokenPath, subject: 'T-477' };
   const bodies: any[] = [];
   const send = (async (_url: any, init: any) => { bodies.push(JSON.parse(init.body)); return new Response('{"ok":true}'); }) as typeof fetch;
-  const typing = rayboardTyping({ target: () => target, send }); typing(true); target = undefined; typing(false); await Bun.sleep(15);
+  const typing = rayboardTyping({ target: () => target, send }); typing(true); target = undefined; typing(false); await until(() => bodies, 2);
   expect(bodies.map(b => [b.to,b.composing])).toEqual([['T-477',true],['T-477',false]]);
 });
