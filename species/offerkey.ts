@@ -17,7 +17,7 @@ export const KEY_FILE = 'offer-key';
 export const GIT_NAMESPACE = 'git';
 export const WITNESS_NAMESPACE = 'teneral-witness';
 
-export interface Ran { code: number; stdout: Buffer; stderr: string }
+export interface Ran { code: number; stdout: Buffer; stderr: string; timedOut?: boolean }
 
 /** One program, with what it is given on stdin, in this process's environment unless `env` gives another. */
 export function run(cmd: string[], o: { cwd?: string; stdin?: Buffer | string; env?: Record<string, string | undefined>; timeoutMs?: number } = {}): Ran {
@@ -31,7 +31,7 @@ export function run(cmd: string[], o: { cwd?: string; stdin?: Buffer | string; e
     // A program that is not installed: said as a failure of the command, not thrown from the middle of something.
     return { code: 127, stdout: Buffer.alloc(0), stderr: `could not run ${cmd[0]}: ${err instanceof Error ? err.message : String(err)}` };
   }
-  return { code: p.exitCode ?? 1, stdout: Buffer.from(p.stdout ?? ''), stderr: (p.stderr ?? '').toString() };
+  return { code: p.exitCode ?? 1, stdout: Buffer.from(p.stdout ?? ''), stderr: (p.stderr ?? '').toString(), ...(p.exitedDueToTimeout ? { timedOut: true } : {}) };
 }
 
 function must(what: string, r: Ran): Buffer {

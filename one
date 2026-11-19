@@ -118,7 +118,24 @@ build() {
   if [ -n "${ONE_DOCKER_ARGS:-}" ]; then read -r -a extra <<<"$ONE_DOCKER_ARGS"; fi
 }
 
+snap_docker() {
+  [ "$(uname -s)" = Linux ] || return 0
+  local docker_path
+  docker_path="$(command -v docker)" || return 0
+  case "$(readlink -f "$docker_path" 2>/dev/null || printf '%s' "$docker_path")" in
+    /snap/docker/* | /var/lib/snapd/snap/docker/*)
+      cat <<'EOF' >&2
+Snap Docker can be blocked by AppArmor while building or running this container.
+If that happens, use a normally packaged Docker, not a change to this script's security flags.
+Details and workarounds: https://github.com/RayforceDB/teneral/issues/11
+EOF
+      ;;
+  esac
+  return 0
+}
+
 prepare() {
+  snap_docker
   if [ ! -f .env ]; then
     echo "No .env here, so no model provider is configured. ./one setup makes one." >&2
     exit 1
