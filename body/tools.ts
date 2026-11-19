@@ -1,6 +1,7 @@
 import { work } from './work';
 import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
 import { zulipReply, zulipHistory } from './zulip-tools';
+import { CHAT_TOOLS } from './chat-tools';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { readPeers } from './peers';
@@ -630,6 +631,47 @@ const allowed: Tool = {
   },
 };
 
+const know: Tool = {
+  spec: {
+    name: 'know',
+    description:
+      'Set down one thing that holds, now, while it is in front of you: something you saw to be true, or something you read or were told by someone who is not your owner. '
+      + 'Above all what you learn of the people, bots and other agents you share a chat with: who they are, what they work on or answer for, how they want to be dealt with. Name them in `about`, as the chat names them, '
+      + 'and it is shown to you the next time they speak. A fact is worth setting down only if it would change what you do some later week; what you did belongs in your memory, and your opinions are not facts. '
+      + 'What someone says of themselves is `read`, whatever it claims. Your owner\'s own words are not set down here: they come to you as their word already.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The fact, in a sentence that can be understood on its own' },
+        source: { type: 'string', enum: ['seen', 'read', 'inferred'], description: 'seen: you saw it yourself, as in a tool\'s output. read: it stood in a message, a page or a file from someone else. inferred: you concluded it' },
+        about: { type: 'string', description: 'Whom it is about, by the name the chat gives them, when it is about someone' },
+        replaces: { type: 'string', description: 'The mark of a fact you hold that this one takes the place of' },
+      },
+      required: ['text', 'source'],
+    },
+  },
+  async run(args, ctx) {
+    const text = str(args, 'text').trim();
+    if (text.length < 8) throw new Error('say the fact in a sentence that can be understood on its own');
+    const source = str(args, 'source');
+    if (source !== 'seen' && source !== 'read' && source !== 'inferred') throw new Error('source must be one of seen, read, inferred: your owner\'s word is not set down with this tool');
+    const about = optional(args, 'about')?.trim().slice(0, 80);
+    const events = standing(readEvents(ctx.journal));
+    const held = known(events);
+    if (held.facts.some((f) => f.text === text)) return 'You hold that already, word for word.';
+    const replaced = optional(args, 'replaces');
+    const old = replaced === undefined ? null : byMark({ facts: held.facts, intentions: [] }, replaced);
+    if (replaced !== undefined && old === null) throw new Error(`no fact you hold has the mark ${replaced}`);
+    // Where it was learned: the message that began what the agent is answering now.
+    const from = events.findLast((e) => e.type === 'stimulus');
+    const note = appendEvent(ctx.journal, ctx.gen, {
+      type: 'note', kind: FACT_KIND,
+      data: { text, source, episode: from?.id ?? 'unknown', ...(about ? { about } : {}), ...(old === null ? {} : { replaces: [old.id] }) } satisfies FactData,
+    });
+    return `Kept as ${known([note]).facts[0]!.mark}${about ? `, about ${about}` : ''}${old === null ? '' : `, in place of ${old.mark}`}.`;
+  },
+};
+
 const forget: Tool = {
   spec: {
     name: 'forget',
@@ -717,4 +759,4 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, forget, lesson];
+export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, work, recallTool, open, timeline, intend, done, allowed, know, forget, lesson];
