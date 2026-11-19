@@ -118,4 +118,4 @@
 │ ›                                                                                     │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  resting  …/work/teneral  gen 2 e5f6a7b    /help lists the keys and commands
- ›› mutate · publish · memory · more                                         Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more                                    ↓  actions
