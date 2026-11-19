@@ -329,7 +329,7 @@ export interface Report {
   output?: string;
   published?: { url: string; branch: string; at: string };
   /** The owner took it back: it does not wait, cannot go out, and is no longer shown. A new check of the branch makes a new record. */
-  withdrawn?: { at: string };
+  withdrawn?: { at: string; why?: 'stale' };
 }
 
 /** What the last commit of an offer has to say, each at the start of a line of its message. */
@@ -887,8 +887,39 @@ function staleBy(i: Install): (r: Report) => boolean {
   };
 }
 
+/**
+ * Retire every open offer that has gone stale: it stops waiting, loses any yes it had and is no
+ * longer shown to the owner. This is the agent's own housekeeping and asks nothing of the owner:
+ * the body does it (body/main.ts) and tells the agent which, so that it can make again what is
+ * still wanted. Returns the newest of each branch that was retired just now.
+ */
+export function retireStale(i: Install): Report[] {
+  const stale = staleBy(i);
+  const gone = reports(i.root).filter((r) => r.what === 'publish' && r.ok && !r.published && !r.withdrawn && stale(r));
+  const at = new Date().toISOString();
+  for (const r of gone) {
+    saveReport(i.root, { ...r, withdrawn: { at, why: 'stale' } });
+    useApproval(i.owner, r.commit);
+  }
+  const newest = new Map<string, Report>();
+  for (const r of gone) newest.set(r.branch ?? r.commit, r);
+  return [...newest.values()];
+}
+
+/** What the agent is told of the offers that were retired as stale. */
+export function retiredText(gone: readonly Report[]): string {
+  return [
+    `${gone.length === 1 ? 'One offer of yours' : `${gone.length} offers of yours`} can no longer go out: the species has moved since ${gone.length === 1 ? 'it was' : 'each was'} checked, and ${gone.length === 1 ? 'it is' : 'they are'} not built on where the species now stands. `
+      + `${gone.length === 1 ? 'It was' : 'They were'} taken off your owner's list. Nothing was deleted: the ${gone.length === 1 ? 'branch is as it was' : 'branches are as they were'}.`,
+    ...gone.map((r) => `- ${r.branch} (${short(r.commit)}): ${r.title}`),
+    'For each, look whether the species already has what it changes. If it has, or it no longer matters, there is nothing to do. '
+      + 'If something in it is still wanted and the species lacks it, make a fresh branch at the species\' head with only that, sign it and check it; it then waits for your owner as any offer does. '
+      + 'This is your own housekeeping: do not ask your owner about it, and tell them nothing of the ones that need nothing.',
+  ].join('\n');
+}
+
 const staleText = (r: Report): string => `${short(r.commit)} (${r.branch}) was built on an older species and cannot go out as it is: the species has moved since, and what it changes may already be there. `
-  + `/publish withdraw ${short(r.commit)} takes it off the list; or tell the agent to make the offer again on the species' head.`;
+  + 'The agent is told of it and makes it again if it is still wanted; there is nothing for you to do.';
 
 /**
  * The owner takes an offer back: every commit of that branch that was checked and not sent stops
@@ -913,7 +944,7 @@ export function withdrawOffer(i: Install, prefix: string): Outcome {
 
 /** What `/publish` says: how a change reaches the species, what stands where, and the one thing to type next. */
 function publishPage(i: Install): string[] {
-  const { waits, approved: ready, stale, sent, failed } = publishing(i);
+  const { waits, approved: ready, sent, failed } = publishing(i);
   // Each line begins with what to type for it.
   const row = (r: Report): string => `  /publish ${short(r.commit)}   ${r.branch}: ${r.title}`;
   const ahead = (() => {
@@ -937,10 +968,7 @@ function publishPage(i: Install): string[] {
   if (ready.length > 0) {
     lines.push(`${ready.length === 1 ? 'One offer has' : `${ready.length} offers have`} your yes and ${ready.length === 1 ? 'was' : 'were'} never sent. Typing its line tells the agent again to send it.`, ...ready.map(row), '');
   }
-  if (stale.length > 0) {
-    lines.push(`${stale.length === 1 ? 'One offer was' : `${stale.length} offers were`} built on an older species and cannot go out as ${stale.length === 1 ? 'it is' : 'they are'}: the species has moved since, and what ${stale.length === 1 ? 'it changes' : 'they change'} may already be there. `
-      + 'Typing its line takes it off this list; or tell the agent to make the offer again on the species\' head.', ...stale.map((r) => `  /publish withdraw ${short(r.commit)}  ${r.branch}: ${r.title}`), '');
-  }
+  // An offer the species has moved past is the agent's to retire or make again (retireStale): nothing here asks the owner about it.
   if (waits.length + ready.length === 0) lines.push('Nothing waits for you, and nothing you approved is unsent.', '');
   if (sent.length > 0) lines.push(`Sent${sent.length > SENT_SHOWN ? ` (the last ${SENT_SHOWN} of ${sent.length})` : ''}:`, ...sent.slice(-SENT_SHOWN).map((r) => `  ${r.title}  ${r.published!.url}`), '');
   if (ahead !== null && ahead.count > 0) {
@@ -1053,7 +1081,7 @@ export async function main(
         if (all.length === 0) out('Nothing has been checked here yet.');
         const stale = staleBy(i);
         for (const r of all) {
-          const state = r.published ? `sent: ${r.published.url}` : r.withdrawn ? 'withdrawn' : r.what === 'publish' && r.ok && stale(r) ? 'stale: built on an older species' : waiting(i.owner, r) ? 'waiting for the owner' : approved(i.owner, r.commit) ? 'approved, not sent yet' : 'did not pass';
+          const state = r.published ? `sent: ${r.published.url}` : r.withdrawn ? (r.withdrawn.why === 'stale' ? 'retired: the species moved past it' : 'withdrawn') : r.what === 'publish' && r.ok && stale(r) ? 'stale: built on an older species' : waiting(i.owner, r) ? 'waiting for the owner' : approved(i.owner, r.commit) ? 'approved, not sent yet' : 'did not pass';
           out(`${short(r.commit)}  ${r.what === 'witness' ? `witness of #${r.pr}` : `offer ${r.branch}`}  ${state}  ${r.title}`);
         }
         return 0;
