@@ -58,6 +58,8 @@ const MEMORY_BADGE_MS = 30_000;
 /** One thing a menu offers: what it is called, what it does, and the command line it stands for; null for a line that only says something. */
 interface MenuItem { name: string; about: string; run: string | null }
 /** One of the actions under the footer, with the menu it opens. */
+/** A commit as the stem and the agent name it to the owner (./one approve 202b3cf6c50e): the same letters here, so that one is found by the other. */
+const SHORT = 12;
 interface Action extends BarAction { items: () => MenuItem[] }
 const PENDING_SHOWN = 12;
 /** How many lines of a held-back turn of the agent's own are shown while it goes on. */
@@ -681,10 +683,10 @@ export class TalkScreen {
     const waits = this.mutationWaiting;
     return [
       {
-        label: 'mutate', icon: 'mutate', tone: 'amber', note: waits === '' ? '' : waits.slice(0, 7), hot: waits !== '',
+        label: 'mutate', icon: 'mutate', tone: 'amber', note: waits === '' ? '' : `approve ${waits.slice(0, SHORT)}`, hot: waits !== '',
         items: () => [
           waits === '' ? { name: 'nothing waits', about: 'no mutation is waiting for your approval', run: null }
-            : { name: `approve ${waits.slice(0, 7)}`, about: 'let the waiting mutation through; the agent is told to ask again', run: `/approve ${waits}` },
+            : { name: `approve ${waits.slice(0, SHORT)}`, about: 'let the waiting mutation through; the agent is told to ask again', run: `/approve ${waits}` },
           { name: 'generations', about: 'the generations this individual has lived in', run: '/generations' },
         ],
       },
@@ -693,7 +695,7 @@ export class TalkScreen {
         items: () => {
           let standing: ReturnType<typeof publishing> = { waits: [], approved: [], sent: [], failed: 0 };
           try { standing = publishing(install(this.o.paths.root)); } catch { /* nothing to list */ }
-          const row = (verb: string, r: { commit: string; branch?: string; title: string }): MenuItem => ({ name: `${verb} ${r.commit.slice(0, 7)}`, about: `${r.branch ?? ''}: ${r.title}`, run: `/publish ${r.commit.slice(0, 12)}` });
+          const row = (verb: string, r: { commit: string; branch?: string; title: string }): MenuItem => ({ name: `${verb} ${r.commit.slice(0, SHORT)}`, about: `${r.branch ?? ''}: ${r.title}`, run: `/publish ${r.commit.slice(0, 12)}` });
           return [
             ...standing.waits.map((r) => row('let go', r)), ...standing.approved.map((r) => row('send again', r)),
             ...(standing.waits.length + standing.approved.length === 0 ? [{ name: 'nothing waits', about: 'no offer waits for you, and none you approved is unsent', run: null }] : []),

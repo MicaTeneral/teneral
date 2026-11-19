@@ -1628,10 +1628,10 @@ test('an action that holds something for the owner says so, and Down goes onto i
   mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
   writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: 'e5f6a7b'.padEnd(40, '0') }));
   s.clock.at = 60_000;
-  expect(s.live().split('\n').at(-1)).toMatch(/mutate +e5f6a7b/);
+  expect(s.live().split('\n').at(-1)).toMatch(/mutate +approve e5f6a7b00000( |$)/);
   s.type('\x1b[B');
   s.type('\r');
-  expect(s.live()).toContain('approve e5f6a7b');
+  expect(s.live()).toContain('▸ approve e5f6a7b00000 ');
   expect(s.live()).toContain('let the waiting mutation through');
   s.type('\x1b');
   s.app.settleKeys();
