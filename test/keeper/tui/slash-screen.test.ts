@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { approve } from '../../../keeper/owner';
+import type { Report } from '../../../species/offer';
 import { COMMANDS, takes } from '../../../keeper/commands';
 import { png } from './pictures';
-import { A, expectFrame, stage, type Stage } from './stage';
+import { A, B, T0, expectFrame, stage, type Stage } from './stage';
 
 // The owner's commands at the screen client: typed, offered under the input box, chosen, completed
 // and run; keys go in as the bytes a terminal sends, and what is asserted is what the owner sees.
@@ -45,11 +47,31 @@ function working(s: Stage): void {
   s.clock.at = 4100;
 }
 
+/** A local report only; no approval, publication, or network operation is performed. */
+function waitingOffer(s: Stage, commit = A, unsent = false): void {
+  const report: Report = {
+    what: 'publish', ok: true, commit, species: B, branch: 'offer/status-footer', title: 'Status footer fixture', body: '',
+    commits: [], files: [], outside: [], binary: [], steps: [], at: new Date(T0).toISOString(),
+  };
+  mkdirSync(join(s.p.root, '.teneral', 'offers'), { recursive: true });
+  writeFileSync(join(s.p.root, '.teneral', 'offers', `${commit}.json`), JSON.stringify(report));
+  if (unsent) approve(s.p.owner, commit);
+}
+
 // --- the list ---
 
-test('Publish is a visible bottom-menu action: Down selects it, Enter opens the shared publishing page, and the input is unchanged', () => {
+test('Publish appears for a waiting offer, and Down/Enter open its shared publication page', () => {
   const s = stage(100, 35);
   settled(s);
+  expect(s.live()).not.toContain('Publish');
+  s.type(DOWN);
+  expect(s.live()).not.toContain('Enter opens');
+  expect(s.term.vt.block?.col).toBe(4);
+  s.type(ESC);
+  expect(transcript(s)).toBe('');
+  waitingOffer(s);
+  s.clock.at = 31_000;
+  s.frame();
   expect(rows(s.live()).at(-1)).toContain('Publish');
   expect(rows(s.live()).at(-1)).toContain('Down selects · Enter opens');
   s.type(DOWN);
@@ -58,7 +80,8 @@ test('Publish is a visible bottom-menu action: Down selects it, Enter opens the 
   s.type(ENTER);
   expect(flowed(s)).toContain('publishing');
   expect(flowed(s)).toContain('Nothing your agent makes goes out by itself');
-  expect(flowed(s)).toContain('Nothing waits for you, and nothing you approved is unsent.');
+  expect(flowed(s)).toContain('One offer waits for you.');
+  expect(flowed(s)).toContain('Status footer fixture');
   expect(channel(s)).toEqual([]);
   expect(typed(s)).toEqual(['›']);
   expect(transcript(s).split('\n')).toHaveLength(1);
@@ -80,6 +103,19 @@ test('Publish is a visible bottom-menu action: Down selects it, Enter opens the 
   expect(typed(s)).toEqual(['› older']);
   s.type(DOWN);
   expect(typed(s)).toEqual(['›']);
+});
+
+test('an approved but unsent offer has the same visible Publish action', () => {
+  const s = stage(100, 35);
+  waitingOffer(s, A, true);
+  settled(s);
+  expect(rows(s.live()).at(-1)).toContain('Publish');
+  expect(rows(s.live()).at(-1)).toContain('approved, not sent');
+  s.type(DOWN);
+  s.type(ENTER);
+  expect(flowed(s)).toContain('One offer has your yes and was never sent.');
+  expect(flowed(s)).toContain('Status footer fixture');
+  expect(channel(s)).toEqual([]);
 });
 
 test('a slash lists the commands under the box, and each letter leaves fewer; Up and Down, or Ctrl-P and Ctrl-N, move through them and round the ends; nothing of the list stays in the conversation', () => {
@@ -129,7 +165,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   // A letter no command goes on with: no list, and the footer is back.
   s.type('x');
   expect(listed(s)).toEqual([]);
-  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  resting/);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  resting/);
   s.type(BACKSPACE);
   expect(listed(s)).toEqual(['[/history]']);
   s.type(BACKSPACE.repeat(3));
@@ -186,7 +222,7 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   // Something has to follow /image: Enter completes, and waits for the path.
   s.type(`/i${ENTER}`);
   expect(typed(s)).toEqual(['› /image']);
-  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol/);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol/);
   expect(s.all()).not.toContain('attaches an image file');
   // The whole name, as before this list was there: /image alone says what it wants.
   s.type(`${CTRL_U}/image${ENTER}`);
@@ -536,7 +572,7 @@ test('with images attached the list stands under the box that holds them, and a 
   s.type(ENTER);
   expect(flowed(s)).toContain('From now on each tool call is shown');
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1/), '›']);
-  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1/);
+  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1/);
 });
 
 test('a locale that is not UTF-8 gets the list in ASCII', () => {

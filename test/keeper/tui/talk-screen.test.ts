@@ -98,7 +98,6 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `│ ›${' '.repeat(95)}│`,
     `╰${'─'.repeat(97)}╯`,
     expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b$/),
-    expect.stringContaining('Publish  Down selects · Enter opens'),
   ]);
   // The terminal's own cursor is hidden at the top of the live region; the one the owner sees is drawn in the box.
   expect(s.term.vt.cursorVisible).toBe(false);
@@ -291,7 +290,7 @@ test('reasoning and context use are shown when the body journals them, and nothi
   s.clock.at = 3000;
   const without = s.all();
   expect(without).not.toMatch(/○|context/);
-  expect(rows(s.live())).toHaveLength(6);
+  expect(rows(s.live())).toHaveLength(5);
   s.term.resize(160, 30);
 
   s.say('and how many lines?', 4000);
@@ -311,13 +310,13 @@ test('reasoning and context use are shown when the body journals them, and nothi
   expect(s.all()).toContain('what it thought, in 2 stretches');
   expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
-  expect(rows(s.live()).at(-2)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
-  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
+  expect(rows(s.live()).at(-1)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
   // A model whose window is not known: the count alone.
   const other = stage(100, 30, { env: { TENERAL_MODEL: 'some-local-model' } });
   settled(other);
   other.journal(more({ type: 'assistant', text: 'Hm.', toolCalls: [], usage: { input: 12_345, output: 55 } }), 0);
-  expect(rows(other.live()).at(-2)).toMatch(/memory well · exam pending.*context 12\.4k$/);
+  expect(rows(other.live()).at(-1)).toMatch(/memory well · exam pending.*context 12\.4k$/);
 });
 
 // --- resizing ---
@@ -560,14 +559,14 @@ test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the 
   s.type('what is wrong in this screenshot?');
   s.type('\x16');
   // Asked, not answered: the footer says what is being waited for; nothing is typed into the line.
-  expect(rows(s.live()).at(-2)).toMatch(/ asking your machine for the clipboard's image …$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the clipboard's image …$/);
   expect(typed(s)).toEqual(['› what is wrong in this screenshot?']);
   const shot = png(1280, 720, 245_000);
   expect(helper(s, () => ({ first: 'ok', data: shot }))).toEqual(['clipboard']);
   await s.ready();
   const live = s.live();
   expect(typed(s)).toEqual([`[image 1 · png · 1280×720 · ${Math.round(shot.length / 1024)} KB]`, '› what is wrong in this screenshot?']);
-  expect(rows(live).at(-2)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
+  expect(rows(live).at(-1)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
   expect(stored(s)).toEqual([`${sha(shot)}.png`]);
   expect(readFileSync(join(s.p.root, 'memory', 'images', `${sha(shot)}.png`)).equals(shot)).toBe(true);
   expectFrame('image-attached-100x34', s.all());
@@ -606,7 +605,7 @@ test('a file dragged in, pasted as its path or named with /image becomes a chip 
   // Dragged: the terminal pastes the path, quoted, with a space after it.
   s.type(PASTE('\'/home/owner/My Pictures/photo 1.jpg\' '));
   expect(typed(s)).toEqual(['›']);
-  expect(rows(s.live()).at(-2)).toMatch(/ asking your machine for the file …$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the file …$/);
   expect(helper(s, answer)).toEqual(['file /home/owner/My Pictures/photo 1.jpg']);
   await s.ready();
   expect(typed(s)).toEqual([`[image 1 · jpg · 4032×3024 · ${photo.length} B]`, '›']);
@@ -709,7 +708,7 @@ test('limits: at most four images in a message, 10 MB each, and each refusal say
     s.frame();
   }
   expect(typed(s).join(' ').match(/\[image \d/g)).toHaveLength(4);
-  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last$/);
+  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last$/);
   s.type('\x16');
   expect(helper(s, () => ({ first: 'ok', data: png(99, 99) }))).toEqual([]);
   expect(s.all()).toContain('  A message carries at most 4 images. Backspace at the start of the line removes the last one.');
@@ -795,7 +794,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
 
   // The client is whole: its own panel at the top, its own box and footer at the bottom, still on the normal screen.
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(77)}╮`);
-  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  /);
+  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  /);
   expect(s.term.vt.alt).toBe(false);
   expect(all).toContain('◦ Beforeafter.');
   expect(all).toContain('◦ from mallory  hi there [image: memory/images/');
@@ -1055,7 +1054,7 @@ test('the footer turns through tips, each naming a real key or command, and give
   const seen = new Set<string>();
   for (let i = 0; i < 13; i++) {
     s.clock.at = i * 20_000;
-    seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-2)!)?.[1] ?? '');
+    seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-1)!)?.[1] ?? '');
   }
   expect([...seen].sort()).toEqual([
     './one talk --plain is this as plain text', '/generations lists the bodies it has lived in', '/help lists the keys and commands', '/history prints the earlier conversation',
@@ -1064,11 +1063,11 @@ test('the footer turns through tips, each naming a real key or command, and give
   ]);
   s.clock.at = 0;
   s.term.resize(70, 30);
-  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
   s.term.resize(50, 30);
-  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
   s.term.resize(30, 30);
-  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
+  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
 });
 
 // --- the terminal's limits ---
@@ -1513,17 +1512,17 @@ test('a routine clock turn is a footer status, not the main activity prompt', ()
   s.journal({ type: 'stimulus', source: 'clock', text: clockText(new Date(T0 + 1000)) }, 1000);
   const live = s.live();
   expect(live).not.toContain('Mica is thinking');
-  expect(rows(live).at(-2)).toContain('background: agenda');
+  expect(rows(live).at(-1)).toContain('background: agenda');
   s.journal({ type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] }, 2000);
   expect(s.live()).not.toContain('round limit reached');
-  expect(rows(s.live()).at(-2)).not.toContain('background: agenda');
+  expect(rows(s.live()).at(-1)).not.toContain('background: agenda');
 });
 
 test('background memory work is only a footer status, not the primary prompt or its streaming text', () => {
   const s = stage(140, 30, { name: 'Mica' });
   settled(s);
   expect(s.live()).not.toContain('Mica is');
-  expect(rows(s.live()).at(-2)).not.toContain('background: remembering');
+  expect(rows(s.live()).at(-1)).not.toContain('background: remembering');
   // The screen's clock, which is what a real pulse is stamped by.
   const now = T0 + s.clock.at;
   mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
@@ -1533,18 +1532,18 @@ test('background memory work is only a footer status, not the primary prompt or 
   expect(live).not.toContain('Mica is remembering');
   expect(live).not.toContain('the model is writing');
   expect(live).not.toContain('My owner asked me to set up the mail');
-  expect(rows(live).at(-2)).toContain('background: remembering');
+  expect(rows(live).at(-1)).toContain('background: remembering');
   expect(live).not.toContain('esc to interrupt');
   // The same file, three minutes on: its body is gone, and nothing is going on.
   s.clock.at += 3 * 60_000;
-  expect(rows(s.live()).at(-2)).not.toContain('background: remembering');
+  expect(rows(s.live()).at(-1)).not.toContain('background: remembering');
   unlinkSync(s.p.pulse);
 });
 
 test('the status line says how the memory stands and what the last exam came to, once anything is remembered', () => {
   const s = stage(120, 30, { name: 'Mica' });
   settled(s);
-  const footer = (): string => rows(s.live()).at(-2) ?? '';
+  const footer = (): string => rows(s.live()).at(-1) ?? '';
   expect(footer()).toContain('memory well · exam pending');
   const at = new Date(T0 - 58_000).toISOString();
   const end = new Date(T0 - 50_000).toISOString();

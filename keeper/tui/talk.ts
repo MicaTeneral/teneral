@@ -709,7 +709,8 @@ export class TalkScreen {
     }
     // Down on an untouched input reaches the visible bottom action. It never steals a history
     // navigation or a command-list choice, and the editor keeps ordinary Down for a multi-line draft.
-    if (key.kind === 'key' && key.name === 'down' && !key.ctrl && !key.alt && !key.shift && this.edit.text === '' && this.edit.chips.length === 0) {
+    if (key.kind === 'key' && key.name === 'down' && !key.ctrl && !key.alt && !key.shift && this.edit.text === '' && this.edit.chips.length === 0
+      && (this.offersWaiting > 0 || this.offersUnsent > 0)) {
       this.menuSelected = true;
       return;
     }
@@ -1179,7 +1180,9 @@ export class TalkScreen {
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
-      menu: { label: 'Publish', detail: this.offersWaiting > 0 ? `${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you · /publish` : this.offersUnsent > 0 ? `${this.offersUnsent} approved, not sent · /publish` : 'how changes go out · /publish', selected: this.menuSelected },
+      menu: this.offersWaiting > 0 || this.offersUnsent > 0
+        ? { label: 'Publish', detail: this.offersWaiting > 0 ? `${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you · /publish` : `${this.offersUnsent} approved, not sent · /publish`, selected: this.menuSelected }
+        : null,
       list,
     }));
   }

@@ -524,10 +524,10 @@ export function liveRows(v: Live): Line[] {
     ], max, { text: g.ellipsis, style: DIM })] : []),
   ];
   const fits = (): boolean => build().length <= room;
-  // On a short screen the visible action matters more than the supplementary status line.
-  if (!fits() && bottom !== null) first = false;
+  // A short screen trims background work first. The menu is useful, but the status line matters more.
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   while (!fits() && workers.length > 0) workers = workers.slice(1);
+  if (!fits()) bottom = null;
   if (!fits()) blank = false;
   while (!fits() && listed > 3) listed -= 1;
   if (!fits()) first = false;

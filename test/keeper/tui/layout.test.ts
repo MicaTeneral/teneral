@@ -47,6 +47,24 @@ test('the bottom menu names its visible action and how to reach it; selecting it
   expect(selected.some((row) => row.some((span) => span.style?.inverse && span.text === ' '))).toBe(false);
 });
 
+test('a tall pending list at 100x40 keeps the footer; a short screen gives up the Publish row before it', () => {
+  const pending = Array.from({ length: 33 }, (_, i): Line => [{ text: `  ▪ tool ${i}` }]);
+  const menu = { label: 'Publish', detail: '1 offer waits for you · /publish', selected: false };
+  const shown = text(liveRows(live(100, 40, { pending, menu })));
+  expect(shown).toHaveLength(20);
+  expect(shown.at(-2)).toContain('gpt-6.1-sol');
+  expect(shown.at(-1)).toContain('Publish');
+  expect(shown.filter((row) => row.includes('▪ tool')).length).toBeLessThan(pending.length);
+  // After background work has been trimmed, a screen too short for both keeps the status line.
+  const short = text(liveRows(live(100, 8, { menu })));
+  expect(short.at(-1)).toContain('gpt-6.1-sol');
+  expect(short.some((row) => row.includes('Publish'))).toBe(false);
+  // Once the work fits, the actionable menu returns without displacing the footer.
+  const roomy = text(liveRows(live(100, 40, { pending: pending.slice(0, 10), workers: [], menu })));
+  expect(roomy.at(-1)).toContain('Publish');
+  expect(roomy.at(-2)).toContain('gpt-6.1-sol');
+});
+
 test('while something is under way it stands over the box: what has not finished, then what the agent is doing', () => {
   const rows = text(liveRows(live(80, 24, {
     pending: [[{ text: '  ▪ bash  command: sleep 5' }]],
