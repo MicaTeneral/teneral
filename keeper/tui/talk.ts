@@ -693,7 +693,7 @@ export class TalkScreen {
       {
         label: 'publish', icon: 'publish', tone: 'brand', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : '', hot: this.offersWaiting + this.offersUnsent > 0,
         items: () => {
-          let standing: ReturnType<typeof publishing> = { waits: [], approved: [], sent: [], failed: 0 };
+          let standing: ReturnType<typeof publishing> = { waits: [], approved: [], stale: [], sent: [], failed: 0 };
           try { standing = publishing(install(this.o.paths.root)); } catch { /* nothing to list */ }
           const row = (verb: string, r: { commit: string; branch?: string; title: string }): MenuItem => ({ name: `${verb} ${r.commit.slice(0, SHORT)}`, about: `${r.branch ?? ''}: ${r.title}`, run: `/publish ${r.commit.slice(0, 12)}` });
           return [

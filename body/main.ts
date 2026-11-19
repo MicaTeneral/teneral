@@ -7,6 +7,8 @@ import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCurs
 import { hasToken } from '../species/github';
 import { speciesRef } from '../species/species';
 import { githubRemote } from '../species/github';
+import { install as speciesInstall, retireStale, retiredText } from '../species/offer';
+import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
 import { subagent, subagents } from './subagent';
 import { heldByInterrupt, importLegacyWork, resumeWork } from './work';
@@ -261,7 +263,25 @@ function settleWords(): void {
   }
 }
 
+/**
+ * The agent's own offers, looked over now and then: one the species has moved past can no longer
+ * go out, so it is retired here and the agent is told, to make again what is still wanted. The
+ * owner is asked nothing and sees only offers that can go out.
+ */
+const staleOffers: Sensor = (emit) => {
+  const look = (): void => {
+    try {
+      const gone = retireStale(speciesInstall(repoRoot(import.meta.dir)));
+      if (gone.length > 0) emit({ source: 'species', text: retiredText(gone) });
+    } catch { /* no install around this body, or no species known here: nothing to retire */ }
+  };
+  const first = setTimeout(look, 60_000);
+  const timer = setInterval(look, 10 * 60_000);
+  return () => { clearTimeout(first); clearInterval(timer); };
+};
+
 const sensors: Sensor[] = [
+  staleOffers,
   // The terminal this process was started in, if any. In the background there is none: the input ends at once and the rest go on.
   terminal(console, () => {
     quitting = true;
