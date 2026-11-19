@@ -36,6 +36,7 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
+import { journalView } from './journal-view';
 import { enter, meet, whoLines } from './participants';
 import type { ChatMessage, Mode, Speaker } from './chat';
 import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
@@ -53,6 +54,8 @@ function env(name: string): string {
 
 const gen = env('TENERAL_GEN');
 const journal = env('TENERAL_JOURNAL');
+// What the journal holds now, each line parsed once: the sensors ask every few seconds (body/journal-view.ts).
+const journalNow = journalView(journal);
 const workspace = env('TENERAL_WORKSPACE');
 // Which provider, over which protocol, with which credentials: brain/provider.ts reads that from the environment.
 let provider: Provider;
@@ -80,7 +83,7 @@ const budgetChars = contextChars > 0 ? Math.floor(contextChars) : undefined;
 const tailSet = Number(process.env.TENERAL_TAIL_CHARS);
 const tailChars = tailSet > 0 ? Math.floor(tailSet) : undefined;
 // The budget for this run, chosen from the journal's measurements against the window the provider table gives this model.
-const budgetChoice = decideBudget(readEvents(journal), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? 0);
+const budgetChoice = decideBudget(journalNow(), contextWindow(process.env.TENERAL_PROVIDER ?? '', process.env.TENERAL_MODEL ?? ''), budgetCeiling, budgetChars ?? 0);
 // Images in one request. Not a whole number of 0 or more, or not set: the default in body/images.ts. 0 sends none.
 const imagesSet = process.env.TENERAL_IMAGES_PER_REQUEST?.trim() ?? '';
 // The image store is `memory/images` in the directory that holds `memory/`, which the journal's own path gives.
@@ -124,8 +127,8 @@ const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || p
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
 // Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
-const community = openCommunity(past.ray ?? null, readEvents(journal));
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: () => readEvents(journal), community };
+const community = openCommunity(past.ray ?? null, journalNow());
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: journalNow, community };
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -174,7 +177,7 @@ function listening(service: string, channel: { id: string; name: string }): Mode
   const key = `${service}:${channel.id}`;
   const kept = listened.get(key);
   if (kept !== undefined && Date.now() - kept.at < 60_000) return kept.mode;
-  const now = modeOf(readEvents(journal), service, channel);
+  const now = modeOf(journalNow(), service, channel);
   if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
   listened.set(key, { at: Date.now(), mode: now.mode });
   return now.mode;
@@ -185,7 +188,7 @@ function listening(service: string, channel: { id: string; name: string }): Mode
  * is shown with what the agent knows of them. For any service: only its name differs.
  */
 function whoSpeaks(service: string, speakers: Speaker[]): string {
-  const events = readEvents(journal);
+  const events = journalNow();
   const seen = speakers.map((s) => ({ service, id: s.id, name: s.name, ...(s.bot === undefined ? {} : { bot: s.bot }), ...(s.where === undefined ? {} : { met: s.where }) }));
   community.refresh(events);
   return whoLines(events, seen, meet(journal, gen, events, seen), community);
@@ -227,7 +230,7 @@ function emit(s: Stimulus): void {
  */
 function interrupt(): void {
   if (current !== null) return current.abort();
-  if (!needsTurn(readEvents(journal))) return;
+  if (!needsTurn(journalNow())) return;
   appendEvent(journal, gen, { type: 'turn.interrupted' });
   console.error('[interrupted]');
   wake?.();
@@ -252,7 +255,7 @@ function ownerWord(text: string): void {
 /** Journals the owner's words that wait. A word about something the journal does not hold is dropped. */
 function settleWords(): void {
   for (const word of words.splice(0)) {
-    const note = noteOf(word, readEvents(journal));
+    const note = noteOf(word, journalNow());
     if (note === null) console.error(`[owner] nothing in the journal for the word "${word.do}"; it was dropped`);
     else appendEvent(journal, gen, note);
   }
@@ -273,7 +276,7 @@ const sensors: Sensor[] = [
   clock(
     heartbeatMinutes * 60_000,
     () => {
-      const events = readEvents(journal);
+      const events = journalNow();
       // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
       if (!clockMayTick(events, soulDir) || (ownTokensDay !== null && ownSpend(events, Date.now()) >= ownTokensDay)) return false;
       // Time of its own is time at rest: no tick while the owner is in conversation, none when the
@@ -283,7 +286,7 @@ const sensors: Sensor[] = [
         && worthATick(known(current), now, reportAsk(current, now, reportHours * 3_600_000));
     },
     () => {
-      const events = readEvents(journal), now = Date.now();
+      const events = journalNow(), now = Date.now();
       const text = agendaFor(events, now, reportHours * 3_600_000);
       // What waits and was offered for a look is not offered again before a wait that doubles.
       for (const item of followUps(known(standing(events)), now).slice(0, 5)) {
@@ -301,29 +304,29 @@ const sensors: Sensor[] = [
     chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
-    events: () => readEvents(journal),
+    events: () => journalNow(),
   })] : []),
   // Opt-in: the smoke gate has no workspace watcher. Paths/hashes only; an edit is never owner's word.
   ...(process.env.TENERAL_WORKSPACE_WATCH === '1' ? [workspaceSensor({
     root: workspace,
-    events: () => readEvents(journal),
+    events: () => journalNow(),
     checkpoint: (cursor: WorkspaceCursor) => appendEvent(journal, gen, { type: 'note', kind: WORKSPACE_CURSOR_KIND, data: cursor }),
   })] : []),
   ...githubRepositories.map(repository => github({
     repository, upstream,
-    events: () => readEvents(journal),
+    events: () => journalNow(),
     checkpoint: (cursor: GithubCursor) => {
       // A stimulus emitted in this poll is already on disk. If journaling it failed, the sensor
       // holds this checkpoint back. One note replaces all feed cursors for a repository atomically;
       // a crash before it repeats stimuli, whose ids suppress duplicates after restart.
-      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND && typeof e.data === 'object' && e.data !== null && !Array.isArray(e.data) && 'repository' in e.data && e.data.repository === repository);
+      const pending = journalNow().findLast(e => e.type === 'note' && e.kind === GITHUB_CURSOR_KIND && typeof e.data === 'object' && e.data !== null && !Array.isArray(e.data) && 'repository' in e.data && e.data.repository === repository);
       if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
       appendEvent(journal, gen, { type: 'note', kind: GITHUB_CURSOR_KIND, data: cursor });
     },
   })),
   ...(process.env.TENERAL_AUTH && hasToken(process.env.TENERAL_AUTH) ? [(emit: (s: Stimulus) => void) => {
     const worker = githubNotificationPoller({
-      events: () => readEvents(journal),
+      events: () => journalNow(),
       token: () => existsSync(join(process.env.TENERAL_AUTH!, 'github-token')) ? readFileSync(join(process.env.TENERAL_AUTH!, 'github-token'), 'utf8') : '',
       checkpoint: (cursor: GithubNotificationCursor) => appendEvent(journal, gen, { type: 'note', kind: GITHUB_NOTIFICATION_CURSOR_KIND, data: cursor }),
     }, emit);
@@ -332,27 +335,27 @@ const sensors: Sensor[] = [
   }] : []),
   resumeWork(journal, gen, () => {
     if (working || quitting) return true;
-    const events = readEvents(journal);
+    const events = journalNow();
     return needsTurn(events) || heldByInterrupt(events);
-  }),
+  }, undefined, undefined, journalNow),
   // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
   // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
   zulipLive({
-    conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
-    ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
+    conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => journalNow(),
+    ownerId: confirmedZulipOwnerId(journalNow(), zulipOwnerId), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
     mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'),
-    entered: (stream, members) => enter(journal, gen, readEvents(journal), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
+    entered: (stream, members) => enter(journal, gen, journalNow(), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
-      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
+      const pending = journalNow().findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
       if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
       appendEvent(journal, gen, { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: cursor });
     },
   }),
   mail({
     key: () => mailKey(process.env, mailConfigPath),
-    events: () => readEvents(journal),
+    events: () => journalNow(),
     quiet: id => appendEvent(journal, gen, { type: 'note', kind: 'mail.quiet.v1', data: id }),
   }),
 ];
@@ -360,7 +363,7 @@ const sensors: Sensor[] = [
 /** One turn. Returns what was thrown, or null when it ran to its end. */
 async function turn(): Promise<{ error: unknown } | null> {
   // Any wake except the owner's terminal/birth may settle quietly. Keep streamed markers out of the terminal.
-  const quietTick = mayStayQuiet(readEvents(journal).findLast(e => e.type === 'stimulus')?.source);
+  const quietTick = mayStayQuiet(journalNow().findLast(e => e.type === 'stimulus')?.source);
   const genericTyping = typingFor(workspace);
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
@@ -467,22 +470,22 @@ async function rest(): Promise<boolean> {
 // Everything above loaded and parsed: this generation can start.
 appendEvent(journal, gen, { type: 'generation.ready', commit: gen });
 const heart = new Heart({
-  events: () => readEvents(journal),
-  born: () => clockMayTick(readEvents(journal), soulDir),
+  events: () => journalNow(),
+  born: () => clockMayTick(journalNow(), soulDir),
   emit,
   settle: async () => {
     const woken = new AbortController();
     wake = () => woken.abort();
     resting = true;
     try {
-      const events = standing(readEvents(journal));
+      const events = standing(journalNow());
       const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events);
       if (settled === 'reflected') console.error('[agenda] settled what the turn left');
       return settled;
     } finally { wake = null; resting = false; }
   },
   remember: rest,
-  backlog: () => memoryHealth(standing(readEvents(journal))).waiting,
+  backlog: () => memoryHealth(standing(journalNow())).waiting,
   restMs,
   onError: error => {
     console.error(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);
@@ -490,12 +493,12 @@ const heart = new Heart({
   },
 });
 // A journal with no stimulus yet means this individual was never born: the letter goes first.
-const firstWords = birth(readEvents(journal), letter);
+const firstWords = birth(journalNow(), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
 // The journal grew: by a stimulus, which wakes by itself in `emit`, by the stem, or by a record
 // nobody needs to answer. A request of the agent's own goes on unless a turn is now owed.
-stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || needsTurn(readEvents(journal))) wake?.(); }));
+stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || needsTurn(journalNow())) wake?.(); }));
 
 // Failed turns in a row, and how many of the latest kind. What each kind leads to is in brain/retry.ts.
 let failures = 0;
@@ -504,7 +507,7 @@ for (;;) {
   if (handoff !== null) process.exit(75);
   settleWords();
   // Also true right after a restart: an unfinished turn or a stem note is picked up here.
-  while (!quitting && needsTurn(readEvents(journal))) {
+  while (!quitting && needsTurn(journalNow())) {
     if (retryAt !== null && Date.now() < retryAt) {
       // A failed turn is still owed but its next try is not due. Sleep past it without waking on
       // every stimulus: a clock tick or an inbox message must not hammer a provider already at
@@ -519,16 +522,16 @@ for (;;) {
     const before = ownerArrived;
     // The stimulus that woke this turn is already in the journal. Start after the last settled
     // reply/interruption, not at the current end, and include any late work answered by the turn.
-    const beforeTurn = readEvents(journal);
+    const beforeTurn = journalNow();
     const turnFrom = beforeTurn.findLastIndex(e => e.type === 'assistant' || e.type === 'turn.interrupted') + 1;
     working = true;
     const failed = await turn();
     working = false;
     journalFormed();
     settleWords();
-    heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
+    heart.completed(journalNow(), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
     if (handoff !== null) {
-      const events = readEvents(journal);
+      const events = journalNow();
       const last = events.findLast(e => e.type === 'stimulus');
       // A terminal line read during the mutation turn is durable and must get its reply now.
       // Re-running mutate would be rejected as a repeated request, so keep the original handoff.
@@ -596,7 +599,7 @@ for (;;) {
   // Before waiting: the memory sits its exam when enough has been remembered since the last one. No model is asked;
   // the result is journaled, for the owner to see and for a later change of the memory to be held against (immune/gates.ts).
   try {
-    const events = standing(readEvents(journal));
+    const events = standing(journalNow());
     if (due(events)) appendEvent(journal, gen, { type: 'note', kind: RESULT_KIND, data: sit(past, events) });
   } catch (err) {
     console.error(`[memory] the exam could not be sat: ${err instanceof Error ? err.message : String(err)}`);
