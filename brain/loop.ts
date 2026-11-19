@@ -37,6 +37,8 @@ export interface TurnDeps {
   signal?: AbortSignal;
   /** How long a running tool gets to stop by itself after that, before the turn ends without it. Default: two seconds. */
   abandonMs?: number;
+  /** Begin/end external composition for this turn's exact stimulus; absent or undefined means no indicator. */
+  onTyping?: (stimulus?: Extract<JournalEvent, { type: 'stimulus' }>) => (active: boolean) => void;
 }
 
 const ABANDON_MS = 2000;
@@ -105,6 +107,18 @@ function arrivedSince(events: JournalEvent[], shown: number): boolean {
  * arrived ends the turn as 'done', and a mutation already requested stays requested.
  */
 export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
+  const stimulus = d.signal?.aborted ? undefined : readEvents(d.journal).findLast((e): e is Extract<JournalEvent, { type: 'stimulus' }> => e.type === 'stimulus');
+  const typing = d.onTyping?.(stimulus);
+  typing?.(true);
+  try {
+    return await runTurnInner(d);
+  } finally {
+    // The external status is best effort and bounded. It is never allowed to hold the reply or crash the body.
+    typing?.(false);
+  }
+}
+
+async function runTurnInner(d: TurnDeps): Promise<'done' | 'mutation' | 'interrupted'> {
   const interrupted = (): 'interrupted' => {
     appendEvent(d.journal, d.gen, { type: 'turn.interrupted' });
     return 'interrupted';

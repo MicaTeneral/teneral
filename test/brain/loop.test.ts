@@ -785,3 +785,21 @@ test('only a line typed at the owner\'s terminal must be answered in words; any 
   expect(mayStayQuiet(undefined)).toBe(false);
   for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
 });
+
+test('a turn says it is being written for from its first moment to its last, also when it throws', async () => {
+  const { runTurn } = await import('../../brain/loop');
+  const { appendEvent } = await import('../../brain/journal');
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const journal = join(mkdtempSync(join(tmpdir(), 'teneral-typing-')), 'journal.jsonl');
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 9' });
+  const seen: string[] = [];
+  const base = { journal, gen: 'g', tools: [], system: () => 'SYS', ctx: { journal, gen: 'g', mutationCommit: null } as never,
+    onTyping: (s?: { source: string }) => (on: boolean) => { seen.push(`${s?.source} ${on}`); } };
+  await runTurn({ ...base, provider: async () => { seen.push('asked'); return { text: 'Here.', toolCalls: [] }; } });
+  expect(seen).toEqual(['agent:zulip true', 'asked', 'agent:zulip false']);
+  appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 10' });
+  await expect(runTurn({ ...base, provider: async () => { throw new Error('provider down'); } })).rejects.toThrow('provider down');
+  expect(seen.slice(3)).toEqual(['agent:zulip true', 'agent:zulip false']);
+});
