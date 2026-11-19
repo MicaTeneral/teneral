@@ -390,15 +390,24 @@ async function goneWithin(pid: number, ms: number): Promise<boolean> {
  */
 async function stopOrphan(p: Paths, graceMs: number, log: (line: string) => void): Promise<boolean> {
   if (!existsSync(p.child)) return true;
-  let record: ChildRecord | null = null;
+  let record: { pid: number; gen: string; cmd: string[] | null } | null = null;
   try {
     const parsed = JSON.parse(readFileSync(p.child, 'utf8')) as Partial<ChildRecord> | null;
-    if (parsed && Number.isInteger(parsed.pid) && parsed.pid! > 1 && Array.isArray(parsed.cmd)) {
-      record = { pid: parsed.pid!, gen: String(parsed.gen), cmd: parsed.cmd.map(String) };
+    if (parsed && Number.isInteger(parsed.pid) && parsed.pid! > 1) {
+      // The pid is the only handle a later supervisor has. A torn record must not make it safe to
+      // start another writer beside that process; where /proc can identify it, still require the
+      // body command line, and otherwise leave an unknown live pid alone rather than kill by guess.
+      record = { pid: parsed.pid!, gen: String(parsed.gen), cmd: Array.isArray(parsed.cmd) ? parsed.cmd.map(String) : null };
     }
   } catch { /* an unreadable record names nobody */ }
-  if (record !== null && record.pid !== process.pid && isProgram(record.pid, record.cmd)) {
-    const { pid, gen } = record;
+  if (record !== null && record.pid !== process.pid && pidAlive(record.pid)) {
+    const { pid, gen, cmd } = record;
+    if (cmd !== null && !isProgram(pid, cmd)) {
+      // A pid that now belongs to another program is stale, not a second writer. With a torn
+      // command line there is no identity to compare: the recorded live pid is enough to stop it.
+      rmSync(p.child, { force: true });
+      return true;
+    }
     log(`a body from an earlier supervisor is still running (pid ${pid}, generation ${gen}); stopping it`);
     try {
       process.kill(pid, 'SIGTERM');
@@ -638,6 +647,9 @@ export async function supervise(opts: Options): Promise<'stopped' | 'halted' | '
         cwd: p.live,
         env: {
           ...inherited,
+          // Owner settings are inherited; explicitly add this opt-in identity so it works with
+          // bun --no-env-file too. It is a public account id, not a credential.
+          TENERAL_RAYBOARD_OWNER_ID: process.env.TENERAL_RAYBOARD_OWNER_ID,
           ...bodyEnv({
             gen, journal: p.journal, workspace: p.candidate, id: identity(join(p.root, '.teneral')),
             inbox: p.inbox, peers: p.peers, soul: p.soul, owner: p.owner,

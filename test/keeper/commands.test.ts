@@ -42,6 +42,7 @@ test('/help prints the table: every command for the screen client, with the key 
     '  /approve [commit]  approve the mutation the agent asked about, or the commit or offer named',
     '  /offers            what waits for your approval before it goes out to the species',
     '  /heart             give the agenda one pulse now',
+    "  /publish [commit]  how the agent's work goes out to the species; with a commit, let that offer go",
     '  /quit              leave',
   ]);
 });
@@ -50,7 +51,7 @@ test('the commands the stem answers for both clients are in the table under the 
   const root = mkdtempSync(join(tmpdir(), 'teneral-commands-'));
   for (const c of COMMANDS) {
     const answered = ownerCommand(root, c.name) !== null;
-    expect(answered).toBe(c.name === '/offers' || c.name === '/approve');
+    expect(answered).toBe(c.name === '/offers' || c.name === '/approve' || c.name === '/publish');
   }
 });
 

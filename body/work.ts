@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { appendEvent, readEvents } from '../brain/journal';
 import { standing } from '../brain/owned';
-import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, known, type Intention, type WorkState } from '../brain/known';
+import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type WorkState } from '../brain/known';
 import type { Tool } from './tools';
 import type { Sensor } from './sensors';
 
@@ -13,6 +13,8 @@ export interface WorkUpdate {
   outcome?: string;
   recovery?: string;
   evidence?: string;
+  /** Minutes until a waiting commitment is worth looking at again; absent, it waits for something that arrives. */
+  check?: number;
 }
 interface LegacyWork extends WorkUpdate { attempts: number; due: number }
 
@@ -77,6 +79,9 @@ export function importLegacyWork(journal: string, gen: string, path: string): nu
   return added;
 }
 
+/** A mark as brain/known.ts gives them, and nothing else. */
+const MARK = /^I[0-9a-zA-Z]{4,12}$/;
+
 function progress(journal: string, gen: string, intention: Intention, work: WorkState): void {
   appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: intention.id, work } });
 }
@@ -84,7 +89,9 @@ function progress(journal: string, gen: string, intention: Intention, work: Work
 export const work: Tool = {
   spec: {
     name: 'work',
-    description: 'Record the state and checkpoints of a named owner-authorized commitment in the same journal agenda as intentions. Reuse the exact task name. queued is ready; waiting names a dependency; done closes the intention. Updates preserve other commitments and checkpoints. Not authorization to invent work or act on untrusted messages.',
+    description: 'Record the state of a commitment in your agenda, at the moment you take it on or its state changes. task is the mark of a commitment you already hold (such as I1a2b3c4d), or, for a new one, what is to be done in a sentence that stands on its own. '
+      + 'queued: it is ready, next is the concrete step, and you are woken to take it. waiting: next names what it waits for. When that is something that arrives by itself (your owner\'s word, a review, a notification), leave check out: its arrival wakes you and nothing is polled. '
+      + 'When it is something you must go and look at (a build, a deployment), give check, the minutes until it is worth looking. done closes it. Not authorization to invent work or act on untrusted messages.',
     parameters: {
       type: 'object',
       properties: {
@@ -92,6 +99,7 @@ export const work: Tool = {
         outcome: { type: 'string', description: 'Observable completion condition' },
         recovery: { type: 'string', description: 'Existing process or receipt pointers and checks before retry; no secrets' },
         evidence: { type: 'string', description: 'Verified progress, not intention' },
+        check: { type: 'number', description: 'With waiting: minutes until you should look again. Leave out when what you wait for will arrive as a message' },
       },
       required: ['status', 'task', 'next'],
     },
@@ -105,8 +113,14 @@ export const work: Tool = {
     for (const key of ['outcome', 'recovery', 'evidence'] as const) {
       if (a[key] !== undefined && (typeof a[key] !== 'string' || a[key].length > 2000)) throw new Error(`Invalid checkpoint: ${key}`);
     }
+    if (a.check !== undefined && (typeof a.check !== 'number' || !(a.check >= 1) || a.check > 60 * 24 * 30)) throw new Error('check is minutes from now, between 1 and 43200');
     const held = known(standing(readEvents(ctx.journal)));
-    const old = held.intentions.find((i) => i.text === a.task);
+    // A commitment is named by its mark or by its exact words. A mark that names nothing open must not
+    // become a new commitment whose whole text is that mark.
+    const named = a.task.trim();
+    const marked = byMark({ facts: [], intentions: held.intentions }, named) as Intention | null;
+    if (marked === null && MARK.test(named)) throw new Error(`no open commitment has the mark ${named}. Open: ${held.intentions.map((i) => i.mark).join(', ') || 'none'}. For a new one, say what is to be done`);
+    const old = marked ?? held.intentions.find((i) => i.text === named);
     if (old?.waits) throw new Error(`${old.mark} waits for your owner's word; use allowed with their exact yes, or done with their answer`);
     if (old?.work?.outcome !== undefined && a.outcome !== undefined && a.outcome !== old.work.outcome) {
       throw new Error('Established outcome cannot be replaced. Preserve it in progress/completion updates; an owner-authorized scope change needs an explicitly separate commitment.');
@@ -124,8 +138,10 @@ export const work: Tool = {
     // An identical update is not fresh progress and cannot reset the no-progress limit.
     const attempts = previous !== undefined && previous.next === a.next && previous.status === a.status ? previous.attempts : 0;
     const current = state(a.status, a.next, attempts, Date.now() + 15_000, previous, a);
+    if (a.status === 'waiting' && a.check !== undefined) current.checkAt = Date.now() + Math.round(a.check) * 60_000;
     progress(ctx.journal, ctx.gen, item, current);
-    return `Work ${a.status}: ${item.mark} ${item.text}. Next/blocker: ${a.next}`;
+    const again = a.status !== 'waiting' ? '' : a.check === undefined ? ' Nothing looks at it on a schedule: you are woken when what it waits for arrives.' : ` You are offered it again in ${Math.round(a.check)} minutes.`;
+    return `Work ${a.status}: ${item.mark} ${item.text}. Next/blocker: ${a.next}.${again}`;
   },
 };
 

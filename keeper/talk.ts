@@ -56,6 +56,32 @@ function summary(args: unknown): string {
 }
 
 /**
+ * What arrived, without what the sensor told the agent to do with it. A sensor's stimulus is a
+ * title line, a line of instructions for the model, and what came as one line of JSON. The
+ * instructions are the agent's business; the owner is shown who it was from and what it said.
+ * Text of any other shape is shown as it stands.
+ */
+export function gist(source: string, text: string): string {
+  // A tick's words are all instructions; anything else a clock says is shown.
+  if (source === 'clock') return /^Clock tick at \S+\. /.test(text) ? '' : text;
+  if (source === 'work') return /\bTask: ([\s\S]*)$/.exec(text)?.[1]?.trim() ?? text;
+  const lines = text.split('\n');
+  const payloads = lines.slice(1).filter((line) => line.startsWith('{'));
+  if (payloads.length === 0) return text;
+  let d: Record<string, unknown>;
+  try { d = JSON.parse(payloads[0]!) as Record<string, unknown>; } catch { return lines[0]!; }
+  const word = (...keys: string[]): string => {
+    for (const key of keys) if (typeof d[key] === 'string' && d[key] !== '') return (d[key] as string).split('\n')[0]!;
+    return '';
+  };
+  const who = word('sender', 'from', 'author');
+  const where = word('topic', 'repository');
+  const what = word('content', 'text', 'message', 'subject', 'title', 'emoji_name');
+  const said = [who === '' ? '' : `${who}${where === '' ? '' : ` in ${where}`}:`, what].filter((part) => part !== '').join(' ');
+  return `${said === '' ? lines[0]! : said}${payloads.length > 1 ? ` (+${payloads.length - 1} more)` : ''}`;
+}
+
+/**
  * What one journal event looks like on the owner's terminal, or null for an event that is not
  * shown: a tool's result, a generation starting, a reply that only calls tools.
  * A typed line comes out as `> line`; whether it is shown at all is the caller's business.
@@ -75,7 +101,7 @@ export function render(e: JournalEvent): string | null {
     case 'stimulus':
       if (f.source === 'terminal') return `> ${plain(asText(f.text))}`;
       // Whatever else woke the agent, in one line: another agent's message, the clock, the birth letter.
-      return `[${oneLine(asText(f.source), 80)}] ${oneLine(asText(f.text), 200)}`;
+      return `[${oneLine(asText(f.source), 80)}] ${oneLine(gist(asText(f.source), asText(f.text)), 200)}`.trimEnd();
     case 'mutation.rejected': {
       // Not a refusal: the stem judged nothing, and waits for the owner's word (immune/approval.ts).
       if (f.gate === 'approval') return `[stem] mutation to ${short(f.commit)} waits for the owner's approval, /approve: ${oneLine(asText(f.output).split('\n')[0] ?? '', 600)}`;

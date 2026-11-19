@@ -70,6 +70,8 @@
     /memory [what]     the agent's memory, and your hand on it: pin, unpin, withdraw,
   back
     /reasoning         print in full what the model last thought (also Ctrl-R)
+    /publish [commit]  how the agent's work goes out to the species; with a commit, let
+  that offer go
     /quit              leave (also Ctrl-D on an empty line, and Ctrl-C)
 
   Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model

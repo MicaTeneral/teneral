@@ -2,7 +2,7 @@ import { watchJournal } from "./acceptance";
 import { decideBudget } from './adaptive-budget';
 import { research } from './research';
 import { github, githubRepository, githubNotificationPoller, GITHUB_CURSOR_KIND, GITHUB_NOTIFICATION_CURSOR_KIND, type GithubCursor, type GithubNotificationCursor } from './github';
-import { rayboard, rayboardCa, rayboardToken } from './rayboard';
+import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard';
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { speciesRef } from '../species/species';
@@ -24,11 +24,11 @@ import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Sensor
 import { RESULT_KIND, due, sit } from '../brain/exam';
 import { noteOf, parseWord, standing, type Word } from '../brain/owned';
 import { clockText } from './sensors';
-import { ownSpend, reflect, reportAsk } from '../brain/agenda';
-import { known } from '../brain/known';
+import { followUps, lookedAt, ownSpend, reportAsk, settle, tickDue, worthATick } from '../brain/agenda';
+import { WORK_KIND, known } from '../brain/known';
 import { openPast } from '../brain/past';
 import { libraryAt } from '../brain/ray';
-import { sleep } from '../brain/sleep';
+import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
 import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
@@ -36,7 +36,7 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
-import { Heart, agendaFor, heartCommand } from '../heart/coordinator';
+import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -59,6 +59,9 @@ try {
   process.exit(1);
 }
 const heartbeatMinutes = Number(process.env.TENERAL_HEARTBEAT_MINUTES ?? '30');
+// Minutes of the owner's silence after which the agent is at rest, and does what is its own: memories, looking ahead, ticks. Not a number of 0 or more, or not set: the default in heart/coordinator.ts. 0: always.
+const restSet = Number(process.env.TENERAL_REST_MINUTES ?? '');
+const restMs = (process.env.TENERAL_REST_MINUTES?.trim() ?? '') !== '' && restSet >= 0 ? restSet * 60_000 : REST_MINUTES * 60_000;
 // Tokens a day that turns woken by a clock tick may spend. Not positive or not set: no cap.
 const ownSet = Number(process.env.TENERAL_OWN_TOKENS_DAY);
 const ownTokensDay = ownSet > 0 ? Math.floor(ownSet) : null;
@@ -133,6 +136,12 @@ try {
 let quitting = false;
 let working = false;
 let wake: (() => void) | null = null;
+/**
+ * True while a request of the agent's own is under way: settling a turn, a memory, a look ahead.
+ * Such a request is given up only for something that calls for a turn. The journal grows for other
+ * reasons too, a sensor's checkpoint or the stem's own records, and those must not end it.
+ */
+let resting = false;
 /** Wakes only the sleep between beats; background requests install their own abort wake. */
 let idleWake: (() => void) | null = null;
 /** Owner stimuli journaled by this process: only these may shorten a failed turn's backoff. */
@@ -225,13 +234,28 @@ const sensors: Sensor[] = [
     () => {
       const events = readEvents(journal);
       // Past what the owner allows a day for time of its own, there is no tick: whatever arrives is still answered.
-      return clockMayTick(events, soulDir) && (ownTokensDay === null || ownSpend(events, Date.now()) < ownTokensDay);
+      if (!clockMayTick(events, soulDir) || (ownTokensDay !== null && ownSpend(events, Date.now()) >= ownTokensDay)) return false;
+      // Time of its own is time at rest: no tick while the owner is in conversation, none when the
+      // agenda holds nothing that can be acted on now, and fewer when the last ones came to nothing.
+      const current = standing(events), now = Date.now();
+      return restIn(current, now, restMs) === 0 && tickDue(current, now, heartbeatMinutes * 60_000)
+        && worthATick(known(current), now, reportAsk(current, now, reportHours * 3_600_000));
     },
-    () => agendaFor(readEvents(journal), Date.now(), reportHours * 3_600_000),
+    () => {
+      const events = readEvents(journal), now = Date.now();
+      const text = agendaFor(events, now, reportHours * 3_600_000);
+      // What waits and was offered for a look is not offered again before a wait that doubles.
+      for (const item of followUps(known(standing(events)), now).slice(0, 5)) {
+        if (item.work !== undefined) appendEvent(journal, gen, { type: 'note', kind: WORK_KIND, data: { intention: item.id, work: lookedAt(item.work, now) } });
+      }
+      return text;
+    },
   ),
   inbox(inboxDir, ctx.id, 2000, ctx.peers),
   ...(process.env.TENERAL_RAYBOARD_URL ? [rayboard({
     url: process.env.TENERAL_RAYBOARD_URL,
+    // No implicit binding: the owner chooses which API-verified account can speak for them.
+    ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => readEvents(journal),
@@ -268,7 +292,8 @@ const sensors: Sensor[] = [
     const events = readEvents(journal);
     return needsTurn(events) || heldByInterrupt(events);
   }),
-  zulip({ conversations: true, credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
+  // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
+  zulip({ conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
   // Reactions require an event queue; the existing message poll has no such events.
   // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
   emit => {
@@ -337,31 +362,65 @@ const REST_RETRY_MS = 15 * 60_000;
 let restNotBefore = 0;
 
 /**
- * What the agent does when nothing is asked of it: it forms one memory, of the oldest episode
- * that is over and has none (brain/sleep.ts). Whatever arrives meanwhile cancels the request and
- * is answered first. Returns false when there was nothing to remember, or no use in trying now.
+ * A request of rest that is under way: a memory, a wider memory, a look ahead. It is begun only at
+ * rest, but something arriving does not end it. The turn that answers what arrived runs beside it,
+ * and what the request formed is journaled when no turn is running: a note that changed what a
+ * turn is shown, in the middle of it, would cost the turn its provider's cache. A request thrown
+ * away at the first message is paid for and comes to nothing, which is how most of them ended.
+ * TENERAL_BACKGROUND=serial brings back the old way: whatever arrives cancels it.
+ */
+let background: { done: Promise<boolean>; stop: AbortController } | null = null;
+const beside = process.env.TENERAL_BACKGROUND !== 'serial';
+const stopBackground = (): void => { background?.stop.abort(); };
+/** What a request beside a turn formed, waiting for the turn to end. */
+const formed: Parameters<typeof appendEvent>[2][] = [];
+function journalFormed(): void {
+  for (const body of formed.splice(0)) appendEvent(journal, gen, body);
+}
+
+/**
+ * What the agent does at rest: it forms one memory, of the oldest episode that is over and has
+ * none, or does the next thing of that kind (brain/sleep.ts). Returns false when there was nothing
+ * to do, or no use in trying now; true also when something arrived while the request goes on.
  */
 async function rest(): Promise<boolean> {
-  if (Date.now() < restNotBefore) return false;
-  const woken = new AbortController();
-  wake = () => woken.abort();
-  try {
-    const slept = await sleep({
-      journal, gen, provider, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
+  if (background === null) {
+    if (Date.now() < restNotBefore) return false;
+    const stop = new AbortController();
+    const done = sleep({
+      journal, gen, specs: TOOLS.map((t) => t.spec), budgetChars: budgetChoice.budgetChars, tailChars,
+      // While a turn runs, the pulse file says what the turn is doing, not this.
+      provider: (messages, specs, options) => provider(messages, specs, { ...options, mayPulse: () => !working }),
       system: () => composeSystem(prompt, soulDir, journal),
-      signal: woken.signal,
+      signal: stop.signal,
+      append: (body) => { if (working) formed.push(body); else appendEvent(journal, gen, body); },
+    }).then((slept) => {
+      const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
+      if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
+      return slept !== 'nothing';
+    }, (err) => {
+      if (stop.signal.aborted) return true;
+      // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
+      console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
+      restNotBefore = Date.now() + REST_RETRY_MS;
+      return false;
+    }).finally(() => {
+      background = null;
+      // The loop may be asleep with more to remember: let it look again.
+      idleWake?.();
     });
-    const said = { remembered: 'formed a memory', merged: 'made several memories into one', reflected: 'looked over what it is doing', quarantined: 'no memory could be formed of one stretch; it stays in the journal as it happened' };
-    if (slept === 'remembered' || slept === 'merged' || slept === 'reflected' || slept === 'quarantined') console.error(`[memory] ${said[slept]}`);
-    return slept !== 'nothing';
-  } catch (err) {
-    if (woken.signal.aborted) return true;
-    // Not a failed turn: nobody waits for this, so it is neither counted nor journaled, only tried again later.
-    console.error(`[memory] could not form a memory now: ${err instanceof Error ? err.message : String(err)}`);
-    restNotBefore = Date.now() + REST_RETRY_MS;
-    return false;
+    background = { done, stop };
+  }
+  const { done, stop } = background;
+  let arrived!: () => void;
+  const woken = new Promise<true>((resolve) => { arrived = () => resolve(true); });
+  wake = beside ? arrived : () => { stop.abort(); arrived(); };
+  resting = true;
+  try {
+    return await Promise.race([done, woken]);
   } finally {
     wake = null;
+    resting = false;
   }
 }
 
@@ -371,17 +430,22 @@ const heart = new Heart({
   events: () => readEvents(journal),
   born: () => clockMayTick(readEvents(journal), soulDir),
   emit,
-  reflect: async () => {
+  settle: async () => {
     const woken = new AbortController();
     wake = () => woken.abort();
+    resting = true;
     try {
       const events = standing(readEvents(journal));
-      return await reflect({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events, true);
-    } finally { wake = null; }
+      const settled = await settle({ journal, gen, provider, specs: TOOLS.map(t => t.spec), budgetChars: budgetChoice.budgetChars, tailChars, system: () => composeSystem(prompt, soulDir, journal), signal: woken.signal }, events);
+      if (settled === 'reflected') console.error('[agenda] settled what the turn left');
+      return settled;
+    } finally { wake = null; resting = false; }
   },
   remember: rest,
+  backlog: () => memoryHealth(standing(readEvents(journal))).waiting,
+  restMs,
   onError: error => {
-    console.error(`[memory] could not look ahead now: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[agenda] could not settle the turn now: ${error instanceof Error ? error.message : String(error)}`);
     restNotBefore = Date.now() + REST_RETRY_MS;
   },
 });
@@ -389,7 +453,9 @@ const heart = new Heart({
 const firstWords = birth(readEvents(journal), letter);
 if (firstWords !== null) emit(firstWords);
 const stops = sensors.map((start) => start(emit));
-stops.push(watchJournal(journal, () => wake?.()));
+// The journal grew: by a stimulus, which wakes by itself in `emit`, by the stem, or by a record
+// nobody needs to answer. A request of the agent's own goes on unless a turn is now owed.
+stops.push(watchJournal(journal, () => { if (!resting || quitting || words.length > 0 || needsTurn(readEvents(journal))) wake?.(); }));
 
 // Failed turns in a row, and how many of the latest kind. What each kind leads to is in brain/retry.ts.
 let failures = 0;
@@ -418,6 +484,7 @@ for (;;) {
     working = true;
     const failed = await turn();
     working = false;
+    journalFormed();
     settleWords();
     heart.completed(readEvents(journal), process.env.TENERAL_REFLECT_AFTER_TURN !== '0', turnFrom);
     if (handoff !== null) {
@@ -434,6 +501,8 @@ for (;;) {
       continue;
     }
     const { error } = failed;
+    // A provider that refused the turn must not be asked for anything else beside it.
+    stopBackground();
     const kind = failureKind(error);
     failures += 1;
     streak = { kind, count: kind === streak.kind ? streak.count + 1 : 1 };
@@ -501,8 +570,12 @@ for (;;) {
   }
   // A prompt only where someone can type at it; a wake reuses the existing input place.
   if (process.stdin.isTTY) terminalPrompt.ready();
-  await idle();
+  // Until something arrives, or until rest begins and there may be something of its own to do.
+  const untilRest = heart.restIn();
+  await idle(untilRest > 0 ? untilRest + 1000 : undefined);
 }
 
+stopBackground();
+journalFormed();
 for (const stop of stops) stop();
 process.exit(0);

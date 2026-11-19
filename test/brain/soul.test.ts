@@ -78,7 +78,7 @@ test('fresh setups receive reusable follow-through guidance without personal not
 test('fresh discovery guidance is bounded and does not confer owner permission', async () => {
  const prompt=await Bun.file(new URL('../../brain/prompt.md',import.meta.url)).text();
  const system=composeSystem(prompt,soulDir(),'/tmp/discovery-journal');
- for(const phrase of ['Advance queued commitments before discovering new work', 'not itself standing permission', 'at most three candidates', 'at most one bounded outcome', 'work.evidence', 'small exploration budget', 'do not retry blocked tasks without new evidence', 'do not create recursive tasks']) expect(system).toContain(phrase);
+ for(const phrase of ["Standing permission for initiative is your owner's to give", 'this policy is not it', "a fresh installation must establish its owner's scope", 'when you look ahead at rest, not on a tick', 'do not make tasks to find tasks', 'without new evidence', 'keep their approval requirements']) expect(system).toContain(phrase);
 });
 
 test('a fresh seed gets no personal identity, while its own soul may choose one', async () => {

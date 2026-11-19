@@ -1,9 +1,9 @@
-import { appendEvent, readEvents, type JournalEvent, type Usage } from './journal';
+import { readEvents, type EventBody, type JournalEvent, type Usage } from './journal';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { standing } from './owned';
-import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Source } from './known';
+import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Source } from './known';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData } from './remembered';
@@ -11,7 +11,7 @@ import type { ChatMessage, Provider, ToolSpec } from './provider';
 import { saysTooLong } from './retry';
 import { clip } from '../body/text';
 import { asText } from './stemnote';
-import { reflect } from './agenda';
+import { put, reflect } from './agenda';
 
 // Sleep is when the agent forms its memories. While nothing is asked of it, it takes the oldest
 // episode that is over and has no memory yet, and asks its own model, as itself, what it will
@@ -37,7 +37,8 @@ import { reflect } from './agenda';
 // made into one stay in the journal, and `recall` finds them.
 //
 // With the memory the agent may set down what it learned that will hold beyond the episode, and
-// what it took on to do later (brain/known.ts). Those are asked for sparingly: a fact is worth
+// close what the episode settled of what it meant to do (brain/known.ts). What it takes on is not
+// set down here but when it is taken on (brain/agenda.ts). Facts are asked for sparingly: a fact is worth
 // keeping only if it would change what the agent does some later week, and its own remarks are
 // not facts. What it sets down is checked line by line, and a line that is not in form is left
 // out; the memory itself is kept all the same.
@@ -70,8 +71,15 @@ export interface SleepDeps {
   logbookChars?: number;
   /** Characters shown as they happened in a turn's request: looking ahead (brain/agenda.ts) sends what a turn would. */
   tailChars?: number;
-  /** Aborts when something arrives: the agent wakes, and the memory is formed another time. */
+  /** Aborts the request: nothing is written, and the memory is formed another time. */
   signal?: AbortSignal;
+  /**
+   * Where what is formed is written, when not straight into the journal. A request that goes on
+   * beside a turn hands its notes over here, and the body journals them when the turn is over:
+   * a note that changed what the turn is shown, in the middle of it, would cost the turn its
+   * provider's cache and tell it nothing it needs.
+   */
+  append?: (body: EventBody) => void;
 }
 
 /** What one call did. `nothing`: nothing is waiting. `merged`: several memories were made into one. `reflected`: the agent looked over what it is doing (brain/agenda.ts). `woken`: something arrived first, and nothing was written. */
@@ -142,7 +150,7 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     'Outcome is how the main thing asked for in this stretch stood when the stretch ended: done when it was finished, failed when it was tried and did not work, '
     + 'dropped when it was given up or set aside, open only when work on it was left unfinished and you meant to go on with it. '
     + 'Your life going on is no reason to say open: most stretches end with something done.',
-    'After the memory you may add up to four lists, each only when there is something for it.',
+    'After the memory you may add up to three lists, each only when there is something for it.',
     'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own>\n'
     + 'A fact is worth a line only if knowing it would change what you do some later week: who your owner is and what they want, how they want things done, '
     + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
@@ -150,7 +158,6 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
     + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
     + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>',
-    'Intentions:\n- [YYYY-MM-DD] <something you took on to do later and have not done; the day it is due>\n- [] <the same, when no day was named>',
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
     + 'An intention left open stays in front of you for good, so close every one this stretch settles.',
@@ -272,7 +279,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
   }
   const lived = events.slice(episode.from, episode.to);
   if (thin(lived)) {
-    appendEvent(d.journal, d.gen, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet', voices: voicesOf(lived) } satisfies MemoryData });
+    put(d, { type: 'note', kind: EPISODE_KIND, data: { ...span(episode), ...QUIET, outcome: 'quiet', voices: voicesOf(lived) } satisfies MemoryData });
     return 'quiet';
   }
 
@@ -316,7 +323,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
     const memory = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in memory)) {
       const { facts, intentions, done, questions, ...kept } = memory;
-      appendEvent(d.journal, d.gen, {
+      put(d, {
         type: 'note', kind: EPISODE_KIND,
         data: { ...span(episode), ...kept, voices: voicesOf(lived), ...(usage ? { usage } : {}) } satisfies MemoryData & { usage?: Usage },
       });
@@ -324,22 +331,23 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       const held = known(asOf);
       for (const fact of facts) {
         const replaces = fact.replaces.map((mark) => byMark(held, mark)).filter((item) => item !== null && held.facts.some((f) => f.id === item.id)).map((item) => item!.id);
-        appendEvent(d.journal, d.gen, {
+        put(d, {
           type: 'note', kind: FACT_KIND,
           data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }) } satisfies FactData,
         });
       }
-      for (const intention of intentions) {
-        appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...intention, episode: episode.first } satisfies IntentionData });
-      }
+      // What the stretch says was taken on is not set down from here. By the time a stretch is
+      // remembered its promises are kept, or already held: they are set down when they are made
+      // (`settle` in brain/agenda.ts, and the agent's own tools). A list an older habit still writes is passed over.
+      void intentions;
       // Only an intention that was open then, named by the mark it was shown with, is closed.
       for (const settled of done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);
-        if (open !== undefined) appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, episode: episode.first } });
+        if (open !== undefined) put(d, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, episode: episode.first } });
       }
       for (const asked of questions) {
         const answer = answering(lived, asked.begins);
-        if (answer !== null) appendEvent(d.journal, d.gen, { type: 'note', kind: EXAM_KIND, data: { question: asked.question, events: [answer.id], episode: episode.first } });
+        if (answer !== null) put(d, { type: 'note', kind: EXAM_KIND, data: { question: asked.question, events: [answer.id], episode: episode.first } });
       }
       return 'remembered';
     }
@@ -350,7 +358,7 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
       { role: 'user', content: `${MEMORY_MARK} That cannot be kept as a memory: ${problem}. Reply again in exactly the form asked for, and call no tool.` },
     ];
   }
-  appendEvent(d.journal, d.gen, { type: 'note', kind: QUARANTINE_KIND, data: { ...span(episode), reason: problem } satisfies QuarantineData });
+  put(d, { type: 'note', kind: QUARANTINE_KIND, data: { ...span(episode), reason: problem } satisfies QuarantineData });
   return 'quarantined';
 }
 
@@ -449,7 +457,7 @@ async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
   };
   // Nothing in them to tell, or only one thing: there is nothing for a model to make one of.
   if (parts.length < 2) {
-    appendEvent(d.journal, d.gen, { type: 'note', kind: MERGE_KIND, data: listed });
+    put(d, { type: 'note', kind: MERGE_KIND, data: listed });
     return 'merged';
   }
   const sizeOfAll = (messages: ChatMessage[]): number => messages.reduce((n, m) => n + sizeOf(m), 0);
@@ -490,7 +498,7 @@ async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
     if (d.signal?.aborted) return 'woken';
     const formed = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseMemory(reply.text, chars);
     if (!('problem' in formed)) {
-      appendEvent(d.journal, d.gen, {
+      put(d, {
         type: 'note', kind: MERGE_KIND,
         data: { ...span, level, title: formed.title, text: formed.text, outcome: formed.outcome, voices, ...(reply.usage ? { usage: reply.usage } : {}) } satisfies MergeData & { usage?: Usage },
       });
@@ -502,6 +510,6 @@ async function merge(d: SleepDeps, events: JournalEvent[]): Promise<Slept> {
       { role: 'user', content: `${MEMORY_MARK} That cannot be kept as a memory: ${formed.problem}. Reply again in exactly the form asked for, and call no tool.` },
     ];
   }
-  appendEvent(d.journal, d.gen, { type: 'note', kind: MERGE_KIND, data: listed });
+  put(d, { type: 'note', kind: MERGE_KIND, data: listed });
   return 'merged';
 }

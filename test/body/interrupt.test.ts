@@ -81,6 +81,7 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
       TENERAL_GEN: commit, TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
       ...(lookAfterEveryTurn ? { TENERAL_REFLECT_AFTER_TURN: '1' } : { TENERAL_REFLECT_AFTER_TURN: '0' }),
+      ...(process.env.TEST_TENERAL_BACKGROUND ? { TENERAL_BACKGROUND: process.env.TEST_TENERAL_BACKGROUND } : {}),
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
       // This test is about interruption, not trimming. Keep enough room after the real composed
       // prompt and tool specifications to show the interrupted exchange on the next request.
@@ -108,6 +109,61 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
   };
   return { dir, journal, owner, workspace, asked, body, events, types, until, lookAfterEveryTurn, stderr: () => stderr };
 }
+
+/** A journal in which one stretch is over and has no memory yet: the owner spoke long ago, so the agent is at rest. */
+const anOldStretch = (journal: string): void => {
+  const lines = readFileSync(journal, 'utf8').trim().split('\n').map(line => JSON.parse(line) as JournalEvent);
+  const gen = lines[0]!.gen;
+  const at = (ms: number): string => new Date(Date.now() - ms).toISOString();
+  const more = [
+    { type: 'stimulus', source: 'terminal', text: 'please set up the mail, use the work address', ts: at(30 * 3_600_000) },
+    { type: 'assistant', text: 'It is set up and a test message arrived.', toolCalls: [], ts: at(30 * 3_600_000 - 1000) },
+    { type: 'stimulus', source: 'terminal', text: 'thanks', ts: at(3_600_000) },
+    { type: 'assistant', text: 'Any time.', toolCalls: [], ts: at(3_600_000 - 1000) },
+  ].map((e, i) => ({ ...e, v: 1, id: `old-${i}`, gen }));
+  writeFileSync(journal, [...lines.map(l => ({ ...l, ts: at(40 * 3_600_000) })), ...more].map(e => `${JSON.stringify(e)}\n`).join(''));
+};
+const MEMORY = 'Title: Setting up the mail\nOutcome: done\n\nMy owner asked me to set up the mail and said "use the work address". I did, and a test message arrived.';
+const memoryAsked = (entry: Asked): boolean => String(entry.messages.at(-1)?.content ?? '').includes('It is time to form a memory');
+
+test('a memory being formed goes on beside the turn that answers what arrived, and is journaled when that turn is over', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let memoryDone = false;
+  const l = life(async (_n, entry) => {
+    if (memoryAsked(entry)) { await hold; memoryDone = true; return reply({ content: MEMORY }); }
+    // The turn calls a tool, so it is still running when the memory comes back.
+    if (entry.messages.some(m => m.role === 'tool')) { await Bun.sleep(400); return says('The file is there.'); }
+    return reply({ content: '', tool_calls: [tool('b1', 'bash', { command: 'true' })] });
+  }, anOldStretch);
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  await l.until('the memory is asked for at rest', () => l.asked.some(memoryAsked));
+  tell(l.owner, 'is the file there?');
+  await l.until('the turn begins beside it', () => l.events().some(e => e.type === 'tool.intent'));
+  // The memory request was not thrown away for the owner's line.
+  expect(l.asked.find(memoryAsked)!.aborted).toBe(false);
+  release();
+  await l.until('the memory has come back', () => memoryDone);
+  await l.until('the owner is answered', () => l.events().some(e => e.type === 'assistant' && e.text === 'The file is there.'));
+  const titled = (e: JournalEvent): boolean => e.type === 'note' && e.kind === 'memory.episode.v1' && (e.data as { title?: unknown }).title === 'Setting up the mail';
+  await l.until('the memory is journaled', () => l.events().some(titled));
+  // Written after the turn's last word, never into the middle of it.
+  expect(l.events().findIndex(titled)).toBeGreaterThan(l.events().findIndex(e => e.type === 'assistant' && e.text === 'The file is there.'));
+  expect(l.asked.filter(memoryAsked)).toHaveLength(1);
+}, 15_000);
+
+test('with TENERAL_BACKGROUND=serial whatever arrives cancels the memory request, as it used to', async () => {
+  process.env.TEST_TENERAL_BACKGROUND = 'serial';
+  try {
+    const l = life(async (_n, entry) => memoryAsked(entry) ? never() : says('Here.'), anOldStretch);
+    await l.until('ready', () => l.types().includes('generation.ready'));
+    await l.until('the memory is asked for at rest', () => l.asked.some(memoryAsked));
+    tell(l.owner, 'are you there?');
+    await l.until('the owner is answered', () => l.events().some(e => e.type === 'assistant' && e.text === 'Here.'));
+    expect(l.asked.find(memoryAsked)!.aborted).toBe(true);
+  } finally { delete process.env.TEST_TENERAL_BACKGROUND; }
+}, 15_000);
 
 const alive = (pid: number): boolean => {
   try {
@@ -154,112 +210,82 @@ test('a terminal line read during a mutation turn is answered before generation 
   expect(needsTurn(l.events())).toBe(false);
 }, 10_000);
 
-test('a reply that records a waiting dependency still gets one bounded look ahead', async () => {
+test('a turn that stops half-way is settled at once, and the step it names wakes the agent with no tick and no reflection', async () => {
+  const l = life((n) => {
+    if (n === 1) return says('The first half is done; I will finish the rest.');
+    // Settling: the turn's own request with one question after it.
+    if (n === 2) return reply({ content: 'Next:\n- Finish the second half of the job => Run the second step and check its output' });
+    if (n === 3) return reply({ content: '', tool_calls: [tool('w1', 'work', { task: 'Finish the second half of the job', status: 'done', next: 'Both halves ran and the output was checked.' })] });
+    if (n === 4) return says('All of it is done now.');
+    return never();
+  }, undefined, true);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  tell(l.owner, 'do the whole job');
+  await l.until('the turn is settled', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.settle.v1'));
+  expect(l.asked[1]!.messages.at(-1)!.content).toContain('Your turn has just ended');
+  expect(known(standing(readEvents(l.journal))).intentions[0]).toMatchObject({ text: 'Finish the second half of the job', work: { status: 'queued', next: 'Run the second step and check its output' } });
+  // The work sensor wakes it for the queued step; nothing else does.
+  await l.until('the queued step is taken', () => l.events().some(e => e.type === 'assistant' && e.text === 'All of it is done now.'), 12_000);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'work')).toHaveLength(1);
+  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(0);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(0);
+  expect(known(standing(readEvents(l.journal))).intentions).toEqual([]);
+  await Bun.sleep(300);
+  // A turn the work sensor woke is not settled again: four requests, and then it rests.
+  expect(l.asked).toHaveLength(4);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.settle.v1')).toHaveLength(1);
+}, 20_000);
+
+test('a turn in which the agent recorded what it waits for is not asked again, and nothing goes to look at what waits', async () => {
   const l = life((n) => {
     if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
-      task: 'Finish the repository change', status: 'waiting', next: 'Wait for the existing check.',
+      task: 'Finish the repository change', status: 'waiting', next: 'The existing check, which reports by itself.',
       outcome: 'The change is merged.', evidence: 'The check is running.',
     })] });
     if (n === 2) return says('Waiting for the check.');
-    if (n === 3) return reply({ content: 'Nothing' });
     return never();
   }, undefined, true);
   await l.until('ready', () => l.types().includes('generation.ready'));
   tell(l.owner, 'finish the repository change');
   await l.until('the dependency answer', () => l.events().some(e => e.type === 'assistant' && e.text === 'Waiting for the check.'));
-  await l.until('the bounded look ahead despite open waiting work', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
-  await l.until('one bounded follow-up for the existing waiting work', () => l.asked.length === 4);
-  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
-  expect(l.events().find(e => e.type === 'stimulus' && e.source === 'clock')).toMatchObject({ text: expect.stringContaining('Wait for the existing check.') });
-  await Bun.sleep(300);
-  expect(l.asked).toHaveLength(4);
+  await Bun.sleep(1500);
+  expect(l.asked).toHaveLength(2);
+  expect(l.events().filter(e => e.type === 'stimulus' && (e.source === 'clock' || e.source === 'work'))).toHaveLength(0);
+  expect(l.events().filter(e => e.type === 'note' && (e.kind === 'memory.settle.v1' || e.kind === 'memory.reflection.v1'))).toHaveLength(0);
+  expect(known(standing(readEvents(l.journal))).intentions[0]!.work).toMatchObject({ status: 'waiting' });
 }, 10_000);
 
-test('a work-source turn cannot cancel a pending reflection and leave waiting work asleep', async () => {
-  const task = 'Publish the verified change';
+test('a record nobody has to answer does not end a request of the agent\'s own; something that calls for a turn does', async () => {
   let release!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; });
   const l = life(async (n) => {
-    if (n === 1) { await hold; return says('Recorded the dependency.'); }
-    if (n === 2) return says('Checked the existing dependency.');
-    if (n === 3) return reply({ content: 'Nothing' });
-    if (n === 4) return says('Still waiting for approval.');
-    return never();
-  }, (journal) => {
-    appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: {
-      text: task, work: { status: 'waiting', next: 'Wait for the existing approval.', attempts: 0, resumeAt: 0 },
-    } });
-  }, true);
-  ends.push(release);
-  await l.until('ready', () => l.types().includes('generation.ready'));
-  tell(l.owner, 'record the dependency');
-  await l.until('the ordinary reply requests a look', () => l.asked.length === 1);
-  // Run the one state transition under inspection synchronously; a watcher would be free to wake
-  // the idle loop between these calls, which is a different ordering from the reported failure.
-  const { afterTurn } = await import('../../heart/coordinator');
-  const heartState = { look: false, pulse: false };
-  appendEvent(l.journal, 'g', { type: 'stimulus', source: 'work', text: `Resume the recorded task. Task: ${task}` });
-  // Keep the assertion about this exact state transition synchronous with the release: a watcher
-  // must not get a free scheduling turn in the middle of the regression's own arrangement.
-  afterTurn(heartState, l.events(), true, 3);
-  release();
-  await l.until('the scheduled work turn finishes', () => l.asked.length >= 2);
-  await l.until('the pending reflection survives the work turn', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
-  await l.until('the existing waiting work gets its bounded follow-up', () => l.asked.length === 4);
-  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'work')).toHaveLength(1);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
-  await Bun.sleep(300);
-  expect(l.asked).toHaveLength(4);
-}, 10_000);
-
-test('closing the last ready commitment reflects and wakes new work immediately', async () => {
-  let mark = '';
-  const l = life((n) => {
-    if (n === 1) return reply({ content: '', tool_calls: [tool('d1', 'done', { intention: mark, how: 'Finished.' })] });
-    if (n === 2) return says('Fixed.');
-    if (n === 3) return reply({ content: 'Agenda:\n- [] The next ready commitment.' });
-    if (n === 4) return reply({ content: '', tool_calls: [tool('d2', 'done', { intention: known(standing(readEvents(l.journal))).intentions.find(i => i.text === 'The next ready commitment.')!.mark, how: 'Finished.' })] });
-    if (n === 5) return says('Continuing.');
-    return never();
-  }, (journal) => {
-    const first = appendEvent(journal, 'g', { type: 'note', kind: 'memory.intention.v1', data: { text: 'The first ready commitment.', origin: 'own', episode: 'fixture' } });
-    mark = `I${first.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 8)}`;
-  }, true);
-  await l.until('ready', () => l.types().includes('generation.ready'));
-  tell(l.owner, 'start');
-  await l.until('the reply that completes the first commitment', () => l.asked.length === 2 || l.events().some(e => e.type === 'assistant' && e.text === 'Fixed.'));
-  await l.until('the immediate reflection', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.reflection.v1'));
-  await l.until('the immediate agenda turn', () => l.asked.length === 5);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
-  await Bun.sleep(300);
-  expect(l.asked).toHaveLength(5);
-  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
-}, 10_000);
-
-test('a reflection that needs an owner decision gets its question turn immediately', async () => {
-  const l = life((n) => {
-    if (n === 1) return reply({ content: '', tool_calls: [tool('w1', 'work', {
-      task: 'The existing answer', status: 'waiting', next: 'Wait for the owner.',
-      outcome: 'The owner answers.', evidence: 'The dependency is recorded.',
-    })] });
-    if (n === 2) return says('Waiting.');
-    if (n === 3) return reply({ content: 'Ask:\n- [] May I publish the prepared correction?' });
-    if (n === 4) return says('I3dbfbe44: may I publish the prepared correction?');
+    if (n === 1) return says('I will look into it.');
+    if (n === 2) { await hold; return reply({ content: 'Waiting:\n- [arrives] Look into the report => The numbers my owner promised to send' }); }
+    if (n === 3) return says('I will look into that as well.');
+    // The second settling is given up for the owner's next line.
+    if (n === 4) return never();
+    if (n === 5) return says('Here.');
     return never();
   }, undefined, true);
+  ends.push(release);
   await l.until('ready', () => l.types().includes('generation.ready'));
-  tell(l.owner, 'record the dependency');
-  await l.until('the reflection produces a question', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.intention.v1' && (e.data as { origin?: unknown }).origin === 'ask' && (e.data as { text?: unknown }).text === 'May I publish the prepared correction?'));
-  await l.until('the pulse asks the new question', () => l.events().some(e => e.type === 'assistant' && e.text.startsWith('I3dbfbe44:')));
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'clock')).toHaveLength(1);
-  expect(l.events().filter(e => e.type === 'stimulus' && e.source === 'terminal')).toHaveLength(1);
-  expect(known(standing(readEvents(l.journal))).intentions.some(i => i.origin === 'ask' && i.put !== undefined)).toBe(true);
-  await Bun.sleep(300);
-  expect(l.asked).toHaveLength(4);
-  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.reflection.v1')).toHaveLength(1);
-}, 10_000);
+  tell(l.owner, 'look into the report');
+  await l.until('settling is under way', () => l.asked.length === 2);
+  // A sensor's checkpoint grows the journal while the request is out. The watcher sees it within a second.
+  appendEvent(l.journal, l.events()[0]!.gen, { type: 'note', kind: 'github.cursor.v1', data: { repository: 'a/b' } });
+  await Bun.sleep(1400);
+  expect(l.asked[1]!.aborted).toBe(false);
+  release();
+  await l.until('the turn is settled all the same', () => l.events().some(e => e.type === 'note' && e.kind === 'memory.settle.v1'));
+  expect(known(standing(readEvents(l.journal))).intentions[0]).toMatchObject({ text: 'Look into the report', work: { status: 'waiting' } });
+
+  tell(l.owner, 'and the other report');
+  await l.until('the second settling is under way', () => l.asked.length === 4);
+  tell(l.owner, 'are you there?');
+  await l.until('the owner is answered first', () => l.events().some(e => e.type === 'assistant' && e.text === 'Here.'));
+  expect(l.asked[3]!.aborted).toBe(true);
+  expect(l.events().filter(e => e.type === 'note' && e.kind === 'memory.settle.v1')).toHaveLength(1);
+}, 15_000);
 
 test('a /heart line during a turn waits for its reply and then takes the agenda turn', async () => {
   let release!: () => void;

@@ -4,7 +4,7 @@ import { formatList, generations } from '../back';
 import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
-import { ownerCommand } from '../../species/offer';
+import { install, ownerCommand, publishing } from '../../species/offer';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
 import { health, healthBadge } from '../../brain/health';
@@ -236,6 +236,8 @@ export class TalkScreen {
   private publishedAt = 0;
   private publishedCommit: string | null = null;
   private publishPending = false;
+  private offersWaiting = 0;
+  private offersUnsent = 0;
   private ticks = 0;
   private readonly asks: Ask[] = [];
   /** One codec pipeline at a time; helper answers still arrive in their original order. */
@@ -862,6 +864,10 @@ export class TalkScreen {
         const shown = clean(lines.join('\n')).split('\n');
         return shown.length <= 2 ? this.say(shown.join(' ')) : this.page('the agent\'s memory', shown);
       }
+      case '/publish': {
+        const lines = clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n');
+        return lines.length === 1 ? this.say(lines[0]!) : this.page('publishing', lines);
+      }
       case '/offers':
       case '/approve': {
         // The owner's word to the stem (immune/approval.ts) or about what goes out (species/offer.ts). The agent is not told by the command itself.
@@ -1067,6 +1073,12 @@ export class TalkScreen {
       this.publishedAt = now;
       this.publishedCommit = p.commit;
       this.publishPending = p.pending;
+      // Only what the owner can act on is worth a place in the status line: that a lineage is ahead of its species is its ordinary state.
+      try {
+        const standing = publishing(install(this.o.paths.root));
+        this.offersWaiting = standing.waits.length;
+        this.offersUnsent = standing.approved.length;
+      } catch { this.offersWaiting = 0; this.offersUnsent = 0; }
     }
     const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
@@ -1138,7 +1150,7 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.publishPending && this.publishedCommit !== null ? [`publish pending ${shortSha(this.publishedCommit)}`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.offersWaiting > 0 ? [`${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you: /publish`] : this.offersUnsent > 0 ? [`${this.offersUnsent} approved, not sent: /publish`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,

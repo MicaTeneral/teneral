@@ -6,6 +6,7 @@ import { runTurn, journalSuffixReads } from '../../brain/loop';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
+import { QUIET_REPLY } from '../../brain/quiet';
 import { decideBudget } from '../../body/adaptive-budget';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { buildMessages } from '../../brain/memory';
@@ -35,6 +36,39 @@ test('a plain reply is journaled and ends the turn', async () => {
   expect(await runTurn({ ...s.deps, onText: (t) => shown.push(t) })).toBe('done');
   expect(readEvents(s.journal).map((e) => e.type)).toEqual(['stimulus', 'note', 'assistant']);
   expect(shown).toEqual(['hello']);
+});
+
+test('repeated no-reply markers on a clock tick become one hidden internal reply', async () => {
+  const repeated = Array.from({ length: 42 }, () => QUIET_REPLY).join('\n\n');
+  const s = setup([{ text: repeated, toolCalls: [] }]);
+  appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'clock', text: 'tick' });
+  const shown: string[] = [];
+  expect(await runTurn({ ...s.deps, onText: (t) => shown.push(t) })).toBe('done');
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: QUIET_REPLY, toolCalls: [] });
+  expect(shown).toEqual([]);
+});
+
+test('a repeated marker mixed into a real reply is not discarded', async () => {
+  const text = `${QUIET_REPLY}\nI found the bug.`;
+  const s = setup([{ text, toolCalls: [] }]);
+  const shown: string[] = [];
+  expect(await runTurn({ ...s.deps, onText: (t) => shown.push(t) })).toBe('done');
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text });
+  expect(shown).toEqual([text]);
+});
+
+test('repeated internal markers on a clock tick become one quiet marker, without hiding real prose', async () => {
+  for (const [text, quiet] of [
+    [Array.from({ length: 12 }, () => QUIET_REPLY).join('\n\n'), true],
+    [`${QUIET_REPLY} I did work.`, false],
+  ] as const) {
+    const s = setup([{ text, toolCalls: [] }]);
+    appendEvent(s.journal, 'g1', { type: 'stimulus', source: 'clock', text: 'tick' });
+    const shown: string[] = [];
+    expect(await runTurn({ ...s.deps, onText: value => shown.push(value) })).toBe('done');
+    expect(readEvents(s.journal).at(-1)).toMatchObject({ text: quiet ? QUIET_REPLY : text, toolCalls: [] });
+    expect(shown).toEqual(quiet ? [] : [text]);
+  }
 });
 
 test('streamed reply text is shown once, while a tool-only reply stays unchanged', async () => {
@@ -742,4 +776,12 @@ test('completion cannot silently shrink an established outcome', async () => {
   await work.run({ task: 'fix', status: 'queued', next: 'implement', outcome: 'tested implementation' }, s.ctx);
   await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
   expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
+});
+
+test('only a line typed at the owner\'s terminal must be answered in words; any other wake may end quietly', async () => {
+  const { mayStayQuiet } = await import('../../brain/loop');
+  expect(mayStayQuiet('terminal')).toBe(false);
+  expect(mayStayQuiet('birth')).toBe(false);
+  expect(mayStayQuiet(undefined)).toBe(false);
+  for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
 });

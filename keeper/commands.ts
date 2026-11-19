@@ -32,6 +32,8 @@ export const COMMANDS: readonly Command[] = [
   // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
   { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },
   { name: '/reasoning', hint: '', about: 'print in full what the model last thought', also: 'Ctrl-R', plain: false },
+  // Answered by `ownerCommand` in species/offer.ts.
+  { name: '/publish', hint: '[commit]', about: 'how the agent\'s work goes out to the species; with a commit, let that offer go', plain: true },
   { name: '/quit', hint: '', about: 'leave', also: 'Ctrl-D on an empty line, and Ctrl-C', plain: true },
 ];
 
