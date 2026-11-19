@@ -2,6 +2,7 @@ import { work } from './work';
 import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { rayboardReply } from './rayboard';
+import { CHAT_TOOLS } from './chat-tools';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { readPeers } from './peers';
@@ -720,4 +721,4 @@ const lesson: Tool = {
   },
 };
 
-export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, forget, lesson];
+export const TOOLS: Tool[] = [lsp, read, write, edit, look, bash, jobs, mutate, send, ...CHAT_TOOLS, zulipReply, zulipHistory, rayboardReply, work, recallTool, open, timeline, intend, done, allowed, forget, lesson];
