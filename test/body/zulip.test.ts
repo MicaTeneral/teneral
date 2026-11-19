@@ -630,3 +630,19 @@ test('a queue registered for reactions alone is not taken up as the bell: after 
   await resumed.poll();
   expect(registered).toEqual(['new']);
 });
+
+test('each direct conversation is a place of its own, by who is in it besides the agent, and every message taken is reported for the record', async () => {
+  const heard: string[] = [];
+  const pages: unknown[][] = [[
+    { id: 1, sender_id: 7, sender_full_name: 'Ann', type: 'private', content: 'hi', display_recipient: [{ id: 99 }, { id: 7 }] },
+    { id: 2, sender_id: 99, sender_full_name: 'Mica', type: 'private', content: 'hello', display_recipient: [{ id: 99 }, { id: 7 }] },
+    { id: 3, sender_id: 8, sender_full_name: 'Bo', type: 'private', content: 'hey', display_recipient: [{ id: 8 }, { id: 99 }, { id: 7 }] },
+  ]];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, heard: (m, how) => heard.push(`${m.sender?.name} in ${m.place}: ${how}`) }, () => {});
+  await p.poll();
+  expect(heard).toEqual(['Ann in dm:7: dm', 'Mica in dm:7: own', 'Bo in dm:7,8: dm']);
+});

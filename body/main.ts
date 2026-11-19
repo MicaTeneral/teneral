@@ -37,7 +37,8 @@ import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { enter, meet, whoLines } from './participants';
-import type { Mode, Speaker } from './chat';
+import type { ChatMessage, Mode, Speaker } from './chat';
+import { HEARD_KIND, openCommunity, type Heard, type How } from './community';
 import { QUIET_RUN, modeOf, typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
@@ -122,7 +123,9 @@ const githubRepositories = (process.env.TENERAL_GITHUB_REPOSITORIES?.trim() || p
 // The agent's past, for `recall` and `open`: asked of the database when its library is pinned and at hand, of the journal itself otherwise.
 const organs = process.env.TENERAL_ORGANS ?? '';
 const past = openPast(journal, organs === '' ? null : libraryAt(organs), (line) => console.error(line));
-const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: () => readEvents(journal) };
+// Who said what where, in the same database when it is at hand: made from the journal's notes at every start.
+const community = openCommunity(past.ray ?? null, readEvents(journal));
+const ctx: ToolContext = { workspace, journal, gen, mutationCommit: null, id: env('TENERAL_ID'), inbox: inboxDir, peers: env('TENERAL_PEERS'), soul: soulDir, past, events: () => readEvents(journal), community };
 // A previous generation's process groups must not write into the candidate under the new gates.
 // Same-generation restarts keep their registry so `jobs` can list and stop them deliberately.
 const stoppedJobs = stopPreviousJobs(journal, gen);
@@ -184,7 +187,16 @@ function listening(service: string, channel: { id: string; name: string }): Mode
 function whoSpeaks(service: string, speakers: Speaker[]): string {
   const events = readEvents(journal);
   const seen = speakers.map((s) => ({ service, id: s.id, name: s.name, ...(s.bot === undefined ? {} : { bot: s.bot }), ...(s.where === undefined ? {} : { met: s.where }) }));
-  return whoLines(events, seen, meet(journal, gen, events, seen));
+  community.refresh(events);
+  return whoLines(events, seen, meet(journal, gen, events, seen), community);
+}
+
+/** Every message a chat sensor takes is noted, for the table of who said what where (body/community.ts). Never its words: those are in the stimulus, when it was shown. */
+function heardOn(service: string): (m: ChatMessage, how: How) => void {
+  return (m, how) => {
+    if (m.sender === undefined) return;
+    appendEvent(journal, gen, { type: 'note', kind: HEARD_KIND, data: { service, id: m.id, place: m.place.replace(/\n/g, ' / '), where: m.where ?? m.place, sender: m.sender.id, name: m.sender.name, how } satisfies Heard });
+  };
 }
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
@@ -286,7 +298,7 @@ const sensors: Sensor[] = [
     // No implicit binding: the owner chooses which API-verified account can speak for them.
     ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
     // Talk on the board is chat like any other: the same attention, the same hands, the same record of who is there.
-    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel),
+    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel), heard: heardOn('rayboard'),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => readEvents(journal),
@@ -329,7 +341,7 @@ const sensors: Sensor[] = [
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
     ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
-    mode: (stream) => listening('zulip', stream),
+    mode: (stream) => listening('zulip', stream), heard: heardOn('zulip'),
     entered: (stream, members) => enter(journal, gen, readEvents(journal), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
