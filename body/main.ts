@@ -31,7 +31,7 @@ import { libraryAt } from '../brain/ray';
 import { memoryHealth, sleep } from '../brain/sleep';
 import { birth, composeSystem } from '../brain/soul';
 import { mail, mailKey } from './mail';
-import { zulip, zulipCredentials, zulipReactionPoller, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
+import { zulipCredentials, zulipLive, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from './zulip';
 import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
@@ -293,26 +293,17 @@ const sensors: Sensor[] = [
     return needsTurn(events) || heldByInterrupt(events);
   }),
   // TENERAL_ZULIP_AMBIENT=0: channel talk that does not address the agent never wakes it, and only accompanies the next message that does.
-  zulip({ conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal), ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage }),
-  // Reactions require an event queue; the existing message poll has no such events.
-  // Delay registration so smoke runs do not depend on Zulip, and checkpoint only after delivery.
-  emit => {
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const reactions = zulipReactionPoller({
-      credentials: () => zulipCredentials(zulipCredentialPath),
-      events: () => readEvents(journal),
-      checkpoint: (cursor: ZulipQueueCursor) => {
-        const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
-        if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
-        appendEvent(journal, gen, { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: cursor });
-      },
-    }, emit);
-    const start = setTimeout(() => {
-      void reactions.poll();
-      timer = setInterval(() => { void reactions.poll(); }, 30_000);
-    }, 60_000);
-    return () => { clearTimeout(start); if (timer) clearInterval(timer); reactions.stop(); };
-  },
+  // One sensor: the message poller, and the event queue that rings it at once for a message, an edit or a deletion and carries reactions.
+  zulipLive({
+    conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
+    ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
+    // Checkpointed only after delivery: a reaction is told of once across restarts.
+    checkpoint: (cursor: ZulipQueueCursor) => {
+      const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
+      if (pending?.type === 'note' && JSON.stringify(pending.data) === JSON.stringify(cursor)) return;
+      appendEvent(journal, gen, { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: cursor });
+    },
+  }),
   mail({
     key: () => mailKey(process.env, mailConfigPath),
     events: () => readEvents(journal),

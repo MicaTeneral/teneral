@@ -4,7 +4,7 @@ import type { Stimulus } from '../../body/sensors';
 
 // The layer is driven here by a service that does not exist: nothing in it may know of a real one.
 const WORDS: ChatWords = {
-  title: 'Parley', name: 'parley', kinds: { direct: 'whisper', mention: 'call', channel: 'room' },
+  title: 'Parley', name: 'parley', kinds: { direct: 'whisper', mention: 'call', channel: 'room', edit: 'change' },
   source: 'agent:parley', ownerSource: 'owner:parley', reply: 'chat_reply', history: 'chat_history', channels: 'rooms',
 };
 function room(more: Partial<Parameters<typeof chat>[0]> = {}) {
@@ -89,4 +89,37 @@ test('a name is found as a word of its own, in any script', () => {
   expect(namedIn('the formica table', 'Mica Teneral')).toBe(false);
   expect(namedIn('спроси Мику', 'Мику')).toBe(true);
   expect(namedIn('ask Al', 'Al')).toBe(false);
+});
+
+test('a changed message is rewritten where it waits, a deleted one is no longer a reason to speak, and an edit of what woke the agent is told as that', async () => {
+  const r = room();
+  await r.c.take(r.said('which prot is it?'));
+  r.c.revise(1, '{"content":"which port is it?"}');
+  r.after(60_000);
+  expect(r.got).toHaveLength(1);
+  expect(r.got[0]!.text).toContain('room 1\n{"content":"which port is it?"}');
+  expect(r.got[0]!.text).not.toContain('prot');
+
+  await r.c.take(r.said('never mind', { place: 'lobby/other' }));
+  r.c.forget(2);
+  r.after(600_000);
+  expect(r.got).toHaveLength(1);
+
+  await r.c.take(r.said('can you deploy on Friday?', { kind: 'direct', place: 'dm/7' }));
+  await r.c.take({ ...r.said('can you deploy on Thursday?', { kind: 'direct', place: 'dm/7' }), id: 3, again: true });
+  expect(r.got).toHaveLength(3);
+  expect(r.got[2]!.text).toStartWith('Parley change 3\n');
+  expect(r.got[2]!.text).toContain('Its sender changed a message you were already shown');
+  expect(r.got[2]!.text).toContain('For a mended word, answer exactly [teneral: no reply]');
+  expect(r.got[2]!.text).not.toContain('this message is addressed to you, so answer it');
+});
+
+test('what the agent should know with its next wake is said once', async () => {
+  const r = room();
+  r.c.tell('The connection to Parley was down for about 5 minutes.');
+  r.c.tell('The connection to Parley was down for about 5 minutes.');
+  await r.c.take(r.said('hello', { kind: 'direct', place: 'dm/7' }));
+  expect(r.got[0]!.text.split('The connection to Parley was down')).toHaveLength(2);
+  await r.c.take(r.said('again', { kind: 'direct', place: 'dm/7' }));
+  expect(r.got[1]!.text).not.toContain('was down');
 });

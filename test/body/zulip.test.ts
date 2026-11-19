@@ -452,3 +452,134 @@ test('a message that quotes the agent is taken as an answer to it, and is shown 
   await other.poll([other.say(8, '@_**Ann|7** [said](https://example.test/#narrow/near/90):\n```quote\nhm\n```\nagreed')]);
   expect(other.got).toHaveLength(0);
 });
+
+// --- edits, deletions, the event queue as a bell, and a connection that was down ---
+
+/** A poller whose /messages pages and single messages are scripted; `clock` moves by 30 s a poll. */
+function live(more: { ownerId?: number } = {}) {
+  const c = channel({ users: people, ...more });
+  return c;
+}
+
+test('an edit rewrites talk that still waits; a mention added by an edit wakes the agent; an edit of what woke it is told as an edit', async () => {
+  const got: Stimulus[] = [];
+  const pages: unknown[][] = [];
+  const single = new Map<number, unknown>();
+  const clock = { at: 1_800_000_000_000 };
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica Teneral' }));
+    if (url.pathname === '/api/v1/users') return new Response(JSON.stringify(people));
+    const one = /^\/api\/v1\/messages\/(\d+)$/.exec(url.pathname);
+    if (one) return single.has(Number(one[1])) ? new Response(JSON.stringify({ message: single.get(Number(one[1])) })) : new Response('{}', { status: 400 });
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true, ambient: true, now: () => clock.at }, s => got.push(s));
+  const msg = (id: number, sender_id: number, content: string, extra: Record<string, unknown> = {}) => ({ id, sender_id, sender_full_name: `user ${sender_id}`, type: 'stream', stream_id: 5, subject: 'plans', content, flags: [], ...extra });
+  const poll = async (messages: unknown[] = []) => { clock.at += 30_000; pages.push(messages); await p.poll(); };
+
+  // Talk that waits for its pause is shown as it reads when it is shown.
+  await poll([msg(1, 7, 'which prot is it?')]);
+  single.set(1, msg(1, 7, 'which port is it?', { last_edit_timestamp: 1 }));
+  p.edited([1]);
+  await poll(); await poll();
+  expect(got).toHaveLength(1);
+  expect(got[0]!.text).toContain('which port is it?');
+  expect(got[0]!.text).not.toContain('prot');
+
+  // A mention added afterwards addresses the agent now.
+  await poll([msg(2, 8, 'does anyone know?')]);
+  single.set(2, msg(2, 8, '@**Mica Teneral** do you know?', { flags: ['mentioned'] }));
+  p.edited([2]);
+  await poll();
+  expect(got).toHaveLength(2);
+  expect(got[1]!.text).toStartWith('Zulip mention 2\n');
+
+  // The question it was woken for was changed: told as an edit, not as a new message.
+  single.set(2, msg(2, 8, '@**Mica Teneral** do you know the port?', { flags: ['mentioned'], last_edit_timestamp: 2 }));
+  p.edited([2]);
+  await poll();
+  expect(got).toHaveLength(3);
+  expect(got[2]!.text).toStartWith('Zulip edit 2\n');
+  expect(got[2]!.text).toContain('Its sender changed a message you were already shown');
+  expect(got[2]!.text).toContain('do you know the port?');
+
+  // Taken back before the pause: nothing left to wake for. An edit of a message that is gone tells nothing.
+  await poll([msg(3, 7, 'oops wrong channel')]);
+  p.deleted([3]);
+  p.edited([404]);
+  await poll(); await poll(); await poll();
+  expect(got).toHaveLength(3);
+});
+
+test('the event queue is the bell: a message rings the poller, edits and deletions are handed over, and only a reaction is worth a checkpoint', async () => {
+  const rung: string[] = [];
+  const checkpoints: unknown[] = [];
+  const asked: URL[] = [];
+  const batches: unknown[][] = [
+    [{ id: 1, type: 'message' }, { id: 2, type: 'heartbeat' }],
+    [{ id: 3, type: 'update_message', message_id: 40 }, { id: 4, type: 'update_message', message_id: 41, rendering_only: true }, { id: 5, type: 'delete_message', message_ids: [42, 43] }],
+    [{ id: 6, type: 'reaction', op: 'add', message_id: 40, user_id: 7, emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji' }],
+  ];
+  let first = true;
+  const send = (async (url: URL, init: RequestInit = {}) => {
+    asked.push(new URL(String(url)));
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/register') {
+      expect(new URLSearchParams(String(init.body)).get('event_types')).toBe('["reaction","message","update_message","delete_message"]');
+      return new Response(JSON.stringify({ queue_id: 'q1', last_event_id: 0 }));
+    }
+    if (first) { first = false; return new Response(JSON.stringify({ events: [] })); }
+    return new Response(JSON.stringify({ events: batches.shift() ?? [] }));
+  }) as unknown as typeof fetch;
+  const got: Stimulus[] = [];
+  const q = zulipReactionPoller({ credentials, events: () => [], send, wide: true, block: true, checkpoint: c => { checkpoints.push(c); },
+    on: { message: () => rung.push('message'), edited: ids => rung.push(`edited ${ids}`), deleted: ids => rung.push(`deleted ${ids}`) } }, s => got.push(s));
+  // A new queue knows nothing of what was said while there was none: the messages are fetched from their own cursor.
+  expect(await q.poll()).toBe(true);
+  expect(rung).toEqual(['message']);
+  expect(checkpoints).toHaveLength(1);
+  expect(await q.poll()).toBe(true);
+  expect(rung).toEqual(['message', 'message']);
+  expect(await q.poll()).toBe(true);
+  expect(rung.slice(2)).toEqual(['edited 40', 'deleted 42,43']);
+  // Nothing of those is a reaction: no note is journaled for them.
+  expect(checkpoints).toHaveLength(1);
+  expect(await q.poll()).toBe(true);
+  expect(got).toHaveLength(1);
+  expect(checkpoints).toHaveLength(2);
+  // It waits at the server, and asks on from the last event it saw.
+  const events = asked.filter(u => u.pathname === '/api/v1/events');
+  expect(events.at(-1)!.searchParams.get('dont_block')).toBeNull();
+  expect(events.at(-1)!.searchParams.get('last_event_id')).toBe('5');
+  // No credentials, or a failure: false, so that the caller waits before asking again.
+  expect(await zulipReactionPoller({ credentials: () => undefined, events: () => [], send }, () => {}).poll()).toBe(false);
+});
+
+test('a connection that was down for a while is said to the agent once, with its next wake', async () => {
+  const c = live();
+  let down = true;
+  const got: Stimulus[] = [];
+  const clock = { at: 1_800_000_000_000 };
+  const pages: unknown[][] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (down) return new Response('{}', { status: 502 });
+    return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, now: () => clock.at }, s => got.push(s));
+  for (let i = 0; i < 4; i++) { clock.at += 60_000; await p.poll(); }
+  down = false;
+  clock.at += 60_000;
+  pages.push([{ id: 9, sender_id: 7, type: 'private', content: 'are you there?' }]);
+  await p.poll();
+  // Heard in the same poll that found the connection back, so it is told with the one after.
+  pages.push([{ id: 10, sender_id: 7, type: 'private', content: 'hello?' }]);
+  await p.poll();
+  expect(got).toHaveLength(2);
+  expect(got[1]!.text).toContain('The connection to Zulip was down for about 4 minutes');
+  pages.push([{ id: 11, sender_id: 7, type: 'private', content: 'ok' }]);
+  await p.poll();
+  expect(got[2]!.text).not.toContain('was down');
+  expect(c.got).toHaveLength(0);
+});

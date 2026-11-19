@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { IMAGE_MAX_BYTES } from './images';
 import type { JournalEvent } from '../brain/journal';
 import type { Sensor, Stimulus } from './sensors';
-import { chat, type ChatWords } from './chat';
+import { chat, type ChatMessage, type ChatWords } from './chat';
 
 interface Credentials { site: string; email: string; api_key: string }
 export function zulipCredentials(path: string): Credentials | undefined {
@@ -34,14 +34,21 @@ interface Options {
   ambient?: boolean;
   /** False: with nothing heard yet, the newest hundred messages are taken as new, as they once were. */
   baseline?: boolean;
+  /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
+  wide?: boolean;
+  /** Of the event queue: a request waits at the server until something happens, instead of returning at once. */
+  block?: boolean;
+  on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void };
   now?: () => number;
 }
 
 const BOTS_REFRESH_MS = 3_600_000;
 const BOTS_RETRY_MS = 5 * 60_000;
+/** Failed polls in a row after which the connection is said to have been down. */
+const DOWN_AFTER = 3;
 /** How Zulip is spoken of in what the agent is told (body/chat.ts). */
 const WORDS: ChatWords = {
-  title: 'Zulip', name: 'zulip', kinds: { direct: 'private', mention: 'mention', channel: 'stream' },
+  title: 'Zulip', name: 'zulip', kinds: { direct: 'private', mention: 'mention', channel: 'stream', edit: 'edit' },
   source: SOURCE, ownerSource: OWNER_SOURCE, reply: 'chat_reply', history: 'chat_history', channels: 'streams',
 };
 export { namedIn } from './chat';
@@ -92,6 +99,12 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   let bots: Set<number> | undefined, botsAt = 0;
   /** Where listening began when nothing had ever been heard: kept in memory, since no stimulus holds it yet. */
   let began = 0;
+  // The messages the agent was woken for as addressed to it: an edit of one of those is worth telling it of.
+  const addressed = new Set<number>();
+  // Edits and deletions the event queue told of, taken up at the next poll so that everything happens in one order.
+  const changed = new Set<number>(), gone = new Set<number>();
+  // Polls that failed in a row, and since when: said to the agent once the connection is back.
+  let failures = 0, downSince = 0;
   // When a message wakes the agent and what it is told is the same for every service (body/chat.ts).
   const attention = chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now });
   for (const e of o.events()) {
@@ -100,6 +113,57 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       // The first line names the message id, now by kind ("Zulip private 12", "Zulip mention 34").
       const id = Number(line.split(/\s+/).pop());
       if (Number.isSafeInteger(id)) cursor = Math.max(cursor, id);
+      if (Number.isSafeInteger(id) && /^Zulip (private|mention|edit) /.test(line)) addressed.add(id);
+    }
+  }
+  const text = (v: unknown, limit: number) => typeof v === 'string' ? v.slice(0, limit) : '';
+  /** A Zulip message as the chat layer takes it. Identity is the API's, never a display name or message content. */
+  function toChat(c: Credentials, m: any, again = false): ChatMessage {
+    const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
+    const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
+    return {
+      id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
+      own: m.sender_id === identity!.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000), ...(again ? { again } : {}),
+      // Zulip's quote-and-reply names the quoted author by a silent mention with their id.
+      answers: text(m.content, 6000).includes(`|${identity!.id}** [`),
+      line: JSON.stringify({
+        sender_id: m.sender_id, sender: text(m.sender_full_name, 200),
+        type: m.type, stream_id: m.stream_id, ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { stream: text(m.display_recipient, 100) } : {}), topic: text(m.subject, 200),
+        mentioned, self: false,
+        timestamp: m.timestamp, ...(Number.isSafeInteger(m.timestamp) ? { at: new Date(m.timestamp * 1000).toISOString() } : {}),
+        ...(m.last_edit_timestamp ? { edited: true } : {}), content: text(m.content, 6000),
+      }),
+      // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
+      // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
+      ...(owner && o.keepImage ? { more: async () => attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch) } : {}),
+    };
+  }
+  /** What the event queue told of since the last poll: messages changed by their senders, and messages taken back. */
+  async function changes(c: Credentials): Promise<void> {
+    for (const id of [...gone]) {
+      attention.forget(id);
+      gone.delete(id);
+      changed.delete(id);
+    }
+    for (const id of [...changed]) {
+      // Only what was already fetched can have changed under the agent; a newer message comes as itself.
+      if (id > cursor) { changed.delete(id); continue; }
+      const r = await (o.send ?? fetch)(new URL(`/api/v1/messages/${id}?apply_markdown=false`, c.site), {
+        headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') }, signal: AbortSignal.timeout(15_000), redirect: 'error',
+      });
+      // Gone, or no longer the agent's to read: nothing to tell.
+      if (!r.ok) { changed.delete(id); attention.forget(id); continue; }
+      const m = (await r.json() as any).message;
+      if (!m || !Number.isSafeInteger(m.id) || m.sender_id === identity!.id) { changed.delete(id); continue; }
+      const now = toChat(c, m);
+      if (addressed.has(id)) await attention.take({ ...now, again: true });
+      else if (now.kind === 'direct' || now.mentioned) {
+        // A mention added by an edit addresses the agent now, though the message is not new.
+        attention.forget(id);
+        await attention.take(now);
+        addressed.add(id);
+      } else attention.revise(id, now.line);
+      changed.delete(id);
     }
   }
   async function poll() {
@@ -166,33 +230,15 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       // apply_markdown=false omits the HTML image URLs; request it for authenticated owner uploads.
   const messages = d.messages.filter((m: any) => m && Number.isSafeInteger(m.id) && m.id > cursor)
         .sort((a: any, b: any) => a.id - b.id);
-      const text = (v: unknown, limit: number) => typeof v === 'string' ? v.slice(0, limit) : '';
       for (const m of messages) {
         if (stopped) return;
-        // Use authenticated API identity, never a display name or message content.
-        const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
-        const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
-        const direct = m.type === 'private';
-        await attention.take({
-          id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: direct ? 'direct' : 'channel',
-          own: m.sender_id === identity.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000),
-          // Zulip's quote-and-reply names the quoted author by a silent mention with their id.
-          answers: text(m.content, 6000).includes(`|${identity.id}** [`),
-          line: JSON.stringify({
-            sender_id: m.sender_id, sender: text(m.sender_full_name, 200),
-            type: m.type, stream_id: m.stream_id, ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { stream: text(m.display_recipient, 100) } : {}), topic: text(m.subject, 200),
-            mentioned, self: false,
-            timestamp: m.timestamp, ...(Number.isSafeInteger(m.timestamp) ? { at: new Date(m.timestamp * 1000).toISOString() } : {}),
-            ...(m.last_edit_timestamp ? { edited: true } : {}), content: text(m.content, 6000),
-          }),
-          // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
-          // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
-          ...(owner && o.keepImage ? { more: async () => attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch) } : {}),
-        });
+        await attention.take(toChat(c, m));
+        if (m.type === 'private' || (Array.isArray(m.flags) && m.flags.includes('mentioned'))) addressed.add(m.id);
         // Advanced only when the message was taken: a stimulus that could not be journaled is fetched again,
         // and a page of the agent's own messages still moves on so later traffic is reachable.
         cursor = m.id;
       }
+      if (!stopped && changed.size + gone.size > 0) await changes(c);
       if (!stopped) attention.paused();
       if (o.conversations && !stopped) {
         const presence = await (o.send ?? fetch)(new URL('/api/v1/users/me/presence', c.site), { method: 'POST',
@@ -201,12 +247,26 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         if (!presence.ok) throw new Error('Presence failed');
       }
       failed = false;
+      if (failures >= DOWN_AFTER) {
+        // Nothing was lost: the cursor fetched what was said meanwhile. The agent is told why it comes late.
+        const minutes = Math.max(1, Math.round((now() - downSince) / 60_000));
+        attention.tell(`The connection to Zulip was down for about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} until ${new Date(now()).toISOString().slice(11, 16)} UTC; what was said meanwhile reaches you late.`);
+        console.error(`[zulip] connected again after ${minutes} min`);
+      }
+      failures = 0;
     } catch {
       if (!failed && !stopped) console.error('[zulip] DM poll failed; will retry (credentials and response omitted).');
       failed = true;
+      if (failures === 0) downSince = now();
+      failures += 1;
     } finally { busy = false; }
   }
-  return { poll, stop: () => { stopped = true; } };
+  return {
+    poll, stop: () => { stopped = true; },
+    /** From the event queue: these messages were changed by their senders, or taken back. Taken up at the next poll. */
+    edited: (ids: number[]) => { for (const id of ids) changed.add(id); },
+    deleted: (ids: number[]) => { for (const id of ids) gone.add(id); },
+  };
 }
 export function zulip(o: Options): Sensor {
   return emit => {
@@ -214,6 +274,37 @@ export function zulip(o: Options): Sensor {
     void p.poll();
     const timer = setInterval(() => { void p.poll(); }, 30_000);
     return () => { clearInterval(timer); p.stop(); };
+  };
+}
+
+/**
+ * Zulip as one sensor: the message poller, and an event queue that waits at the server and rings
+ * the moment something is said, changed or taken back. The poller's own cursor stays what orders
+ * messages and finds what was missed, so a queue that expires or a process that was down loses
+ * nothing; the half-minute poll goes on beside it, as the fallback and for presence.
+ */
+export function zulipLive(o: Options, startMs = 60_000): Sensor {
+  return emit => {
+    const messages = zulipPoller(o, emit);
+    let stopped = false;
+    const soon = (): void => { void messages.poll(); };
+    void messages.poll();
+    const timer = setInterval(soon, 30_000);
+    const queue = zulipReactionPoller({ ...o, wide: true, block: true, on: {
+      message: soon,
+      edited: (ids) => { messages.edited(ids); soon(); },
+      deleted: (ids) => { messages.deleted(ids); soon(); },
+    } }, emit);
+    // Registration is delayed so that a smoke run does not depend on Zulip.
+    const start = setTimeout(async () => {
+      let wait = 0;
+      while (!stopped) {
+        // Without credentials, or after a failure, it waits before asking again: two seconds, then twice as long, up to a minute.
+        wait = (await queue.poll()) ? 0 : Math.min(60_000, Math.max(2000, wait * 2));
+        if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+      }
+    }, startMs);
+    return () => { stopped = true; clearInterval(timer); clearTimeout(start); messages.stop(); queue.stop(); };
   };
 }
 
@@ -259,9 +350,9 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       }
     }
   }
-  async function request(c: Credentials, path: string, init: RequestInit = {}): Promise<any> {
+  async function request(c: Credentials, path: string, init: RequestInit = {}, ms = 15_000): Promise<any> {
     const response = await send(new URL(path, c.site), {
-      ...init, redirect: 'error', signal: AbortSignal.timeout(15_000),
+      ...init, redirect: 'error', signal: AbortSignal.timeout(ms),
       headers: { ...init.headers, Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
     });
     const result = await response.json();
@@ -273,12 +364,12 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
     }
     return result;
   }
-  async function poll() {
-    if (stopped || busy) return;
+  async function poll(): Promise<boolean> {
+    if (stopped || busy) return false;
     busy = true;
     try {
       const c = o.credentials();
-      if (!c) return;
+      if (!c) return false;
       const key = JSON.stringify([c.site, c.email, c.api_key]);
       if (identity?.key !== key) {
         identity = undefined;
@@ -289,7 +380,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       restore(c);
       if (!cursor) {
         const registered = await request(c, '/api/v1/register', { method: 'POST', body: new URLSearchParams({
-          event_types: JSON.stringify(['reaction']), fetch_event_types: JSON.stringify(['reaction']),
+          event_types: JSON.stringify(o.wide ? ['reaction', 'message', 'update_message', 'delete_message'] : ['reaction']), fetch_event_types: JSON.stringify(['reaction']),
           client_capabilities: JSON.stringify({ notification_settings_null: true }),
         }) });
         if (typeof registered.queue_id !== 'string' || !Number.isSafeInteger(registered.last_event_id) || registered.last_event_id < -1) throw new Error('Invalid Zulip queue');
@@ -300,7 +391,9 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         cursor = { queueId: registered.queue_id, eventId, site: c.site, email: c.email };
         o.checkpoint?.(cursor);
         failed = false;
-        return;
+        // A new queue knows nothing of what was said while there was none: have the messages fetched from their own cursor.
+        o.on?.message();
+        return true;
       }
       const active = cursor;
       for (const event of o.events()) {
@@ -311,8 +404,9 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
           if (typeof d.queue_id === 'string' && Number.isSafeInteger(d.event_id)) delivered.add(`${d.queue_id}:${d.event_id}`);
         } catch { /* a malformed historical stimulus is not delivered evidence */ }
       }
-      const result = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: active.queueId, last_event_id: String(active.eventId), dont_block: 'true' })}`);
-      if (result.expired) { cursor = undefined; return; }
+      // Waiting at the server, a request returns the moment something happens, or after about a minute and a half with a heartbeat.
+      const result = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: active.queueId, last_event_id: String(active.eventId), ...(o.block ? {} : { dont_block: 'true' }) })}`, {}, o.block ? 110_000 : 15_000);
+      if (result.expired) { cursor = undefined; return true; }
       if (!Array.isArray(result.events)) throw new Error('Invalid Zulip event list');
       const reactions = result.events.filter((event: any) => event?.type === 'reaction').sort((a: any, b: any) => a.id - b.id);
       if (reactions.length > MAX_REACTIONS) throw new Error('Zulip reaction batch limit');
@@ -322,7 +416,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         if (event.id > eventId) eventId = event.id;
       }
       for (const event of reactions) {
-        if (stopped) return;
+        if (stopped) return false;
         if (event.id <= active.eventId) continue;
         if (event.op !== 'add' && event.op !== 'remove') throw new Error('Invalid Zulip reaction operation');
         if (!Number.isSafeInteger(event.message_id) || !Number.isSafeInteger(event.user_id) ||
@@ -338,12 +432,27 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         })}` });
         delivered.add(delivery);
       }
+      if (o.wide) {
+        // The queue is only the bell for what is not a reaction: messages are fetched from their own
+        // cursor, which is what orders them, keeps them once and finds what was missed.
+        const news = result.events.filter((event: any) => event.id > active.eventId);
+        if (news.some((event: any) => event.type === 'message')) o.on?.message();
+        const ids = (event: any): number[] => (Array.isArray(event.message_ids) ? event.message_ids : [event.message_id]).filter((id: unknown): id is number => Number.isSafeInteger(id));
+        const edited = news.filter((event: any) => event.type === 'update_message' && event.rendering_only !== true).flatMap(ids);
+        const deleted = news.filter((event: any) => event.type === 'delete_message').flatMap(ids);
+        if (edited.length > 0) o.on?.edited([...new Set<number>(edited)]);
+        if (deleted.length > 0) o.on?.deleted([...new Set<number>(deleted)]);
+      }
       // Checkpoint only after all emits return. A partial retry is deduplicated from the journal.
-      o.checkpoint?.({ ...active, eventId });
+      // A wide queue moves with every message and heartbeat: only what bears on a reaction is worth a note.
+      if (!o.wide || reactions.some((event: any) => event.id > active.eventId)) o.checkpoint?.({ ...active, eventId });
+      if (o.wide) cursor = { ...active, eventId };
       failed = false;
+      return true;
     } catch {
       if (!failed && !stopped) console.error('[zulip] reaction queue failed; will retry (credentials and response omitted).');
       failed = true;
+      return false;
     } finally { busy = false; }
   }
   return { poll, stop: () => { stopped = true; } };
