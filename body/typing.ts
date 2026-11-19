@@ -108,14 +108,26 @@ export function rayboardTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus
 export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefined; lastTarget?: RayboardTypingTarget; send?: typeof fetch; refreshMs?: number; signal?: AbortSignal }): TypingStatus {
   const refreshMs = o.refreshMs ?? 30_000;
   let active = false, stopped = false, timer: ReturnType<typeof setInterval> | undefined;
-  const send = async (composing: boolean): Promise<void> => {
-    const target = o.target();
-    if (composing && (!target || stopped)) return;
+  let sent: Promise<void> = Promise.resolve();
+  let pending = false;
+  const send = async (composing: boolean, target: RayboardTypingTarget): Promise<void> => {
     try {
-      const token = (await Bun.file((target ?? o.lastTarget)!.tokenFile).text()).trim();
+      const token = (await Bun.file(target.tokenFile).text()).trim();
       if (!token) return;
-      await (o.send ?? fetch)((target ?? o.lastTarget)!.url + '/api/call/typing', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: (target ?? o.lastTarget)!.subject, composing, ...(composing ? { hold: 60 } : {}) }), redirect: 'error', signal: AbortSignal.timeout(5_000) });
+      await (o.send ?? fetch)(target.url + '/api/call/typing', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: target.subject, composing, ...(composing ? { hold: 60 } : {}) }), redirect: 'error', signal: AbortSignal.timeout(5_000) });
     } catch { /* the answer must not depend on a presence indicator */ }
+  };
+  // Token I/O yields. Preserve invocation order so stop cannot overtake a start still reading its token.
+  const queue = (composing: boolean): void => {
+    if (composing && stopped) return;
+    const target = o.lastTarget;
+    pending ||= composing;
+    sent = sent.then(async () => {
+      const next = pending; pending = false;
+      if (target === undefined) return;
+      if (next) await send(true, target);
+      if (stopped && !next) await send(false, target);
+    });
   };
   const abort = () => status(false);
   o.signal?.addEventListener('abort', abort, { once: true });
@@ -125,14 +137,14 @@ export function rayboardTyping(o: { target: () => RayboardTypingTarget | undefin
     if (next && !active) {
       o.lastTarget = o.target();
       active = true;
-      void send(true);
-      timer = setInterval(() => void send(true), refreshMs);
+      void queue(true);
+      timer = setInterval(() => queue(true), refreshMs);
     }
     if (!next) {
       stopped = true; active = false;
       if (timer) clearInterval(timer);
       o.signal?.removeEventListener('abort', abort);
-      void send(false);
+      void queue(false);
     }
   };
   return status;
