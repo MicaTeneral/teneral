@@ -38,6 +38,8 @@ interface Options {
   who?: (speakers: Speaker[]) => string;
   /** Asked once for each stream a message comes from, with who the service says is subscribed: see `entered` in body/chat.ts. */
   entered?: (stream: { id: string; name: string }, members: { id: string; name: string; bot?: boolean }[] | null) => string;
+  /** Told of every message taken: see `heard` in body/chat.ts. */
+  heard?: (m: ChatMessage, how: 'own' | 'dm' | 'mention' | 'quote' | 'name' | 'follow' | 'none') => void;
   /** How the agent listens in a stream: see `mode` in body/chat.ts. */
   mode?: (stream: { id: string; name: string }) => Mode;
   /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
@@ -135,7 +137,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const attention = chat({
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
-    ...(o.mode ? { mode: o.mode } : {}),
+    ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}),
   });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
@@ -147,12 +149,18 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     }
   }
   const text = (v: unknown, limit: number) => typeof v === 'string' ? v.slice(0, limit) : '';
+  /** The others in a direct conversation, by id, in order; its sender alone when the service names no recipients. */
+  const direct = (m: any): number[] => {
+    const ids = Array.isArray(m.display_recipient) ? m.display_recipient.map((p: any) => p?.id).filter((id: unknown): id is number => Number.isSafeInteger(id) && id !== identity!.id) : [];
+    return (ids.length > 0 ? ids : [m.sender_id]).sort((x: number, y: number) => x - y);
+  };
   /** A Zulip message as the chat layer takes it. Identity is the API's, never a display name or message content. */
   function toChat(c: Credentials, m: any, again = false): ChatMessage {
     const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
     const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
     return {
-      id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
+      // A direct conversation is a place of its own, by who is in it besides the agent.
+      id: m.id, place: m.type === 'private' ? `dm:${direct(m).join(',')}` : `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
       ...(Number.isSafeInteger(m.sender_id) ? { sender: { id: String(m.sender_id), name: text(m.sender_full_name, 200) || `user ${m.sender_id}` } } : {}),
       ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { where: `#${text(m.display_recipient, 100)}` } : m.type === 'private' ? { where: 'a direct message' } : {}),
       ...(m.type === 'stream' && Number.isSafeInteger(m.stream_id) ? { channel: { id: String(m.stream_id), name: `#${text(m.display_recipient, 100) || m.stream_id}` } } : {}),

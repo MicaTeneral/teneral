@@ -142,3 +142,18 @@ test('a channel is listened to as the agent chose: muted talk is not kept, menti
   expect(r.got[1]!.text).toContain('context only');
   expect(r.got[1]!.text).not.toContain('never kept');
 });
+
+test('every message taken is reported with how it addressed the agent, its own included; talk in a muted channel is not heard at all', async () => {
+  const heard: string[] = [];
+  const r = room({ heard: (m, how) => heard.push(`${m.id} ${how}`), mode: (channel) => (channel.id === 'm' ? 'muted' : 'ambient') });
+  await r.c.take(r.said('just talking'));
+  await r.c.take(r.said('maybe mica knows'));
+  await r.c.take(r.said('quoting you', { answers: true }));
+  await r.c.take(r.said('a call', { mentioned: true }));
+  await r.c.take(r.said('my own words', { own: true }));
+  await r.c.take(r.said('after you spoke'));
+  await r.c.take(r.said('a whisper', { kind: 'direct', place: 'dm/7' }));
+  await r.c.take(r.said('in a muted room', { place: 'm', channel: { id: 'm', name: '#muted' } }));
+  await r.c.take(r.said('named in a muted room, mica', { place: 'm', channel: { id: 'm', name: '#muted' }, mentioned: true }));
+  expect(heard).toEqual(['1 none', '2 name', '3 quote', '4 mention', '5 own', '6 follow', '7 dm', '9 mention']);
+});

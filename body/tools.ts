@@ -2,6 +2,7 @@ import { work } from './work';
 import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
 import { zulipReply, zulipHistory } from './zulip-tools';
 import { CHAT_TOOLS } from './chat-tools';
+import type { Community } from './community';
 import { rayboardReply } from './rayboard-tools';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -37,6 +38,8 @@ export interface ToolContext {
   soul: string;
   /** The agent's past, for the tools that ask it. body/main.ts opens it over the database when there is one; a context without it reads the journal through. */
   past?: Past;
+  /** Who said what where, laid out for asking (body/community.ts). A context without it goes through the journal's notes. */
+  community?: Community;
 }
 
 export interface Tool {

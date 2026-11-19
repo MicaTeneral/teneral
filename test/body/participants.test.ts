@@ -104,7 +104,8 @@ test('the first time the agent hears from a place it is told who is there, and e
 // --- contacts: circles, characteristics, indicators ---
 
 import { contact } from '../../body/chat-tools';
-import { contacts, indicators } from '../../body/participants';
+import { contacts } from '../../body/participants';
+import { HEARD_KIND, openCommunity } from '../../body/community';
 
 /** A journal in which Ann, a bot and another agent were met, and the owner has spoken. */
 function met() {
@@ -156,30 +157,40 @@ test('characteristics are the agent\'s to keep and to take away, and two account
   await expect(contact.run({ who: 'parley:7', same_as: 'parley:7', words: 'Ann Lee is my colleague' }, ctx)).rejects.toThrow('that is the same account');
 });
 
-test('indicators are counted from the journal: how often someone was heard and answered, over all their accounts', async () => {
+test('indicators come from every message heard, over all of a contact\'s accounts, and stand in front of the agent when they speak', async () => {
   const { journal, ctx } = met();
-  const heard = (key: string): void => { appendEvent(journal, 'g', { type: 'stimulus', source: 'agent:parley', text: `Parley call 9\nhello\nWho is speaking, and what you know of each:\n- Someone (${key}, not a bot, by the service, in no circle yet): nothing` }); };
-  heard('parley:7');
-  appendEvent(journal, 'g', { type: 'tool.intent', callId: 'c1', name: 'chat_reply', args: {} });
-  heard('parley:7');
-  appendEvent(journal, 'g', { type: 'assistant', text: '[teneral: no reply]', toolCalls: [] });
-  heard('zulip:88');
-  appendEvent(journal, 'g', { type: 'tool.intent', callId: 'c2', name: 'chat_reply', args: {} });
-  // One before, in the fixture, names parley:7 as well.
-  expect(indicators(readEvents(journal), ['parley:7'])).toMatchObject({ heard: 3, answered: 1 });
-  expect(indicators(readEvents(journal), ['parley:7', 'zulip:88'])).toMatchObject({ heard: 4, answered: 2 });
-  expect(indicators(readEvents(journal), ['parley:50'])).toEqual({ heard: 0, first: null, last: null, answered: 0 });
+  let id = 0;
+  const heard = (service: string, sender: string, how: string): void => { appendEvent(journal, 'g', { type: 'note', kind: HEARD_KIND, data: { service, id: ++id, place: 'lobby', where: '#lobby', sender, name: 'x', how } }); };
+  heard('parley', '7', 'none');
+  heard('parley', '7', 'mention');
+  heard('parley', 'me', 'own');
+  heard('parley', '7', 'none');
+  heard('zulip', '88', 'dm');
+  const community = openCommunity(null, readEvents(journal));
+  expect(community.indicators(['parley:7'])).toMatchObject({ heard: 3, answered: 2 });
+  expect(community.indicators(['parley:7', 'zulip:88'])).toMatchObject({ heard: 4, answered: 2 });
+  expect(community.indicators(['parley:50'])).toEqual({ heard: 0, first: null, last: null, answered: 0 });
 
   await contact.run({ who: 'Ann Lee', circle: 'colleague', words: 'Ann Lee is my colleague' }, ctx);
   await contact.run({ who: 'Ann Lee', traits: { role: 'maintains the listener' } }, ctx);
   const listed = String(await contact.run({}, ctx));
-  expect(listed).toContain('colleague:\n  Ann Lee (parley:7): heard 3, answered 1, last ');
+  expect(listed).toContain('colleague:\n  Ann Lee (parley:7): heard 3, answered 2, last ');
   expect(listed).toContain(' · role: maintains the listener');
   expect(listed).toContain('in no circle:\n  CI (parley:50, a bot): heard 0, answered 0');
-  expect(String(await contact.run({ who: 'Ann Lee' }, ctx))).toContain('Ann Lee (parley:7): colleague; heard 3, answered 1; first met in #lobby\n  role: maintains the listener');
-  // And it stands in front of the agent when she speaks.
-  const who = whoLines(readEvents(journal), [{ service: 'parley', id: '7', name: 'Ann Lee', bot: false }]);
+  expect(String(await contact.run({ who: 'Ann Lee' }, ctx))).toContain('Ann Lee (parley:7): colleague; heard 3, answered 2; first met in #lobby\n  role: maintains the listener');
+  // The same counts whether the body handed its own community over or the tool made one from the notes.
+  expect(String(await contact.run({ who: 'Ann Lee' }, { ...ctx, community }))).toContain('heard 3, answered 2');
+  const who = whoLines(readEvents(journal), [{ service: 'parley', id: '7', name: 'Ann Lee', bot: false }], [], community);
   expect(who).toContain("- Ann Lee (parley:7, not a bot, by the service, colleague, by your owner's word; heard 3 times since ");
-  expect(who).toContain('answered 1): role: maintains the listener');
+  expect(who).toContain('answered 2): role: maintains the listener');
   expect(who).toContain('A circle is your owner\'s to give');
+
+  // And the questions about all of them together.
+  const { communityTool } = await import('../../body/chat-tools');
+  expect(String(await communityTool.run({ question: 'people' }, ctx))).toContain('x (parley:7): heard 3, addressed you 1, answered 2, in 1 place');
+  expect(String(await communityTool.run({ question: 'places' }, ctx))).toContain('#lobby: 4 messages, 1 speaker, 1 yours');
+  expect(String(await communityTool.run({ question: 'circles' }, ctx))).toContain('colleague: 1 one, heard 3, answered 2');
+  expect(String(await communityTool.run({ question: 'quiet', days: 3 }, ctx))).toContain('Everyone you ever heard was heard in the last 3 days.');
+  expect(String(await communityTool.run({ question: 'pairs' }, ctx))).toMatch(/after/);
+  await expect(communityTool.run({ question: 'gossip' }, ctx)).rejects.toThrow('question is one of');
 });

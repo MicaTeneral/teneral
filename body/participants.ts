@@ -1,6 +1,7 @@
 import { appendEvent, type JournalEvent } from '../brain/journal';
 import { known, type Fact } from '../brain/known';
 import { fromOwner, standing } from '../brain/owned';
+import type { Community } from './community';
 
 // Who the agent shares its chats with. A member of a chat knows who the others are: their names,
 // which of them are programs, what each works on and answers for. The agent is told none of that
@@ -94,6 +95,7 @@ export function meet(journal: string, gen: string, events: JournalEvent[], seen:
 //
 // Indicators: what the journal itself shows of them, counted with no model asked: how often they
 // were heard, when first and last, how often the agent answered them. They cannot be flattered.
+// They are asked of the table every heard message is laid out in (body/community.ts).
 //
 // Several accounts can be one contact, on different services or the same: only on the owner's word.
 
@@ -168,28 +170,6 @@ export function ownerSays(events: JournalEvent[], words: string): JournalEvent |
   return events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source) && flat(e.text).includes(wanted)) ?? null;
 }
 
-export interface Indicators { heard: number; first: string | null; last: string | null; answered: number }
-
-/**
- * What the journal shows of an account, with no model asked: the stimuli it spoke in, by the line
- * that names it there, and how many of those the agent answered with something other than silence.
- */
-export function indicators(events: JournalEvent[], keys: string[]): Indicators {
-  const marks = keys.map((key) => `(${key},`);
-  const found: Indicators = { heard: 0, first: null, last: null, answered: 0 };
-  let open = false;
-  for (const e of events) {
-    if (e.type === 'stimulus') {
-      open = marks.some((mark) => e.text.includes(mark));
-      if (open) { found.heard += 1; found.first ??= e.ts; found.last = e.ts; }
-    } else if (open && e.type === 'tool.intent' && (e.name === 'chat_reply' || e.name === 'chat_send' || e.name.endsWith('_reply'))) {
-      found.answered += 1;
-      open = false;
-    }
-  }
-  return found;
-}
-
 /** The most facts shown of one participant, and the most characters of each. */
 const FACTS_EACH = 4;
 const FACT_CHARS = 240;
@@ -210,7 +190,7 @@ export function knownOf(facts: Fact[], name: string): Fact[] {
  * Who is speaking, for the end of a stimulus: each participant with what kind they are and what
  * the agent knows of them. `fresh` are those met in this very message.
  */
-export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = []): string {
+export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = [], community?: Pick<Community, 'indicators'>): string {
   if (speakers.length === 0) return '';
   const facts = known(standing(events)).facts;
   const held = contacts(events);
@@ -220,8 +200,7 @@ export function whoLines(events: JournalEvent[], speakers: Participant[], fresh:
     const first = fresh.some((f) => keyOf(f) === keyOf(p));
     const c = held.get(keyOf(p));
     const circle = c?.circle !== undefined ? `, ${c.circle}, by your owner's word` : c?.supposed !== undefined ? `, ${c.supposed}, as you suppose` : ', in no circle yet';
-    const seen = indicators(events, [keyOf(p), ...(c?.same ?? [])]);
-    // This very message is not counted yet: it is journaled after this is written.
+    const seen = community?.indicators([keyOf(p), ...(c?.same ?? [])]) ?? { heard: 0, first: null, last: null, answered: 0 };
     const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`;
     const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
     const what = [traits, ...of.map((f) => `${f.mark} [${f.source}] ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');

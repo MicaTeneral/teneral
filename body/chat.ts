@@ -132,6 +132,12 @@ export interface ChatOptions {
    * `muted`: its talk is not kept at all. Absent: ambient, where `ambient` is on.
    */
   mode?: (channel: { id: string; name: string }) => Mode;
+  /**
+   * Told of every message as it is taken, the agent's own included, with how it addressed the
+   * agent: for the record of who said what where (body/community.ts). Not of talk in a channel
+   * the agent has muted, which it does not hear.
+   */
+  heard?: (m: ChatMessage, how: 'own' | 'dm' | 'mention' | 'quote' | 'name' | 'follow' | 'none') => void;
 }
 
 /**
@@ -186,8 +192,17 @@ export function chat(o: ChatOptions): Chat {
       if (said !== '') notices.push(said);
     }
     if (m.own) {
+      o.heard?.(m, 'own');
       if (m.kind === 'channel') spoke.set(m.place, [...(spoke.get(m.place) ?? []), now()].slice(-a.unaskedMax * 4));
       return;
+    }
+    const unaddressed = m.kind === 'channel' && !m.mentioned;
+    if (unaddressed && m.channel !== undefined && o.mode?.(m.channel) === 'muted') return;
+    {
+      const mine = spoke.get(m.place) ?? [];
+      const name = o.ownName();
+      o.heard?.(m, m.kind === 'direct' ? 'dm' : m.mentioned ? 'mention' : m.answers === true ? 'quote' : name !== '' && namedIn(m.text, name) ? 'name'
+        : mine.length > 0 && now() - mine.at(-1)! < a.followUpMs ? 'follow' : 'none');
     }
     const kind = m.again ? w.kinds.edit : m.kind === 'direct' ? w.kinds.direct : m.mentioned ? w.kinds.mention : w.kinds.channel;
     const line: Line = { id: m.id, line: `${kind} ${m.id}\n${m.line}`, owner: m.owner, ...(m.sender ? { speaker: { ...m.sender, bot: m.bot, ...(m.where === undefined ? {} : { where: m.where }) } } : {}) };
