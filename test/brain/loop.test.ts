@@ -854,3 +854,5 @@ test('a turn says it is being written for from its first moment to its last, als
   await expect(runTurn({ ...base, provider: async () => { throw new Error('provider down'); } })).rejects.toThrow('provider down');
   expect(seen.slice(3)).toEqual(['agent:zulip true', 'agent:zulip false']);
 });
+
+
