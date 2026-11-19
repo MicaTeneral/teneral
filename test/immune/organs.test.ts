@@ -467,7 +467,11 @@ test('a body that pins nothing is gated exactly as before, and no cache is made 
 // --- archives as real tools write them ---
 
 test('an archive written by tar itself unpacks: long names, links, modes, in the GNU and the pax format', async () => {
-  for (const format of ['gnu', 'pax', 'ustar']) {
+  // ustar stores the uid in an 11-octal-digit (21-bit) field; a host whose uid exceeds it cannot
+  // have tar write that format, so only the formats it can write are exercised here.
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  const formats = uid !== undefined && uid > 0o7777777 ? ['gnu', 'pax'] : ['gnu', 'pax', 'ustar'];
+  for (const format of formats) {
     const src = mkdtempSync(join(tmpdir(), 'teneral-tar-src-'));
     // Longer than the 100 bytes a plain header has for a name; ustar can still split it, the others write it apart.
     const deep = join('pkg-1.0', 'a-directory-with-a-long-name'.repeat(3), 'and-another-one-below-it'.repeat(2));
