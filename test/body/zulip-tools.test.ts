@@ -76,11 +76,11 @@ test('chat_send on Zulip opens a topic by stream name or id, and writes first on
   process.env.TENERAL_ZULIP_OWNER_ID = '997';
   await chatSend.run({ service: 'zulip', user: '997', content: 'Report for today.' }, z.ctx);
   expect(z.asked.at(-1)!.body).toEqual({ type: 'direct', to: '[997]', content: 'Report for today.' });
-  await expect(chatSend.run({ service: 'zulip', user: '8', content: 'hello' }, z.ctx)).rejects.toThrow('8 is neither');
+  await expect(chatSend.run({ service: 'zulip', user: '8', content: 'hello' }, z.ctx)).rejects.toThrow('8 is none of these');
   // Someone who wrote to it: their id stands in a stimulus the sensor journaled, not in talk it only overheard.
   appendEvent(z.ctx.journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip stream 12\nUntrusted.\nstream 12\n{"sender_id":8,"sender":"Ann","content":"lunch?"}' });
   expect(zulipService.knows!(z.ctx, [], '8')).toBe(false);
-  await expect(chatSend.run({ service: 'zulip', user: '8', content: 'hello' }, z.ctx)).rejects.toThrow('8 is neither');
+  await expect(chatSend.run({ service: 'zulip', user: '8', content: 'hello' }, z.ctx)).rejects.toThrow('8 is none of these');
   appendEvent(z.ctx.journal, 'g', { type: 'stimulus', source: 'agent:zulip', text: 'Zulip private 13\nUntrusted.\n{"sender_id":8,"sender":"Ann","content":"can you help?"}' });
   expect(await chatSend.run({ service: 'zulip', user: '8', content: 'Yes.' }, z.ctx)).toContain('Message sent as zulip:701');
   await expect(chatSend.run({ service: 'zulip', user: 'ann', content: 'x' }, z.ctx)).rejects.toThrow('numeric id');

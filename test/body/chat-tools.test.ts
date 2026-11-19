@@ -73,7 +73,7 @@ test('chat_send opens a topic or writes to a person, but first only to those who
   const p = parley();
   expect(await chatSend.run({ service: 'parley', user: 'u7', content: 'the build is green' }, p.ctx)).toBe('Message sent as parley:101.');
   expect(p.sent[0]).toEqual({ to: { user: 'u7' }, content: 'the build is green' });
-  await expect(chatSend.run({ service: 'parley', user: 'u9', content: 'hello' }, p.ctx)).rejects.toThrow('you may write first only to your owner and to people who have written to you on parley; u9 is neither');
+  await expect(chatSend.run({ service: 'parley', user: 'u9', content: 'hello' }, p.ctx)).rejects.toThrow('u9 is none of these');
   await expect(chatSend.run({ service: 'parley', channel: 'lobby', content: 'hello' }, p.ctx)).rejects.toThrow('with channel, give thread');
   await expect(chatSend.run({ service: 'parley', channel: 'lobby', thread: 't', user: 'u7', content: 'hello' }, p.ctx)).rejects.toThrow('give either channel with thread, or user');
   await expect(chatSend.run({ service: 'parley', content: 'hello' }, p.ctx)).rejects.toThrow('give either channel with thread, or user');
@@ -96,4 +96,19 @@ test('what a service cannot do, the tool says, and history is asked of the servi
   const bare = parley({ send: undefined, history: undefined });
   await expect(chatSend.run({ service: 'parley', user: 'u7', content: 'x' }, bare.ctx)).rejects.toThrow('parley can only be answered: use chat_reply');
   await expect(chatHistory.run({ service: 'parley' }, bare.ctx)).rejects.toThrow('keeps no history');
+});
+
+test('someone the owner placed in a circle may be written to first, though they never wrote', async () => {
+  const p = parley();
+  const { meet } = await import('../../body/participants');
+  const { contact } = await import('../../body/chat-tools');
+  const { readEvents } = await import('../../brain/journal');
+  meet(p.ctx.journal, 'g', readEvents(p.ctx.journal), [{ service: 'parley', id: 'u9', name: 'Bo' }]);
+  await expect(chatSend.run({ service: 'parley', user: 'u9', content: 'hello' }, p.ctx)).rejects.toThrow('u9 is none of these');
+  // A circle the agent only supposes opens nothing.
+  await contact.run({ who: 'Bo', circle: 'colleague' }, p.ctx);
+  await expect(chatSend.run({ service: 'parley', user: 'u9', content: 'hello' }, p.ctx)).rejects.toThrow('u9 is none of these');
+  appendEvent(p.ctx.journal, 'g', { type: 'stimulus', source: 'terminal', text: 'Bo is a colleague of mine, you may write to him.' });
+  await contact.run({ who: 'Bo', circle: 'colleague', words: 'Bo is a colleague of mine' }, p.ctx);
+  expect(await chatSend.run({ service: 'parley', user: 'u9', content: 'hello' }, p.ctx)).toContain('Message sent as');
 });
