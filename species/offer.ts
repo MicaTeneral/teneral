@@ -328,6 +328,8 @@ export interface Report {
   /** The end of what the failing gate printed. Kept here and shown here; never sent anywhere. */
   output?: string;
   published?: { url: string; branch: string; at: string };
+  /** The owner took it back: it does not wait, cannot go out, and is no longer shown. A new check of the branch makes a new record. */
+  withdrawn?: { at: string };
 }
 
 /** What the last commit of an offer has to say, each at the start of a line of its message. */
@@ -501,7 +503,7 @@ export function reports(root: string): Report[] {
 }
 
 /** Whether a checked commit is waiting for the owner's word. */
-const waiting = (owner: string, r: Report): boolean => (r.what === 'witness' || r.ok) && !r.published && !approved(owner, r.commit);
+const waiting = (owner: string, r: Report): boolean => (r.what === 'witness' || r.ok) && !r.published && !r.withdrawn && !approved(owner, r.commit);
 
 // --- the install, as these commands need it ---
 
@@ -622,6 +624,7 @@ export async function publish(i: Install, branch: string, o: NetOptions = {}): P
   if (report === null || report.what !== 'publish' || !report.ok) {
     return { status: 1, text: `${branch} is at ${short(commit)}, and no check has passed for that commit. Run: bun species/offer.ts check ${branch}` };
   }
+  if (report.withdrawn) return { status: 1, text: `Your owner withdrew ${short(commit)} (${branch}): it is not to be sent. To offer it anew, build the branch on the species' head and check it again.` };
   if (report.published) return { status: 0, text: `Already published: ${report.published.url} (commit ${short(commit)} as ${report.published.branch}).` };
   const hub = hubOf(i.root, i.s);
   const species = speciesHead(i.root, i.s);
@@ -811,6 +814,7 @@ export function approvePending(i: Install, prefix: string): Outcome {
   const r = one(i, prefix);
   if (typeof r === 'string') return { status: 1, text: r };
   if (consent(i.s) === 'off') return { status: 1, text: 'TENERAL_PUBLISH is off in .env: nothing goes out, approved or not. Change that first.' };
+  if (r.what === 'publish' && staleBy(i)(r)) return { status: 1, text: staleText(r) };
   approve(i.owner, r.commit);
   const command = r.what === 'witness' ? `bun species/offer.ts witness ${r.pr}` : `bun species/offer.ts publish ${r.branch}`;
   const line = r.what === 'witness'
@@ -850,21 +854,66 @@ const SENT_SHOWN = 3;
  * checked again after changing it leaves its older commits behind in the record: of each branch
  * only the newest is shown, since the older ones can no longer go out.
  */
-export function publishing(i: Install): { waits: Report[]; approved: Report[]; sent: Report[]; failed: number } {
+export function publishing(i: Install): { waits: Report[]; approved: Report[]; stale: Report[]; sent: Report[]; failed: number } {
   const newest = new Map<string, Report>();
   for (const r of reports(i.root)) if (r.what === 'publish') newest.set(r.branch ?? r.commit, r);
-  const all = [...newest.values()];
+  // A branch whose newest offer was withdrawn is withdrawn: its older commits do not come back in its place.
+  const all = [...newest.values()].filter((r) => !r.withdrawn);
   const sent = reports(i.root).filter((r) => r.what === 'publish' && r.published);
+  const open = all.filter((r) => !r.published && r.ok);
+  const stale = staleBy(i);
   return {
-    waits: all.filter((r) => waiting(i.owner, r)),
-    approved: all.filter((r) => !r.published && r.ok && approved(i.owner, r.commit)),
+    waits: open.filter((r) => !stale(r) && waiting(i.owner, r)),
+    approved: open.filter((r) => !stale(r) && approved(i.owner, r.commit)),
+    stale: open.filter(stale),
     sent, failed: all.filter((r) => !r.published && !r.ok).length,
   };
 }
 
+/**
+ * Whether an offer can no longer go out as it is: the species, as this install knows it, has moved
+ * since the check and the offer is not built on where it now stands. `publish` refuses exactly
+ * such a commit, so one that is shown as waiting would only be refused after the owner's yes.
+ * Nothing is asked of the network; a species that cannot be read here makes nothing stale.
+ */
+function staleBy(i: Install): (r: Report) => boolean {
+  let head: string | null = null;
+  try { head = speciesHead(i.root, i.s); } catch { /* not known here */ }
+  const seen = new Map<string, boolean>();
+  return (r) => {
+    if (head === null || r.published || r.species === head) return false;
+    if (!seen.has(r.commit)) seen.set(r.commit, !gitOk(i.root, 'merge-base', '--is-ancestor', head, r.commit));
+    return seen.get(r.commit)!;
+  };
+}
+
+const staleText = (r: Report): string => `${short(r.commit)} (${r.branch}) was built on an older species and cannot go out as it is: the species has moved since, and what it changes may already be there. `
+  + `/publish withdraw ${short(r.commit)} takes it off the list; or tell the agent to make the offer again on the species' head.`;
+
+/**
+ * The owner takes an offer back: every commit of that branch that was checked and not sent stops
+ * waiting, loses any yes it had, and can no longer go out. The agent is told. Nothing is deleted:
+ * the branch and its commits stay, and checking the branch again makes a new offer of it.
+ */
+export function withdrawOffer(i: Install, prefix: string): Outcome {
+  if (!/^[0-9a-f]{7,40}$/.test(prefix)) return { status: 1, text: 'Name the offer by the first seven or more characters of its commit, as /publish lists it.' };
+  const open = reports(i.root).filter((r) => r.what === 'publish' && !r.published && !r.withdrawn);
+  const found = open.filter((r) => r.commit.startsWith(prefix));
+  if (found.length !== 1) return { status: 1, text: found.length === 0 ? `No offer that starts with ${prefix} is open here. /publish lists what is.` : `${prefix} is the start of ${found.length} offers; give more of it.` };
+  const r = found[0]!;
+  const at = new Date().toISOString();
+  const gone = open.filter((o) => o.commit === r.commit || (r.branch !== undefined && o.branch === r.branch));
+  for (const o of gone) {
+    saveReport(i.root, { ...o, withdrawn: { at } });
+    useApproval(i.owner, o.commit);
+  }
+  tell(i.owner, `I withdrew the offer ${r.branch} (commit ${short(r.commit)}): it is not to be sent. Its branch is untouched.`);
+  return { status: 0, text: `Withdrawn: ${short(r.commit)} (${r.branch})${gone.length > 1 ? `, with ${gone.length - 1} earlier ${gone.length === 2 ? 'commit' : 'commits'} of that branch` : ''}. It no longer waits and cannot go out; the agent was told. The branch itself is untouched.` };
+}
+
 /** What `/publish` says: how a change reaches the species, what stands where, and the one thing to type next. */
 function publishPage(i: Install): string[] {
-  const { waits, approved: ready, sent, failed } = publishing(i);
+  const { waits, approved: ready, stale, sent, failed } = publishing(i);
   // Each line begins with what to type for it.
   const row = (r: Report): string => `  /publish ${short(r.commit)}   ${r.branch}: ${r.title}`;
   const ahead = (() => {
@@ -888,6 +937,10 @@ function publishPage(i: Install): string[] {
   if (ready.length > 0) {
     lines.push(`${ready.length === 1 ? 'One offer has' : `${ready.length} offers have`} your yes and ${ready.length === 1 ? 'was' : 'were'} never sent. Typing its line tells the agent again to send it.`, ...ready.map(row), '');
   }
+  if (stale.length > 0) {
+    lines.push(`${stale.length === 1 ? 'One offer was' : `${stale.length} offers were`} built on an older species and cannot go out as ${stale.length === 1 ? 'it is' : 'they are'}: the species has moved since, and what ${stale.length === 1 ? 'it changes' : 'they change'} may already be there. `
+      + 'Typing its line takes it off this list; or tell the agent to make the offer again on the species\' head.', ...stale.map((r) => `  /publish withdraw ${short(r.commit)}  ${r.branch}: ${r.title}`), '');
+  }
   if (waits.length + ready.length === 0) lines.push('Nothing waits for you, and nothing you approved is unsent.', '');
   if (sent.length > 0) lines.push(`Sent${sent.length > SENT_SHOWN ? ` (the last ${SENT_SHOWN} of ${sent.length})` : ''}:`, ...sent.slice(-SENT_SHOWN).map((r) => `  ${r.title}  ${r.published!.url}`), '');
   if (ahead !== null && ahead.count > 0) {
@@ -902,7 +955,9 @@ function publishPage(i: Install): string[] {
 function publishCommand(i: Install, arg: string): string[] {
   if (arg === '') return publishPage(i);
   if (!/^[0-9a-f]{7,40}$/.test(arg)) return ['/publish, or /publish <commit>: the first seven or more characters of an offer, as /publish lists them.'];
-  const { waits, approved: ready } = publishing(i);
+  const { waits, approved: ready, stale } = publishing(i);
+  const old = stale.filter((r) => r.commit.startsWith(arg));
+  if (old.length === 1) return [staleText(old[0]!)];
   if (waits.some((r) => r.commit.startsWith(arg))) return approvePending(i, arg).text.split('\n');
   const again = ready.filter((r) => r.commit.startsWith(arg));
   if (again.length === 1) {
@@ -915,12 +970,14 @@ function publishCommand(i: Install, arg: string): string[] {
   return [`No offer that starts with ${arg} waits for you or is unsent. /publish lists what does.`];
 }
 
-/** `/offers`, `/publish [commit]` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is none of them. */
+/** `/offers`, `/publish [commit]`, `/publish withdraw <commit>` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is none of them. */
 export function ownerCommand(root: string, line: string): string[] | null {
   const [name = '', arg = '', ...more] = line.trim().split(/\s+/);
   if (name !== '/offers' && name !== '/approve' && name !== '/publish') return null;
   try {
     const i = install(root);
+    // `/publish withdraw <commit>`: the owner takes an offer back.
+    if (name === '/publish' && arg === 'withdraw') return more.length !== 1 ? ['/publish withdraw <commit>: the first seven or more characters of an offer, as /publish lists it.'] : withdrawOffer(i, more[0]!).text.split('\n');
     if (name === '/publish') return more.length > 0 ? ['/publish, or /publish <commit>.'] : publishCommand(i, arg);
     if (name === '/offers') {
       const all = pending(i);
@@ -944,6 +1001,7 @@ const USAGE = `usage: bun species/offer.ts <command>     (your owner: ./one offe
   witness <pr> [--also <command>]
                             run the same checks on an open pull request and post what was seen
   list                      what was checked here, and what waits for the owner
+  withdraw <commit>         take an offer back: it no longer waits and cannot go out
   key                       print this individual's public signing key, making it first if there is none
   gates [<commit>]          the gates of a mutation on a commit as a fresh seed, and nothing else (default: HEAD)
 
@@ -993,12 +1051,16 @@ export async function main(
         if (rest.length !== 0) break;
         const all = reports(i.root);
         if (all.length === 0) out('Nothing has been checked here yet.');
+        const stale = staleBy(i);
         for (const r of all) {
-          const state = r.published ? `sent: ${r.published.url}` : waiting(i.owner, r) ? 'waiting for the owner' : approved(i.owner, r.commit) ? 'approved, not sent yet' : 'did not pass';
+          const state = r.published ? `sent: ${r.published.url}` : r.withdrawn ? 'withdrawn' : r.what === 'publish' && r.ok && stale(r) ? 'stale: built on an older species' : waiting(i.owner, r) ? 'waiting for the owner' : approved(i.owner, r.commit) ? 'approved, not sent yet' : 'did not pass';
           out(`${short(r.commit)}  ${r.what === 'witness' ? `witness of #${r.pr}` : `offer ${r.branch}`}  ${state}  ${r.title}`);
         }
         return 0;
       }
+      case 'withdraw':
+        if (rest.length !== 1) break;
+        return say(withdrawOffer(i, rest[0]!));
       case 'key': {
         if (rest.length !== 0) break;
         const key = ensureKey(i.auth, i.id);

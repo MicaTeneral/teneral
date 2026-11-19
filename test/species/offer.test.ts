@@ -8,7 +8,7 @@ import { TOKEN_FILE, api, githubRemote, saveToken, GitHubError } from '../../spe
 import { readEvents } from '../../brain/journal';
 import {
   SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, outletOf, ownSecrets, ownerCommand, pending, publish, publishing, readReport, readWitness,
-  scan, settings, sign, slugOf, speciesHead, speciesRef, witness,
+  scan, settings, sign, slugOf, speciesHead, speciesRef, withdrawOffer, witness,
 } from '../../species/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../species/offerkey';
 import * as github from '../../species/github';
@@ -441,6 +441,61 @@ t('an approval is for one commit: the branch mended after it waits again', async
   expect((await publish(i, 'offer/greeting')).status).toBe(WAITING);
   expect((await w.hub.state()).pushes).toEqual([]);
 });
+
+t('an offer the species has moved past is shown as stale, cannot be let go, and is withdrawn by the owner; a withdrawn offer cannot go out', async () => {
+  const w = await world('ask');
+  const i = install(w.root);
+  const first = offer(w.root, 'greeting', GREETING);
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  const commit = offer(w.root, 'greeting', { ...GREETING, 'body/more.ts': 'export const more = 1;\n' });
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  const other = offer(w.root, 'other', { 'body/other.ts': 'export const other = 1;\n' });
+  await checkBranch(i, 'offer/other', { gates: passes });
+  approve(i.owner, other);
+  expect(publishing(i)).toMatchObject({ waits: [{ commit }], approved: [{ commit: other }], stale: [] });
+
+  // The species moves on at its home, and this install hears of it: neither offer is built on where it now stands.
+  const maintainer = individual(w.base, w.hub, 'maintainer');
+  writeFiles(maintainer, { 'BACKLOG.md': '# Backlog\n\n1. more\n' });
+  commitAll(maintainer, 'species: moves on');
+  pushMain(maintainer, w.hub);
+  git(w.root, 'fetch', '-q', 'origin');
+  const now = publishing(i);
+  expect(now.waits).toEqual([]);
+  expect(now.approved).toEqual([]);
+  expect(now.stale.map((r) => r.commit).sort()).toEqual([commit, other].sort());
+  const page = ownerCommand(w.root, '/publish')!.join('\n');
+  expect(page).toContain('2 offers were built on an older species and cannot go out as they are');
+  expect(page).toContain(`  /publish withdraw ${commit.slice(0, 12)}  offer/greeting: body: a greeting`);
+  expect(page).toContain('Nothing waits for you, and nothing you approved is unsent.');
+  // Its yes is not taken: it would only be refused after it.
+  expect(ownerCommand(w.root, `/publish ${commit.slice(0, 7)}`)!.join(' ')).toContain('was built on an older species and cannot go out as it is');
+  expect(ownerCommand(w.root, `/approve ${commit.slice(0, 7)}`)!.join(' ')).toContain('was built on an older species');
+  expect(approved(i.owner, commit)).toBe(false);
+  const listed: string[] = [];
+  expect(await main(['list'], w.root, (line) => listed.push(line), (line) => listed.push(line))).toBe(0);
+  expect(listed.find((line) => line.startsWith(commit.slice(0, 12)))).toContain('stale: built on an older species');
+
+  // Withdrawn: the whole branch, its earlier commit with it; the yes the other one had is taken away; the agent is told.
+  expect(ownerCommand(w.root, '/publish withdraw')!.join(' ')).toContain('/publish withdraw <commit>');
+  expect(ownerCommand(w.root, '/publish withdraw 0000000')!.join(' ')).toContain('No offer that starts with 0000000 is open here');
+  expect(ownerCommand(w.root, `/publish withdraw ${commit.slice(0, 7)}`)!.join(' ')).toContain(`Withdrawn: ${commit.slice(0, 12)} (offer/greeting), with 1 earlier commit of that branch`);
+  expect(readReport(w.root, first)!.withdrawn).toBeDefined();
+  expect(withdrawOffer(i, other.slice(0, 12)).status).toBe(0);
+  expect(approved(i.owner, other)).toBe(false);
+  expect(publishing(i)).toMatchObject({ waits: [], approved: [], stale: [] });
+  expect(pending(i)).toEqual([]);
+  const told = readdirSync(i.owner).filter((name) => !name.startsWith('.') && statSync(join(i.owner, name)).isFile()).map((name) => readFileSync(join(i.owner, name), 'utf8'));
+  expect(told.some((line) => line.includes(`I withdrew the offer offer/greeting (commit ${commit.slice(0, 12)}): it is not to be sent.`))).toBe(true);
+  expect(ownerCommand(w.root, `/publish withdraw ${commit.slice(0, 7)}`)!.join(' ')).toContain('is open here');
+  listed.length = 0;
+  await main(['list'], w.root, (line) => listed.push(line), (line) => listed.push(line));
+  expect(listed.find((line) => line.startsWith(commit.slice(0, 12)))).toContain('withdrawn');
+  const out = await publish(i, 'offer/greeting');
+  expect(out.status).toBe(1);
+  expect(out.text).toContain('Your owner withdrew');
+  expect(git(w.bare, 'for-each-ref', 'refs/heads/contrib')).toBe('');
+}, SLOW);
 
 t('/publish says how a change goes out, where each offer stands and what to type for it; with a commit it lets that offer go, or has one sent that never was', async () => {
   const w = await world('ask');
