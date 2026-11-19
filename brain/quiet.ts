@@ -18,3 +18,5 @@ export const quietReply = (text: string): boolean => {
   }
   return true;
 };
+// What ends a turn that went on in calls that do nothing (brain/loop.ts). Shown: unlike a quiet tick, nothing settled it.
+export const NO_OP_REPLY = '[stopped: only calls that do nothing; waiting for the next stimulus]';
