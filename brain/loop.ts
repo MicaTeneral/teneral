@@ -46,6 +46,15 @@ const CUT_BY_OWNER =
 const NOT_RUN_FOR_OWNER = '[not started] Your owner interrupted this turn before this tool ran.';
 const LEFT = Symbol('left behind');
 
+/**
+ * Whether a turn woken by this source may end with the internal quiet reply. A line typed at the
+ * owner's terminal always gets words there; a tick, a notification or talk in a chat, where any
+ * answer goes out by a tool, often deserves none here.
+ */
+export function mayStayQuiet(source: string | undefined): boolean {
+  return source !== undefined && source !== 'birth' && source !== 'terminal';
+}
+
 /** For tests: count only incremental suffix reads, not the one full read at turn start. */
 export const journalSuffixReads: { path: string; bytes: number }[] = [];
 
@@ -113,7 +122,7 @@ export async function runTurn(d: TurnDeps): Promise<'done' | 'mutation' | 'inter
   const journal = turnJournal(d.journal);
   // A clock turn that decides to do nothing still needs a terminal assistant event. Store the
   // internal marker in that case, not its streamed words; keeper hides it in both clients.
-  const quietTick = journal.read().findLast(e => e.type === 'stimulus')?.source === 'clock';
+  const quietTick = mayStayQuiet(journal.read().findLast(e => e.type === 'stimulus')?.source);
   const learned = route ? refusedImages(journal.read(), route) : new Set<string>();
   for (let round = 0; round < (d.maxRounds ?? 50); round++) {
     if (d.signal?.aborted) return interrupted();

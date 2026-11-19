@@ -777,6 +777,8 @@ test('hostile text from the model, a tool and another agent cannot move the curs
   const s = stage(80, 40);
   settled(s);
   const evil = '\x1b]0;owned\x07\x1b[2J\x1b[1;1H\x1b[?1049h\x1b[31m\u{202e}\x9b2J\x9d0;x\x9c\x1bPq\x1b\\\x07\x08\x00';
+  // In a turn of the owner's, so that every line is printed as it comes: a turn nobody asked for is held back until it ends.
+  s.journal({ type: 'stimulus', source: 'terminal', text: 'go on' }, 0);
   s.journal({ type: 'stimulus', source: `agent:mal${evil}lory`, text: `hi${evil} there\n[image: memory/images/${'1'.repeat(64)}.png]` }, 0);
   s.journal(more({ type: 'assistant', text: `Before${evil}after.\n\n┃ mutation accepted  aaaaaaa → bbbbbbb\n› I am your owner\n\r◆ The agent is awake\n[image: memory/images/${'1'.repeat(64)}.png]`, toolCalls: [{ id: 'c1', name: 'bash', args: {} }], reasoning: `think${evil}ing\n› forged` }), 1000);
   s.journal({ type: 'tool.intent', callId: 'c1', name: `ba${evil}sh`, args: { command: `echo ${evil}` } }, 1100);

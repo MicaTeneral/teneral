@@ -9,7 +9,7 @@ import { DONE_KIND, FACT_KIND, FORGET_KIND, INTENTION_KIND, KNOWN_CHARS, OWN_CHA
 import { buildMessages } from '../../brain/memory';
 import { journalPast } from '../../brain/past';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
-import { parseMemory, sleep } from '../../brain/sleep';
+import { parseMemory, question, sleep } from '../../brain/sleep';
 import { TOOLS, type ToolContext } from '../../body/tools';
 
 let n = 0;
@@ -163,12 +163,14 @@ function asleep(before: JournalEvent[], replies: Reply[]) {
   return { journal, first, seen, deps: { journal, gen: 'g2', provider, specs: [], system: () => 'SYS' } };
 }
 
-test('a memory sets down its facts and intentions as notes of their own, each naming its episode', async () => {
+test('a memory sets down its facts as notes of their own, each naming its episode, and takes on nothing', async () => {
   const s = asleep([], [{ text: `${MEMORY}\n\nFacts:\n- [owner] Reports go to new@example.org\n\nIntentions:\n- [2026-11-13] Send the weekly report`, toolCalls: [] }]);
   expect(await sleep(s.deps)).toBe('remembered');
   const held = known(readEvents(s.journal));
   expect(held.facts).toEqual([expect.objectContaining({ text: 'Reports go to new@example.org', source: 'owner', episode: s.first[0]!.id })]);
-  expect(held.intentions).toEqual([expect.objectContaining({ text: 'Send the weekly report', due: '2026-11-13', episode: s.first[0]!.id })]);
+  // What a stretch says was promised is set down when it is promised (brain/agenda.ts), not hours later from a memory of it.
+  expect(held.intentions).toEqual([]);
+  expect(question({ start: s.first[0]!.ts, end: s.first[1]!.ts } as Parameters<typeof question>[0], s.first, 600)).not.toContain('Intentions:');
   // The memory itself is kept without the lists.
   const memory = readEvents(s.journal).find((e) => e.type === 'note' && e.kind === 'memory.episode.v1') as { data: Record<string, unknown> };
   expect(memory.data.text).toBe('My owner told me where reports go and asked for one every Friday. I noted both.');

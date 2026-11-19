@@ -1,10 +1,10 @@
 import { appendEvent, type JournalEvent, type Usage } from './journal';
-import { DONE_KIND, INTENTION_KIND, agenda, known, type Intention, type IntentionData, type Known } from './known';
+import { DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, type Intention, type IntentionData, type Known, type WorkState } from './known';
 import { MEMORY_MARK } from './logbook';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
 import type { ChatMessage } from './provider';
 import { EPISODE_KIND } from './remembered';
-import { QUIET_REPLY } from './quiet';
+import { QUIET_REPLY, ROUND_LIMIT_REPLY } from './quiet';
 import type { SleepDeps, Slept } from './sleep';
 
 // A memory that only looks back gives its agent nothing to do. Forming a memory answers "what
@@ -30,6 +30,9 @@ import type { SleepDeps, Slept } from './sleep';
 export const REFLECTION_KIND = 'memory.reflection.v1';
 /** The agent looks over what it is doing once this many memories of episodes have been formed since it last did. */
 export const REFLECT_EVERY = 6;
+/** A commitment that has waited this many days with nothing recorded is named when the agent looks ahead. */
+export const STALE_DAYS = 2;
+const LISTED_STALE = 8;
 /** The most lines of one list that a look may set down: a longer list is not a list of what matters. */
 const LIST_MAX = 12;
 /** With this many of its own already open, the agent is told so, and asked to close what no longer matters before adding. */
@@ -178,16 +181,19 @@ export function reflectionDue(events: JournalEvent[]): boolean {
 }
 
 /** What the agent is asked, after everything a turn would show it. */
-export function reflectQuestion(held: Known, measured = ''): string {
+export function reflectQuestion(held: Known, measured = '', now = Date.now()): string {
   const own = held.intentions.filter((i) => i.origin === 'own').length;
+  const stale = held.intentions.filter((i) => !i.waits && i.work?.status === 'waiting' && now - Date.parse(i.work.at ?? i.at) >= STALE_DAYS * DAY_MS);
   return [
     `${MEMORY_MARK} Nothing is asked of you at this moment, and you have remembered a good deal since you last looked over what you are doing. `
     + 'Look over it now: your memories, what you know and what you mean to do, all above. Think ahead, not back. Not what happened: what follows from it.',
     'What was left unfinished that nobody is holding? What keeps coming back, the same failure, the same request, the same detour, and could be dealt with once? '
     + 'What would your owner be glad to find done without having asked? What do you need from your owner that you have not asked for?',
     'Set down only what you would really do in time of your own, each so that it can be understood on its own, weeks from now. '
-    + 'Nothing that is already in your list above. Fewer is better, and none is an honest answer.'
+    + 'Nothing that is already in your list above. Ground each in something you can point to above, a memory, a failure, a thing your owner said; one such is worth more than five that are not, and none is an honest answer.'
     + (own >= OWN_OPEN_MANY ? ` You already hold ${own} ideas of your own that are open: before adding to them, close under Done those that no longer matter.` : ''),
+    ...(stale.length === 0 ? [] : [`These have waited ${STALE_DAYS} days or more with nothing recorded: ${stale.slice(0, LISTED_STALE).map((i) => i.mark).join(', ')}. `
+      + 'A list of things that only wait is no agenda. Of each, say under Done whether it is settled or given up; what still stands and needs your owner\'s word, put to them again under Ask, naming its mark.']),
     ...(measured === '' ? [] : [`What has come of it so far: ${measured}. Let that tell you what is worth setting down: `
       + 'ideas that are never done are not worth more of, and what your owner refused once is not to be asked again in other words.']),
     'An idea of your own is no permission. What your owner has plainly allowed you, or what touches only your own work, goes under Agenda. '
@@ -262,7 +268,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
   if (!now && !reflectionDue(events)) return 'nothing';
   const held = known(events);
   const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
-  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events))), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: reflectQuestion(held, initiativeText(initiative(events)), Date.parse(events.at(-1)?.ts ?? '') || Date.now()), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
   let usage: Usage | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     let reply;
@@ -391,6 +397,59 @@ export function reportAsk(events: JournalEvent[], now: number, everyMs = DAY_MS)
   ].join('\n');
 }
 
+/** How long after it was recorded a commitment that waits for something to arrive is looked at all the same: it may have been missed. */
+const MISSED_MS = 3 * DAY_MS;
+/** The first look at something that waits comes this long after it was offered, and each later one twice as long after, up to a day. */
+const LOOK_FIRST_MS = 30 * 60_000;
+
+/**
+ * What waits and is worth looking at now. A commitment that names a time to look again is offered
+ * when that time has come, and at no other moment: something that waits is not a reason to go and
+ * look at it on every wake. One that waits for something to arrive is offered only when it has
+ * stood untouched for days.
+ */
+export function followUps(held: Known, now: number): Intention[] {
+  return held.intentions.filter((i) => {
+    if (i.waits || i.work?.status !== 'waiting') return false;
+    if (i.work.checkAt !== undefined) return i.work.checkAt <= now;
+    return now - Date.parse(i.work.at ?? i.at) >= MISSED_MS;
+  });
+}
+
+/** The state of a waiting commitment once it has been offered: looked at one more time, and not again before a wait that doubles. */
+export function lookedAt(work: WorkState, now: number): WorkState {
+  const { at: _, ...kept } = work;
+  return { ...kept, attempts: work.attempts + 1, checkAt: now + Math.min(DAY_MS, LOOK_FIRST_MS * 2 ** Math.min(work.attempts, 6)) };
+}
+
+function look(waiting: Intention[], line: (text: string) => string): string {
+  return `The time you set to look again at what waits has come:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nIt waits for: ${i.work?.next ?? ''}`).join('\n')}\n`
+    + 'Look once, at the thing itself. If it has come, go on with the work. If not, record with `work` when to look again, or leave it and it is offered later by itself; '
+    + `do not look twice in one turn, and do not repeat an external action without checking its receipt. If nothing has changed, answer exactly ${QUIET_REPLY}.`;
+}
+
+/**
+ * Whether a tick has anything to offer: something ready to do, something to ask or to report, or
+ * a thing that waits whose time to be looked at has come. With none of these there is no tick,
+ * and no model is asked what it would like to do with nothing.
+ */
+export function worthATick(held: Known, now: number, report = ''): boolean {
+  if (report !== '' || toAsk(held, now).length > 0 || followUps(held, now).length > 0) return true;
+  return held.intentions.some((i) => !i.waits && i.work?.status !== 'waiting');
+}
+
+/**
+ * Whether the next tick is due. Ticks that end with nothing done are a sign that what is offered
+ * cannot be acted on, so each PASSED_TICKS of them in a row doubles the wait, up to sixteen
+ * intervals. Anything done, or anything arriving, brings the usual interval back.
+ */
+export function tickDue(events: JournalEvent[], now: number, intervalMs: number): boolean {
+  const idle = idleTicks(events);
+  if (idle < PASSED_TICKS) return true;
+  const last = events.findLast((e) => e.type === 'stimulus' && e.source === 'clock');
+  return last === undefined || now - Date.parse(last.ts) >= intervalMs * 2 ** Math.min(Math.floor(idle / PASSED_TICKS), 4) - 1000;
+}
+
 /**
  * What a clock tick says of the agenda: its first lines in the order to take them, and what to do
  * with them. One thing in a tick: time of its own is not a licence to work through a list while
@@ -406,7 +465,7 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
   // a line that cannot be acted on waits for ever. What is due keeps its place; the rest comes round again in turn.
   const come = whole.filter((i) => i.due !== undefined && i.due <= today);
   const rest = whole.filter((i) => !come.includes(i));
-  const waiting = listed.filter((i) => i.work?.status === 'waiting' && !i.waits);
+  const waiting = followUps(held, now);
   const turn = rest.length <= OFFERED ? 0 : (Math.floor(idle / PASSED_TICKS) * OFFERED) % rest.length;
   const todo = [...come, ...rest.slice(turn), ...rest.slice(0, turn)];
   const line = (text: string): string => (text.length > OFFERED_CHARS ? `${text.slice(0, OFFERED_CHARS - 1)}…` : text).replace(/\s+/g, ' ');
@@ -423,14 +482,14 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'Asking is all that is needed from you: do not wait for the answer before going on.\n',
   ].join('\n');
   if (todo.length === 0) {
-    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; its other commitments wait for their named dependencies' : ''}. If something is worth doing now all the same, do it; otherwise answer exactly ${QUIET_REPLY}.`;
-    return `${report}${ask}One bounded follow-up for existing waiting commitments, with their concrete next step or dependency:\n${waiting.slice(0, OFFERED).map((i) => `${i.mark} ${line(i.text)}\nNext/dependency: ${i.work?.next ?? ''}`).join('\n')}\nCheck whether the dependency still holds before waiting again; do not retry an external action without checking its receipt or new evidence. If nothing can be advanced, leave the concrete dependency recorded and answer exactly ${QUIET_REPLY}.`;
+    if (waiting.length === 0) return `${report}${ask}Nothing ${report + ask === '' ? '' : 'else '}is on your agenda${listed.length > 0 ? ' that is ready now; what it holds waits for what it names, and you are woken when that arrives' : ''}. ${report + ask === '' ? `Answer exactly ${QUIET_REPLY}` : `When that is done, answer exactly ${QUIET_REPLY}`}: do not go looking for something to do.`;
+    return `${report}${ask}${look(waiting, line)}`;
   }
   const rows = todo.slice(0, OFFERED).map((i) => {
     const why = i.due !== undefined && i.due <= today ? `[due ${i.due}, which has come] ` : i.origin === 'own' ? '[your own idea] ' : '';
     return `${i.mark} ${why}${line(i.text)}`;
   });
-  return report + ask + [
+  return report + ask + (waiting.length === 0 ? '' : `${look(waiting, line)}\n`) + [
     `Otherwise this is time of your own. Your agenda, in the order to take it${todo.length > OFFERED ? ` (${OFFERED} of ${todo.length}${turn > 0 ? '; the lines before these you passed over several times, and they stay on it' : ''})` : ''}:`,
     ...rows,
     'Take the first one you can act on now, within what your owner has allowed you, and do it: one thing in a tick. '
@@ -438,4 +497,156 @@ export function offered(held: Known, now: number, idle = 0, report = ''): string
     + 'a line you can never act on is better closed as dropped, or asked about, than passed over again. '
     + `If you decide that no listed commitment can be acted on and have no useful question or finding, answer exactly ${QUIET_REPLY}: it is internal and produces no visible reply.`,
   ].join('\n');
+}
+
+// Settling a turn. An intention is worth most at the moment it is formed: when the agent has just
+// said "I will" or stopped half-way, knows exactly what remains, and its provider still holds the
+// conversation in its cache. A memory formed hours later can only guess at it, and what it guessed
+// was mostly work already done (brain/sleep.ts no longer sets intentions down). So when a turn
+// that did something ends, the agent is asked once, with the request the turn itself would send:
+// what does this turn leave behind? A step it can take now is queued and it is woken at once to
+// take it (body/work.ts), so a turn that ended early is not the end of the work. What waits is
+// recorded with what it waits for, and with when to look again only when nothing will announce it.
+
+export const SETTLE_KIND = 'memory.settle.v1';
+/** The most lines of either list one turn may leave: a turn that leaves more was not one turn's work. */
+const SETTLE_MAX = 3;
+const MARK_AT = /^-\s*(I[0-9a-zA-Z]{4,12})\b[\s:,-]*(.*)$/;
+const TAG_AT = /^\[\s*([^\]]*)\]\s*(.*)$/;
+
+export interface Left {
+  /** Ready now: a new commitment, or by its mark one already held, with its first step. */
+  next: { mark?: string; text: string; step: string }[];
+  /** Waiting: for what, and in how many minutes to look again when nothing will announce it. */
+  waiting: { mark?: string; text: string; step: string; minutes?: number }[];
+  done: Looked['done'];
+}
+
+/** What the agent is asked when a turn has just ended. `cut` says the turn was ended by the limit of rounds, not by the agent. */
+export function settleQuestion(cut = false): string {
+  return [
+    `${MEMORY_MARK} Your turn has just ended${cut ? ', stopped by the limit of rounds in one turn and not by you' : ''}. Before you rest, settle what it leaves behind, so that nothing you began or promised is held only by this conversation. `
+    + 'Look at what was asked in it, at what you did and said, and at what you mean to do, listed above.',
+    'Is what was asked finished, as the one who asked would judge it? If a step remains that you can take now, without anyone\'s word, name it under Next: you are woken at once to take it. '
+    + 'If it waits for something, name that under Waiting. If something in your list above was settled in this turn, close it under Done.'
+    + (cut ? ' If you were still getting somewhere when you were stopped, the step you were on goes under Next; if you were going round in circles, say under Waiting what stops you, for your owner.' : ''),
+    'Only what this turn began, promised or settled. To change something already in your list above, begin the line with its mark and do not set it down again in other words. '
+    + 'Not a new idea, and not a thing to do merely because it could be done. Most turns leave nothing behind: then reply with the one word Nothing.',
+    'Call no tool. Reply with these lists and nothing else, each only when there is something for it:',
+    'Next:\n- <the commitment, in a sentence that can be understood on its own> => <the concrete step you take first>\n- I1a2b3c4 => <the next step of something already in your list>',
+    'Waiting:\n- [owner] <the commitment> => <what you need from your owner before you can go on>\n- [arrives] <the commitment> => <the message, review or notification it waits for>\n'
+    + '- [45m] <the commitment> => <what you will go and look at then; m, h or d>\n- I1a2b3c4 [2h] => <the same, for something already in your list>\n'
+    + 'In the brackets: owner or arrives when you will be told, and nothing is to be looked at meanwhile; a time only when nothing will tell you and you must go and look.',
+    'Done:\n- I1a2b3c4 [done] <how it ended>\n- I1a2b3c4 [dropped] <why it is given up>',
+  ].join('\n\n');
+}
+
+/** What a reply leaves behind, or the reason it is not in form. A line that is not in form is left out. */
+export function parseSettle(reply: string): Left | { problem: string } {
+  const found: Left = { next: [], waiting: [], done: [] };
+  if (/^nothing\.?$/i.test(plain(reply.trim()))) return found;
+  let list: 'next' | 'waiting' | 'done' | null = null;
+  let headed = false;
+  for (const raw of reply.replaceAll('\r', '').split('\n')) {
+    const heading = ({ 'next:': 'next', 'waiting:': 'waiting', 'done:': 'done' } as const)[plain(raw).toLowerCase()];
+    if (heading !== undefined) {
+      list = heading;
+      headed = true;
+      continue;
+    }
+    const item = raw.trim();
+    if (list === null || !item.startsWith('-')) continue;
+    if (list === 'done') {
+      const m = DONE_LINE.exec(item);
+      const how = /^\[\s*(done|dropped)\s*\]\s*(.*)$/i.exec(m?.[2]?.trim() ?? '');
+      if (m && found.done.length < 24) found.done.push({ mark: m[1]!, how: (how?.[2] ?? m[2]!).trim(), ...(how?.[1]?.toLowerCase() === 'dropped' ? { ended: 'dropped' as const } : {}) });
+      continue;
+    }
+    const marked = MARK_AT.exec(item);
+    let rest = (marked?.[2] ?? item.replace(/^-\s*/, '')).trim();
+    const tagged = TAG_AT.exec(rest);
+    const tag = tagged?.[1]?.trim().toLowerCase() ?? '';
+    if (tagged) rest = tagged[2]!.trim();
+    const [before, ...after] = rest.replace(/^=>\s*/, '=> ').split('=>');
+    const text = before!.trim();
+    const step = after.join('=>').trim() || text;
+    // A new commitment must say what it is; one named by its mark needs only its step.
+    if (step.length < 8 || (marked === null && text.length < 8)) continue;
+    const mark = marked === null ? {} : { mark: marked[1]! };
+    if (list === 'next' && found.next.length < SETTLE_MAX) found.next.push({ ...mark, text, step });
+    else if (list === 'waiting' && found.waiting.length < SETTLE_MAX) {
+      const time = /^(\d{1,4})\s*(m|min|h|d)\w*$/.exec(tag);
+      const minutes = time === null ? undefined : Math.min(60 * 24 * 30, Math.max(1, Number(time[1]) * (time[2] === 'h' ? 60 : time[2] === 'd' ? 1440 : 1)));
+      found.waiting.push({ ...mark, text, step, ...(minutes === undefined ? {} : { minutes }) });
+    }
+  }
+  return headed ? found : { problem: 'it had none of the lists "Next:", "Waiting:", "Done:" and was not the one word "Nothing"' };
+}
+
+/** Whether a turn's events end at the limit of rounds. */
+const cutShort = (events: JournalEvent[]): boolean => {
+  const last = events.findLast((e) => e.type === 'assistant');
+  return last?.type === 'assistant' && last.text === ROUND_LIMIT_REPLY;
+};
+
+/**
+ * Settles the turn that has just ended: asks once what it leaves behind and journals it. A record
+ * that it was settled is journaled whatever comes of it. `now` is when a ready step may be taken.
+ */
+export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.now()): Promise<Slept> {
+  const held = known(events);
+  const budget = (d.budgetChars ?? DEFAULT_BUDGET) - JSON.stringify(d.specs).length;
+  let messages: ChatMessage[] = buildMessages(events, d.system(), budget, undefined, { ask: settleQuestion(cutShort(events)), ...(d.tailChars === undefined ? {} : { tailChars: d.tailChars }) });
+  let usage: Usage | undefined;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let reply;
+    try {
+      reply = await d.provider(messages, d.specs, d.signal && { signal: d.signal });
+    } catch (err) {
+      if (d.signal?.aborted) return 'woken';
+      throw err;
+    }
+    if (d.signal?.aborted) return 'woken';
+    usage = reply.usage;
+    const left = reply.toolCalls.length > 0 ? { problem: 'a tool was called' } : parseSettle(reply.text);
+    if (!('problem' in left)) {
+      const open = (mark: string | undefined): Intention | undefined => (mark === undefined ? undefined : held.intentions.find((i) => i.mark === mark && !i.waits));
+      const said = new Set(held.intentions.map((i) => i.text));
+      const record = (item: Left['next'][number], status: WorkState['status'], minutes?: number): boolean => {
+        const old = open(item.mark);
+        // A mark that names nothing open, or words already held, sets nothing down.
+        if (old === undefined && (item.mark !== undefined || said.has(item.text))) return false;
+        const attempts = old?.work !== undefined && old.work.next === item.step && old.work.status === status ? old.work.attempts : 0;
+        const { at: _, checkAt: __, ...kept } = old?.work ?? ({} as Partial<WorkState>);
+        const work: WorkState = { ...kept, status, next: item.step, attempts, resumeAt: now, ...(status === 'waiting' && minutes !== undefined ? { checkAt: now + minutes * 60_000 } : {}) };
+        if (old === undefined) {
+          said.add(item.text);
+          appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { text: item.text, work } });
+        } else appendEvent(d.journal, d.gen, { type: 'note', kind: WORK_KIND, data: { intention: old.id, work } });
+        return true;
+      };
+      let closed = 0;
+      // Closed first: what was settled in this turn is not also to be gone on with.
+      const ended = new Set<string>();
+      for (const settled of left.done) {
+        const item = held.intentions.find((i) => i.mark === settled.mark);
+        if (item === undefined || ended.has(item.id)) continue;
+        ended.add(item.id);
+        appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: item.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
+        closed += 1;
+      }
+      const live = <T extends { mark?: string }>(items: T[]): T[] => items.filter((item) => !ended.has(open(item.mark)?.id ?? ''));
+      const next = live(left.next).filter((item) => record(item, 'queued')).length;
+      const waiting = live(left.waiting).filter((item) => record(item, 'waiting', item.minutes)).length;
+      appendEvent(d.journal, d.gen, { type: 'note', kind: SETTLE_KIND, data: { next, waiting, closed, ...(usage ? { usage } : {}) } });
+      return 'reflected';
+    }
+    messages = [
+      ...messages,
+      { role: 'assistant', content: reply.text.trim() === '' ? '(no text)' : reply.text },
+      { role: 'user', content: `${MEMORY_MARK} That cannot be kept: ${left.problem}. Reply again in exactly the form asked for, and call no tool.` },
+    ];
+  }
+  appendEvent(d.journal, d.gen, { type: 'note', kind: SETTLE_KIND, data: { next: 0, waiting: 0, closed: 0, failed: true, ...(usage ? { usage } : {}) } });
+  return 'reflected';
 }

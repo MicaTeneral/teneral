@@ -743,3 +743,11 @@ test('completion cannot silently shrink an established outcome', async () => {
   await expect(work.run({ task: 'fix', status: 'done', next: 'finished plan', outcome: 'write a plan' }, s.ctx)).rejects.toThrow('cannot be replaced');
   expect(known(readEvents(s.journal)).intentions.find((i) => i.text === 'fix')?.work).toMatchObject({ status: 'queued', outcome: 'tested implementation' });
 });
+
+test('only a line typed at the owner\'s terminal must be answered in words; any other wake may end quietly', async () => {
+  const { mayStayQuiet } = await import('../../brain/loop');
+  expect(mayStayQuiet('terminal')).toBe(false);
+  expect(mayStayQuiet('birth')).toBe(false);
+  expect(mayStayQuiet(undefined)).toBe(false);
+  for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
+});

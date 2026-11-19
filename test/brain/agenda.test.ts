@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PASSED_TICKS, REFLECTION_KIND, REFLECT_EVERY, REMIND_DAYS, idleTicks, initiative, initiativeText, offered, ownSpend, parseLook, reflectionDue, reportAsk } from '../../brain/agenda';
+import { PASSED_TICKS, REFLECTION_KIND, REFLECT_EVERY, REMIND_DAYS, SETTLE_KIND, STALE_DAYS, followUps, idleTicks, initiative, initiativeText, lookedAt, offered, ownSpend, parseLook, parseSettle, reflectQuestion, reflectionDue, reportAsk, settle, settleQuestion, tickDue, worthATick } from '../../brain/agenda';
 import { GAP_MS } from '../../brain/episodes';
 import { readEvents, type EventBody, type JournalEvent } from '../../brain/journal';
-import { ALLOWED_KIND, INTENTION_KIND, agenda, known, knownText, ownerSaid } from '../../brain/known';
+import { ALLOWED_KIND, DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, knownText, ownerSaid } from '../../brain/known';
 import type { ChatMessage, Provider, Reply } from '../../brain/provider';
 import { EPISODE_KIND } from '../../brain/remembered';
 import { sleep } from '../../brain/sleep';
@@ -326,4 +326,155 @@ test('every file of the memory loads when it is the first one loaded: they reach
     const run = Bun.spawnSync(['bun', '-e', `await import(${JSON.stringify(join(brain, `${name}.ts`))})`], { cwd: tmpdir(), stderr: 'pipe' });
     expect(`${name}: ${run.stderr.toString().split('\n').find((line) => line.includes('Error')) ?? 'loads'}`).toBe(`${name}: loads`);
   }
+});
+
+// --- settling a turn ---
+
+test('what a turn leaves is read from a strict form: steps to take now, what waits and how, and what was closed', () => {
+  const left = parseSettle([
+    'Next:', '- Publish the weekly report to the team => Render the draft and read it through', '- I1a2b3c4d => Run the second half of the migration',
+    'Waiting:', '- [owner] Rotate the deploy key => Their word on which key to keep', '- [arrives] Merge the fix => The review of pull request 12',
+    '- [45m] Check the nightly build => Look at the build page', '- I9z8y7x6w [2h] => The CI run on the rebased branch', '- [3 days] Renew the certificate => Whether the registrar answered',
+    'Done:', '- Iaaaa1111 [done] Shipped it', '- Ibbbb2222 [dropped] No longer wanted',
+  ].join('\n'));
+  expect(left).toEqual({
+    next: [{ text: 'Publish the weekly report to the team', step: 'Render the draft and read it through' }, { mark: 'I1a2b3c4d', text: '', step: 'Run the second half of the migration' }],
+    waiting: [
+      { text: 'Rotate the deploy key', step: 'Their word on which key to keep' },
+      { text: 'Merge the fix', step: 'The review of pull request 12' },
+      { text: 'Check the nightly build', step: 'Look at the build page', minutes: 45 },
+    ],
+    done: [{ mark: 'Iaaaa1111', how: 'Shipped it' }, { mark: 'Ibbbb2222', how: 'No longer wanted', ended: 'dropped' }],
+  });
+  // No more than three of either: a turn that leaves more was not one turn's work.
+  expect(parseSettle('Nothing')).toEqual({ next: [], waiting: [], done: [] });
+  expect(parseSettle('**Nothing.**')).toEqual({ next: [], waiting: [], done: [] });
+  expect(parseSettle('I think everything is fine.')).toHaveProperty('problem');
+  // Hours and days are minutes; a line too short to mean anything is left out.
+  expect(parseSettle('Waiting:\n- [2h] Wait for the long test run => Read its log\n- [1d] ok')).toMatchObject({ waiting: [{ minutes: 120 }] });
+});
+
+test('settling queues the step that can be taken now, records what waits with when to look, and closes what was settled', async () => {
+  const held = intention('Migrate the old tables', { work: { status: 'queued', next: 'Run the first half.', attempts: 2, resumeAt: 0, outcome: 'All tables moved' } });
+  const stale = intention('Tidy the scratch directory');
+  const turn = [ev({ type: 'stimulus', source: 'terminal', text: 'migrate the tables and tell the team' }), ev({ type: 'assistant', text: 'The first half is migrated; I will go on.', toolCalls: [] })];
+  const mark = (e: JournalEvent): string => known([e]).intentions[0]!.mark;
+  const s = setup([held, stale, ...turn], [answer([
+    'Next:', `- ${mark(held)} => Run the second half and compare the row counts`,
+    'Waiting:', '- [30m] Tell the team the migration is done => Look whether the replica has caught up', '- [owner] Drop the old tables => Their word that the old tables may go',
+    'Done:', `- ${mark(stale)} [dropped] It was only a thought`,
+  ].join('\n'))]);
+  const now = Date.parse('2026-11-20T10:00:00.000Z');
+  expect(await settle(s.deps, readEvents(s.journal), now)).toBe('reflected');
+  // The request is the turn's own, with the question after it: what a turn would send, so the cache still holds it.
+  expect(s.seen[0]!.at(-1)!.content).toContain('Your turn has just ended');
+  expect(s.seen[0]!.some((m) => (m.content ?? '').includes('The first half is migrated'))).toBe(true);
+  const after = known(readEvents(s.journal));
+  const by = (text: string) => after.intentions.find((i) => i.text === text)!;
+  // The commitment it already held is gone on with, not set down again; a new step is fresh progress.
+  expect(after.intentions.filter((i) => i.text === 'Migrate the old tables')).toHaveLength(1);
+  expect(by('Migrate the old tables').work).toMatchObject({ status: 'queued', next: 'Run the second half and compare the row counts', attempts: 0, resumeAt: now, outcome: 'All tables moved' });
+  expect(by('Tell the team the migration is done').work).toMatchObject({ status: 'waiting', checkAt: now + 30 * 60_000 });
+  // What will be announced is not looked at on a schedule.
+  expect(by('Drop the old tables').work).toMatchObject({ status: 'waiting', next: 'Their word that the old tables may go' });
+  expect(by('Drop the old tables').work!.checkAt).toBeUndefined();
+  expect(after.closed.map((i) => [i.text, i.ended])).toEqual([['Tidy the scratch directory', 'dropped']]);
+  expect(readEvents(s.journal).at(-1)).toMatchObject({ kind: SETTLE_KIND, data: { next: 1, waiting: 2, closed: 1 } });
+});
+
+test('a turn that leaves nothing sets nothing down, an answer out of form is asked for once more, and the limit of rounds is named', async () => {
+  const turn = [ev({ type: 'stimulus', source: 'terminal', text: 'what time is it?' }), ev({ type: 'assistant', text: 'Noon.', toolCalls: [] })];
+  const nothing = setup(turn, [answer('Nothing')]);
+  expect(await settle(nothing.deps, readEvents(nothing.journal))).toBe('reflected');
+  expect(known(readEvents(nothing.journal)).intentions).toEqual([]);
+  expect(readEvents(nothing.journal).at(-1)).toMatchObject({ kind: SETTLE_KIND, data: { next: 0, waiting: 0, closed: 0 } });
+
+  const twice = setup(turn, [answer('All good!'), { text: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] }]);
+  expect(await settle(twice.deps, readEvents(twice.journal))).toBe('reflected');
+  expect(twice.seen).toHaveLength(2);
+  expect(twice.seen[1]!.at(-1)!.content).toContain('That cannot be kept');
+  expect(readEvents(twice.journal).at(-1)).toMatchObject({ kind: SETTLE_KIND, data: { failed: true } });
+
+  // Words it already holds are not set down a second time, and a mark that names nothing sets nothing down.
+  const same = setup([intention('Publish the weekly report'), ...turn], [answer('Next:\n- Publish the weekly report => Render it\n- Izzzz9999 => Do something unknown')]);
+  await settle(same.deps, readEvents(same.journal));
+  expect(known(readEvents(same.journal)).intentions.map((i) => i.text)).toEqual(['Publish the weekly report']);
+
+  expect(settleQuestion()).not.toContain('limit of rounds');
+  expect(settleQuestion(true)).toContain('stopped by the limit of rounds in one turn and not by you');
+  const cut = setup([turn[0]!, ev({ type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] })], [answer('Nothing')]);
+  await settle(cut.deps, readEvents(cut.journal));
+  expect(cut.seen[0]!.at(-1)!.content).toContain('going round in circles');
+});
+
+// --- what waits, and when it is looked at ---
+
+test('what waits is offered when its time has come and at no other moment; what waits for an arrival is left alone', () => {
+  // Just after the fixture's own clock: these were recorded a moment ago.
+  const at = Math.ceil((clock + 60_000) / 3_600_000) * 3_600_000;
+  const timed = intention('Check the nightly build', { work: { status: 'waiting', next: 'Look at the build page.', attempts: 0, resumeAt: 0, checkAt: at + 30 * 60_000 } });
+  const arrival = intention('Publish the offer once approved', { work: { status: 'waiting', next: "The owner's approval.", attempts: 0, resumeAt: 0 } });
+  const held = known([timed, arrival]);
+  expect(followUps(held, at)).toEqual([]);
+  expect(worthATick(held, at)).toBe(false);
+  expect(offered(held, at)).toContain('Answer exactly [teneral: no reply]: do not go looking for something to do.');
+  expect(offered(held, at)).not.toContain('Publish the offer');
+
+  expect(followUps(held, at + 30 * 60_000).map((i) => i.text)).toEqual(['Check the nightly build']);
+  expect(worthATick(held, at + 30 * 60_000)).toBe(true);
+  const tick = offered(held, at + 30 * 60_000);
+  expect(tick).toContain('The time you set to look again at what waits has come');
+  expect(tick).toContain('It waits for: Look at the build page.');
+  expect(tick).toContain('do not look twice in one turn');
+  expect(tick).not.toContain('Publish the offer');
+
+  // Looked at once, it is not offered again before a wait that doubles, up to a day.
+  const once = lookedAt(held.intentions[0]!.work!, at + 30 * 60_000);
+  expect(once).toMatchObject({ attempts: 1, checkAt: at + 60 * 60_000 });
+  expect(once).not.toHaveProperty('at');
+  expect(lookedAt({ ...once, attempts: 3 }, at).checkAt).toBe(at + 4 * 3_600_000);
+  expect(lookedAt({ ...once, attempts: 40 }, at).checkAt).toBe(at + DAY);
+
+  // What waits for an arrival is looked at only when it has stood untouched for days: the arrival may have been missed.
+  const old = Date.parse(arrival.ts);
+  expect(followUps(held, old + 2 * DAY).map((i) => i.text)).not.toContain('Publish the offer once approved');
+  expect(followUps(known([arrival]), old + 3 * DAY).map((i) => i.text)).toEqual(['Publish the offer once approved']);
+  expect(knownText(held, '2026-11-20', '[memory]')).toContain('[waiting, until what it waits for arrives; for: The owner\'s approval.]');
+  expect(knownText(held, '2026-11-20', '[memory]')).toContain(`[waiting, to look again ${new Date(at + 30 * 60_000).toISOString().slice(0, 16).replace('T', ' ')} UTC; for: Look at the build page.]`);
+});
+
+test('there is no tick with nothing to act on, and ticks that come to nothing come more and more rarely', () => {
+  expect(worthATick(known([]), NOW)).toBe(false);
+  expect(worthATick(known([intention('Write the release notes')]), NOW)).toBe(true);
+  expect(worthATick(known([intention('An idea of my own', { origin: 'own' })]), NOW)).toBe(true);
+  expect(worthATick(known([intention('Is the staging server still needed?', { origin: 'ask' })]), NOW)).toBe(true);
+  expect(worthATick(known([]), NOW, 'It is time to tell your owner')).toBe(true);
+
+  const HALF = 30 * 60_000;
+  const idle = (): JournalEvent[] => [ev({ type: 'stimulus', source: 'clock', text: 'tick' }, HALF), ev({ type: 'assistant', text: '[teneral: no reply]', toolCalls: [] })];
+  let events = [...idle(), ...idle()];
+  const last = (): number => Date.parse(events.findLast((e) => e.type === 'stimulus')!.ts);
+  expect(tickDue(events, last() + HALF, HALF)).toBe(true);
+  events = [...events, ...idle()];
+  // Three in a row with nothing done: the next comes after two intervals, not one.
+  expect(tickDue(events, last() + HALF, HALF)).toBe(false);
+  expect(tickDue(events, last() + 2 * HALF, HALF)).toBe(true);
+  events = [...events, ...idle(), ...idle(), ...idle()];
+  expect(tickDue(events, last() + 3 * HALF, HALF)).toBe(false);
+  expect(tickDue(events, last() + 4 * HALF, HALF)).toBe(true);
+  // Something done on a tick brings the usual interval back.
+  events = [...events, ev({ type: 'stimulus', source: 'clock', text: 'tick' }, HALF), ev({ type: 'assistant', text: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] }), ev({ type: 'assistant', text: 'Done.', toolCalls: [] })];
+  expect(tickDue(events, last() + HALF, HALF)).toBe(true);
+});
+
+test('looking ahead names what has only waited for days, to be closed or asked about', () => {
+  const at = Date.parse('2026-11-20T10:00:00.000Z');
+  const fresh = intention('Wait for the review', { work: { status: 'waiting', next: 'The review.', attempts: 0, resumeAt: 0 } });
+  const mark = known([fresh]).intentions[0]!.mark;
+  expect(reflectQuestion(known([fresh]), '', Date.parse(fresh.ts) + DAY)).not.toContain('have waited');
+  const asked = reflectQuestion(known([fresh]), '', Date.parse(fresh.ts) + STALE_DAYS * DAY);
+  expect(asked).toContain(`These have waited ${STALE_DAYS} days or more with nothing recorded: ${mark}.`);
+  expect(asked).toContain('A list of things that only wait is no agenda');
+  expect(at).toBeGreaterThan(0);
+  expect(DONE_KIND).not.toBe(WORK_KIND);
 });
