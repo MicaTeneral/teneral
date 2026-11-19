@@ -153,6 +153,38 @@ test('identity failures preserve cursor; cache is reused and invalidated on cred
  key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
 });
 
+test('a message whose stimulus could not be journaled is fetched and told again', async () => {
+  // The second message is fetched, but writing its stimulus fails (a stop in the middle of it).
+  // The cursor moves only past what was told, so the next poll asks from 1 again and tells it.
+  const notices: Stimulus[] = [];
+  const asked: string[] = [];
+  const pages = [
+    [{id: 1, sender_id: 100, type: 'private', content: 'first'}],
+    [{id: 2, sender_id: 100, type: 'private', content: 'second'}],
+    [{id: 2, sender_id: 100, type: 'private', content: 'second'}],
+  ];
+  let calls = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({user_id: 99}));
+    asked.push(url.searchParams.get('anchor') ?? '');
+    return new Response(JSON.stringify({messages: pages.shift() ?? []}));
+  }) as unknown as typeof fetch;
+  const emit = (s: Stimulus) => {
+    calls++;
+    if (calls === 2) throw new Error('stopped before id 2 reached the journal');
+    notices.push(s);
+  };
+  const p = zulipPoller({baseline: false, credentials, events: () => [], send}, emit);
+  await p.poll();
+  expect(notices).toHaveLength(1);
+  await p.poll();
+  expect(notices).toHaveLength(1);
+  await p.poll();
+  expect(asked).toEqual(['newest', '1', '1']);
+  expect(notices).toHaveLength(2);
+  expect(notices[1]!.text).toStartWith('Zulip private 2\n');
+});
+
 import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
 
 test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
@@ -268,6 +300,54 @@ test('only verified owner uploads enter the image store; HTML and bytes stay bou
   expect(notices[0].source).toBe('owner:zulip');
   expect(notices[0].text).toEndWith('[image: memory/images/'+('a'.repeat(64))+'.png]');
   expect(notices[1].text).not.toContain('[image:');
+});
+
+test('an inline image whose src is a thumbnail downloads the data-original-src original', async () => {
+  // Zulip renders <img src="/user_uploads/thumbnail/..."> with the full image in
+  // data-original-src; reading src alone yields only the downscaled thumbnail, which the
+  // download filter discards, so the message used to emit with no image marker at all.
+  // The raw markdown has no upload link (apply_markdown=false), so the trigger must not
+  // depend on seeing "/user_uploads/" in the raw text.
+  const notices: Stimulus[] = [], kept: Buffer[] = [], fetched: string[] = [];
+  const png = Buffer.from('89504e470d0a1a0a000000', 'hex');
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({user_id:99}));
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({messages: [
+      {id:50,sender_id:100,type:'private',content:'look at the screenshot'},
+    ]}));
+    if (url.pathname === '/api/v1/messages/50') return new Response(JSON.stringify({message:{content:'<p>shot<br><img alt="image.png" class="inline-image" data-original-src="/user_uploads/2/b/shot.png" src="/user_uploads/thumbnail/2/b/shot.png/840x560.webp"><br>done</p>'}}));
+    fetched.push(url.pathname); return new Response(png);
+  }) as unknown as typeof fetch;
+  await zulipPoller({baseline:false,credentials,events:()=>[],send,ownerId:100,keepImage:async b=>{kept.push(b);return '[image: memory/images/'+('b'.repeat(64))+'.png]'}},s=>notices.push(s)).poll();
+  expect(fetched).toEqual(['/user_uploads/2/b/shot.png']);
+  expect(kept).toEqual([png]);
+  expect(notices[0].source).toBe('owner:zulip');
+  expect(notices[0].text).toEndWith('[image: memory/images/'+('b'.repeat(64))+'.png]');
+});
+
+test('a non-image owner attachment does not abort the batch; the message and later ones still emit', async () => {
+  // Regression: an owner message whose upload is not a showable image (here a .md) made
+  // keepImage throw inside the batch loop, aborting the whole poll pass so every pending
+  // message was dropped. The attachment must degrade to a note and the rest of the batch emit.
+  const notices: Stimulus[] = [];
+  const mdBytes = Buffer.from('# not an image');
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({ messages: [
+      { id: 10, sender_id: 100, type: 'private', content: 'see the report [r](/user_uploads/1/a/r.md)' },
+      { id: 11, sender_id: 100, type: 'private', content: 'follow up' },
+    ] }));
+    if (url.pathname === '/api/v1/messages/10') return new Response(JSON.stringify({ message: { content: '<a href="/user_uploads/1/a/r.md">r</a>' } }));
+    if (url.pathname.startsWith('/user_uploads/')) return new Response(mdBytes, { headers: { 'content-type': 'text/markdown' } });
+    return new Response('nope', { status: 404 });
+  }) as unknown as typeof fetch;
+  const keepImage = () => { throw new Error('not a PNG, JPEG, GIF or WebP image'); };
+  await zulipPoller({ baseline: false, credentials, events: () => [], send, ownerId: 100, keepImage }, s => notices.push(s)).poll();
+  expect(notices).toHaveLength(2); // both the .md message and the follow-up emit
+  expect(notices[0].source).toBe('owner:zulip');
+  expect(notices[0].text).toContain('see the report');
+  expect(notices[0].text).toContain('[Zulip attachment could not be shown]');
+  expect(notices[1].text).toContain('follow up');
 });
 
 test('owner attachment failures do not lose the message or download untrusted files', async () => {
@@ -677,4 +757,30 @@ test('a subscription the event queue tells of reaches the poller, which wakes th
   expect(got[0]!.text).toContain('There with you: Ann Lee.');
   await p.poll();
   expect(got).toHaveLength(1);
+});
+
+test('a hung poll pass releases the busy latch so the sensor retries instead of going silent', async () => {
+  // The whole point of the watchdog: an await inside poll() that never resolves (here the page
+  // fetch hangs) must not leave `busy` latched, or every later interval returns early and the
+  // sensor silently stops delivering. With a short test deadline the latch is force-released and
+  // a subsequent healthy poll fetches and emits again.
+  const notices: Stimulus[] = [];
+  let hang = true, pageFetches = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (hang) return new Promise<Response>(() => {}); // never resolves
+    pageFetches++;
+    return new Response(JSON.stringify({ messages: [{ id: 7, content: 'late hello', type: 'private' }] }));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, pollDeadlineMs: 5 }, s => notices.push(s));
+  // First pass hangs on the page fetch; its watchdog force-releases the busy latch.
+  const hung = p.poll();
+  await new Promise(r => setTimeout(r, 20)); // let the 5ms watchdog fire and release busy
+  hang = false; // from here the page fetch is healthy
+  await p.poll(); // busy is now free, so this fetches and emits instead of early-returning
+  expect(pageFetches).toBeGreaterThan(0);
+  expect(notices).toHaveLength(1);
+  expect(notices[0].text).toStartWith('Zulip private 7\n');
+  await Promise.race([hung, new Promise(r => setTimeout(r, 50))]); // let the hung pass settle
+  p.stop();
 });
