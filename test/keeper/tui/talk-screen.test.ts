@@ -97,7 +97,9 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `╭${'─'.repeat(97)}╮`,
     `│ ›${' '.repeat(95)}│`,
     `╰${'─'.repeat(97)}╯`,
-    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b$/),
+    expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
+    // Under the footer, the actions: links to move onto and open.
+    expect.stringMatching(/^ ›› mutate · publish · memory · more +Down selects$/),
   ]);
   // The terminal's own cursor is hidden at the top of the live region; the one the owner sees is drawn in the box.
   expect(s.term.vt.cursorVisible).toBe(false);
@@ -290,8 +292,7 @@ test('reasoning and context use are shown when the body journals them, and nothi
   s.clock.at = 3000;
   const without = s.all();
   expect(without).not.toMatch(/○|context/);
-  expect(rows(s.live())).toHaveLength(5);
-  s.term.resize(160, 30);
+  expect(rows(s.live())).toHaveLength(6);
 
   s.say('and how many lines?', 4000);
   s.journal(more({ type: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }], reasoning: 'The owner wants a count. I should not guess: `wc -l` gives it exactly.\n\nThen report the total only.', usage: { input: 70_200, output: 1700, cached: 64_000 } }), 5000);
@@ -310,13 +311,13 @@ test('reasoning and context use are shown when the body journals them, and nothi
   expect(s.all()).toContain('what it thought, in 2 stretches');
   expect(s.all()).toContain('  Then report the total only.');
   // The newest request's tokens against the model's window, at the right under the tip; the effort beside the model.
-  expect(rows(s.live()).at(-1)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
+  expect(rows(s.live()).at(-2)).toMatch(/memory well · exam pending.*context 9% \(90\.3k\/1\.05M\)$/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  effort high  resting  /);
   // A model whose window is not known: the count alone.
   const other = stage(100, 30, { env: { TENERAL_MODEL: 'some-local-model' } });
   settled(other);
   other.journal(more({ type: 'assistant', text: 'Hm.', toolCalls: [], usage: { input: 12_345, output: 55 } }), 0);
-  expect(rows(other.live()).at(-1)).toMatch(/memory well · exam pending.*context 12\.4k$/);
+  expect(rows(other.live()).at(-2)).toMatch(/memory well · exam pending.*context 12\.4k$/);
 });
 
 // --- resizing ---
@@ -346,7 +347,7 @@ test('resize while a turn is under way: the live region is drawn anew at each si
         expect(live.filter((row) => row.startsWith('╭'))).toEqual([`╭${'─'.repeat(cols - 3)}╮`]);
         expect(live.filter((row) => row.startsWith('╰'))).toEqual([`╰${'─'.repeat(cols - 3)}╯`]);
         expect(live.filter((row) => row.includes('half a line'))).toEqual([`│ › half a line${' '.repeat(cols - 17)}│`]);
-        expect(live.some((row) => row.startsWith(' gpt-6.1-sol') || row.startsWith(' Publish'))).toBe(true);
+        expect(live.some((row) => /^ gpt-6\.1-sol/.test(row))).toBe(true);
       }
       if (height >= 20) expect(live.filter((row) => new RegExp(`^${SPIN} Mica is running bash · 0:03 · esc to in`).test(row))).toHaveLength(1);
       // Down to a screen of a few columns there is a row to type on, with the cursor in it.
@@ -559,14 +560,14 @@ test('an image attached and sent: Ctrl+V asks the helper for the clipboard, the 
   s.type('what is wrong in this screenshot?');
   s.type('\x16');
   // Asked, not answered: the footer says what is being waited for; nothing is typed into the line.
-  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the clipboard's image …$/);
+  expect(rows(s.live()).at(-2)).toMatch(/ asking your machine for the clipboard's image …$/);
   expect(typed(s)).toEqual(['› what is wrong in this screenshot?']);
   const shot = png(1280, 720, 245_000);
   expect(helper(s, () => ({ first: 'ok', data: shot }))).toEqual(['clipboard']);
   await s.ready();
   const live = s.live();
   expect(typed(s)).toEqual([`[image 1 · png · 1280×720 · ${Math.round(shot.length / 1024)} KB]`, '› what is wrong in this screenshot?']);
-  expect(rows(live).at(-1)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
+  expect(rows(live).at(-2)).toMatch(/ attached: image 1 · Backspace at the start removes the last$/);
   expect(stored(s)).toEqual([`${sha(shot)}.png`]);
   expect(readFileSync(join(s.p.root, 'memory', 'images', `${sha(shot)}.png`)).equals(shot)).toBe(true);
   expectFrame('image-attached-100x34', s.all());
@@ -605,7 +606,7 @@ test('a file dragged in, pasted as its path or named with /image becomes a chip 
   // Dragged: the terminal pastes the path, quoted, with a space after it.
   s.type(PASTE('\'/home/owner/My Pictures/photo 1.jpg\' '));
   expect(typed(s)).toEqual(['›']);
-  expect(rows(s.live()).at(-1)).toMatch(/ asking your machine for the file …$/);
+  expect(rows(s.live()).at(-2)).toMatch(/ asking your machine for the file …$/);
   expect(helper(s, answer)).toEqual(['file /home/owner/My Pictures/photo 1.jpg']);
   await s.ready();
   expect(typed(s)).toEqual([`[image 1 · jpg · 4032×3024 · ${photo.length} B]`, '›']);
@@ -708,7 +709,7 @@ test('limits: at most four images in a message, 10 MB each, and each refusal say
     s.frame();
   }
   expect(typed(s).join(' ').match(/\[image \d/g)).toHaveLength(4);
-  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last$/);
+  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1, image 2, image 3, image 4 · Backspace at the start removes the last$/);
   s.type('\x16');
   expect(helper(s, () => ({ first: 'ok', data: png(99, 99) }))).toEqual([]);
   expect(s.all()).toContain('  A message carries at most 4 images. Backspace at the start of the line removes the last one.');
@@ -794,7 +795,7 @@ test('hostile text from the model, a tool and another agent cannot move the curs
 
   // The client is whole: its own panel at the top, its own box and footer at the bottom, still on the normal screen.
   expect(rows(all)[0]).toBe(`╭${'─'.repeat(77)}╮`);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  /);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  /);
   expect(s.term.vt.alt).toBe(false);
   expect(all).toContain('◦ Beforeafter.');
   expect(all).toContain('◦ from mallory  hi there [image: memory/images/');
@@ -1054,7 +1055,7 @@ test('the footer turns through tips, each naming a real key or command, and give
   const seen = new Set<string>();
   for (let i = 0; i < 13; i++) {
     s.clock.at = i * 20_000;
-    seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-1)!)?.[1] ?? '');
+    seen.add(/ {3,}(\S.*)$/.exec(rows(s.live()).at(-2)!)?.[1] ?? '');
   }
   expect([...seen].sort()).toEqual([
     './one talk --plain is this as plain text', '/generations lists the bodies it has lived in', '/help lists the keys and commands', '/history prints the earlier conversation',
@@ -1063,11 +1064,11 @@ test('the footer turns through tips, each naming a real key or command, and give
   ]);
   s.clock.at = 0;
   s.term.resize(70, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
+  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral');
   s.term.resize(50, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
+  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
   s.term.resize(30, 30);
-  expect(rows(s.live()).at(-1)).toBe(' gpt-6.1-sol  resting');
+  expect(rows(s.live()).at(-2)).toBe(' gpt-6.1-sol  resting');
 });
 
 // --- the terminal's limits ---
@@ -1512,7 +1513,7 @@ test('a routine clock turn is a footer status, not the main activity prompt', ()
   s.journal({ type: 'stimulus', source: 'clock', text: clockText(new Date(T0 + 1000)) }, 1000);
   const live = s.live();
   expect(live).not.toContain('Mica is thinking');
-  expect(rows(live).at(-1)).toContain('background: agenda');
+  expect(rows(live).at(-2)).toContain('background: agenda');
   s.journal({ type: 'assistant', text: '[round limit reached; waiting for the next stimulus]', toolCalls: [] }, 2000);
   expect(s.live()).not.toContain('round limit reached');
   expect(rows(s.live()).at(-1)).not.toContain('background: agenda');
@@ -1532,7 +1533,7 @@ test('background memory work is only a footer status, not the primary prompt or 
   expect(live).not.toContain('Mica is remembering');
   expect(live).not.toContain('the model is writing');
   expect(live).not.toContain('My owner asked me to set up the mail');
-  expect(rows(live).at(-1)).toContain('background: remembering');
+  expect(rows(live).at(-2)).toContain('background: remembering');
   expect(live).not.toContain('esc to interrupt');
   // The same file, three minutes on: its body is gone, and nothing is going on.
   s.clock.at += 3 * 60_000;
@@ -1543,7 +1544,7 @@ test('background memory work is only a footer status, not the primary prompt or 
 test('the status line says how the memory stands and what the last exam came to, once anything is remembered', () => {
   const s = stage(120, 30, { name: 'Mica' });
   settled(s);
-  const footer = (): string => rows(s.live()).at(-1) ?? '';
+  const footer = (): string => rows(s.live()).at(-2) ?? '';
   expect(footer()).toContain('memory well · exam pending');
   const at = new Date(T0 - 58_000).toISOString();
   const end = new Date(T0 - 50_000).toISOString();
@@ -1580,5 +1581,56 @@ test('a turn nobody asked for shows only its last few lines while it goes on, an
   expect(live).not.toContain('step 4');
   expect(s.all().split('step 6')[0]).not.toContain('step');
   // The footer is where it was: the model's name is in its last row.
-  expect(live.split('\n').at(-1)).toContain('gpt-6.1-sol');
+  expect(live.split('\n').at(-2)).toContain('gpt-6.1-sol');
+});
+
+test('under the footer stands a row of actions: Down goes onto it, Left and Right move, Enter opens a menu of what can be done there, and its items are commands', () => {
+  const s = stage(110, 40);
+  settled(s);
+  const last = (n = 1): string => s.live().split('\n').slice(-n).join('\n');
+  // The footer is the row above; the actions are the last row, with how to get onto them.
+  expect(last()).toMatch(/mutate .* publish .* memory .* more +Down selects$/);
+  expect(last(2).split('\n')[0]).toContain('gpt-6.1-sol');
+  s.type('\x1b[B');
+  expect(last()).toContain('Left/Right move');
+  s.type('\x1b[C');
+  s.type('\r');
+  // The publish menu: nothing waits in this install, and the two ways to read about it are there.
+  const menu = s.live();
+  expect(menu).toContain('nothing waits');
+  expect(menu).toContain('what each holds');
+  expect(menu).toContain('how it works');
+  expect(menu.split('\n').at(-1)).toMatch(/publish .* Enter does it .* Esc back/);
+  // Down to "how it works" and Enter: the same page /publish prints.
+  s.type('\x1b[B'); s.type('\x1b[B');
+  s.type('\r');
+  expect(s.all()).toContain('Nothing your agent makes goes out by itself');
+  // The keys are back in the input, and the row is as it was.
+  expect(last()).toContain('Down selects');
+  s.type('hello');
+  expect(s.live()).toContain('hello');
+
+  // Esc on the row goes back to the input and does not reach the agent; a typed letter does too, and is typed.
+  s.type('\x7f'.repeat(5));
+  s.type('\x1b[B');
+  expect(last()).toContain('Left/Right move');
+  s.type('x');
+  expect(last()).toContain('Down selects');
+  expect(s.live()).toContain('x');
+});
+
+test('an action that holds something for the owner says so, and Down goes onto it first', () => {
+  const s = stage(110, 40);
+  settled(s);
+  mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
+  writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: 'e5f6a7b'.padEnd(40, '0') }));
+  s.clock.at = 60_000;
+  expect(s.live().split('\n').at(-1)).toContain('mutate e5f6a7b');
+  s.type('\x1b[B');
+  s.type('\r');
+  expect(s.live()).toContain('approve e5f6a7b');
+  expect(s.live()).toContain('let the waiting mutation through');
+  s.type('\x1b');
+  s.app.settleKeys();
+  expect(s.live().split('\n').at(-1)).toContain('Left/Right move');
 });

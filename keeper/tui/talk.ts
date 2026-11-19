@@ -5,6 +5,7 @@ import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
 import { install, ownerCommand, publishing } from '../../species/offer';
+import { readApproval } from '../../immune/approval';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
 import { health, healthBadge } from '../../brain/health';
@@ -54,6 +55,10 @@ const STALE_PULSE_MS = 120_000;
 /** How often the status line works out anew how the memory stands. */
 const MEMORY_BADGE_MS = 30_000;
 /** Entries still under way that the live region lays out; older ones wait unseen. */
+/** One thing a menu offers: what it is called, what it does, and the command line it stands for; null for a line that only says something. */
+interface MenuItem { name: string; about: string; run: string | null }
+/** One of the actions under the footer, with the menu it opens. */
+interface Action { label: string; note: string; hot: boolean; items: () => MenuItem[] }
 const PENDING_SHOWN = 12;
 /** How many lines of a held-back turn of the agent's own are shown while it goes on. */
 const OWN_SHOWN = 4;
@@ -238,10 +243,14 @@ export class TalkScreen {
   private publishedAt = 0;
   private publishedCommit: string | null = null;
   private publishPending = false;
-  /** Focus in the visible bottom menu, rather than in the input editor. */
-  private menuSelected = false;
   private offersWaiting = 0;
   private offersUnsent = 0;
+  /** The mutation that waits for the owner's approval, by the start of its commit; empty when none does. */
+  private mutationWaiting = '';
+  /** The action the keys are on, while they are on the row of actions under the footer; null while they are in the input. */
+  private bar: number | null = null;
+  /** The menu an action opened: what can be done there, and which of it the keys are on. */
+  private menu: { title: string; items: MenuItem[]; chosen: number } | null = null;
   private ticks = 0;
   private readonly asks: Ask[] = [];
   /** One codec pipeline at a time; helper answers still arrive in their original order. */
@@ -663,24 +672,92 @@ export class TalkScreen {
     return { ...o, chosen };
   }
 
+  /**
+   * The actions under the footer, each with the menu it opens. What a menu holds is made when it
+   * is opened, from what stands on disk at that moment; every item is a command the owner could
+   * have typed, so nothing can be done here that could not be done in words.
+   */
+  private actions(): Action[] {
+    const waits = this.mutationWaiting;
+    return [
+      {
+        label: 'mutate', note: waits === '' ? '' : waits.slice(0, 7), hot: waits !== '',
+        items: () => [
+          waits === '' ? { name: 'nothing waits', about: 'no mutation is waiting for your approval', run: null }
+            : { name: `approve ${waits.slice(0, 7)}`, about: 'let the waiting mutation through; the agent is told to ask again', run: `/approve ${waits}` },
+          { name: 'generations', about: 'the generations this individual has lived in', run: '/generations' },
+        ],
+      },
+      {
+        label: 'publish', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : '', hot: this.offersWaiting + this.offersUnsent > 0,
+        items: () => {
+          let standing: ReturnType<typeof publishing> = { waits: [], approved: [], sent: [], failed: 0 };
+          try { standing = publishing(install(this.o.paths.root)); } catch { /* nothing to list */ }
+          const row = (verb: string, r: { commit: string; branch?: string; title: string }): MenuItem => ({ name: `${verb} ${r.commit.slice(0, 7)}`, about: `${r.branch ?? ''}: ${r.title}`, run: `/publish ${r.commit.slice(0, 12)}` });
+          return [
+            ...standing.waits.map((r) => row('let go', r)), ...standing.approved.map((r) => row('send again', r)),
+            ...(standing.waits.length + standing.approved.length === 0 ? [{ name: 'nothing waits', about: 'no offer waits for you, and none you approved is unsent', run: null }] : []),
+            { name: 'what each holds', about: 'every waiting offer, file by file', run: '/offers' },
+            { name: 'how it works', about: 'how the agent\'s work goes out, and where everything stands', run: '/publish' },
+          ];
+        },
+      },
+      { label: 'memory', note: '', hot: false, items: () => [{ name: 'memory', about: 'the agent\'s memory, and your hand on it', run: '/memory' }, { name: 'usage', about: 'what the requests to the model cost', run: '/usage' }] },
+      {
+        label: 'more', note: '', hot: false,
+        items: () => [
+          { name: 'history', about: 'the earlier conversation that was read from the journal', run: '/history' },
+          { name: 'tools', about: 'show or hide what each tool call returned', run: '/tools' },
+          { name: 'heart', about: 'give the agenda one pulse now', run: '/heart' },
+          { name: 'help', about: 'the keys and commands', run: '/help' },
+        ],
+      },
+    ];
+  }
+
+  /** Runs a menu's item as the command line it stands for. */
+  private choose(item: MenuItem): void {
+    this.menu = null;
+    this.bar = null;
+    if (item.run === null) return;
+    const line = entered(item.run);
+    if (line.kind === 'command') this.command(line.command.name, line.arg);
+  }
+
   private press(key: Key): void {
     if (this.closed) return;
     if (key.kind === 'alive') return this.lifeline.heard();
     this.dirty = true;
     const ctrl = (name: string): boolean => key.kind === 'key' && key.ctrl === true && key.name === name;
     if (ctrl('c')) return this.close(0);
-    if (this.menuSelected) {
-      if (key.kind === 'key' && key.name === 'enter' && !key.alt && !key.shift) {
-        this.menuSelected = false;
-        return this.command('/publish', '');
-      }
-      if (key.kind === 'key' && (key.name === 'up' || key.name === 'escape') && !key.ctrl && !key.alt && !key.shift) {
-        this.menuSelected = false;
-        return;
-      }
+    const plain = key.kind === 'key' && !key.ctrl && !key.alt && !key.shift;
+    if (this.menu !== null && key.kind === 'key') {
+      // An open menu has the keys: up and down move, Enter does what is chosen, Esc or Left goes back to the row.
+      const step = key.name === 'up' || ctrl('p') ? -1 : key.name === 'down' || ctrl('n') ? 1 : 0;
+      if (step !== 0) { this.menu = { ...this.menu, chosen: (this.menu.chosen + step + this.menu.items.length) % this.menu.items.length }; return; }
+      if (plain && key.name === 'enter') return this.choose(this.menu.items[this.menu.chosen]!);
+      if (plain && (key.name === 'escape' || key.name === 'left')) { this.menu = null; return; }
       return;
     }
+    if (this.bar !== null) {
+      const actions = this.actions();
+      if (plain && key.kind === 'key' && (key.name === 'left' || key.name === 'right')) { this.bar = (this.bar + (key.name === 'left' ? -1 : 1) + actions.length) % actions.length; return; }
+      if (plain && key.kind === 'key' && (key.name === 'enter' || key.name === 'down')) {
+        const action = actions[this.bar]!;
+        this.menu = { title: action.label, items: action.items(), chosen: 0 };
+        return;
+      }
+      // Esc and Up go back to the input; so does anything typed or pasted, which then goes where it always went.
+      this.bar = null;
+      if (plain && key.kind === 'key' && (key.name === 'escape' || key.name === 'up')) return;
+    }
     const list = this.offered();
+    // Down from an empty input, with nothing else for it to do, goes onto the row of actions: first onto one that holds something for the owner.
+    if (plain && key.name === 'down' && list === null && this.held === null && this.edit.text === '' && this.edit.chips.length === 0 && this.edit.at === null) {
+      const hot = this.actions().findIndex((a) => a.hot);
+      this.bar = hot === -1 ? 0 : hot;
+      return;
+    }
     if (key.kind === 'key' && key.name === 'escape' && !key.ctrl && !key.alt && !key.shift) {
       // Esc belongs to what is nearest the owner's hands: an open list is closed by it, and only with none open does it reach the agent.
       if (list === null) return this.interrupt();
@@ -705,13 +782,6 @@ export class TalkScreen {
     }
     if (this.held !== null) {
       this.held.push(key);
-      return;
-    }
-    // Down on an untouched input reaches the visible bottom action. It never steals a history
-    // navigation or a command-list choice, and the editor keeps ordinary Down for a multi-line draft.
-    if (key.kind === 'key' && key.name === 'down' && !key.ctrl && !key.alt && !key.shift && this.edit.text === '' && this.edit.chips.length === 0
-      && (this.offersWaiting > 0 || this.offersUnsent > 0)) {
-      this.menuSelected = true;
       return;
     }
     if (ctrl('d') && this.edit.text === '' && this.edit.chips.length === 0) return this.close(0);
@@ -1101,6 +1171,10 @@ export class TalkScreen {
         this.offersWaiting = standing.waits.length;
         this.offersUnsent = standing.approved.length;
       } catch { this.offersWaiting = 0; this.offersUnsent = 0; }
+      try {
+        const approval = readApproval(this.o.paths.root);
+        this.mutationWaiting = approval.asked !== undefined && approval.asked !== approval.approved ? approval.asked.slice(0, 12) : '';
+      } catch { this.mutationWaiting = ''; }
     }
     const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
@@ -1111,7 +1185,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.menuSelected}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.mutationWaiting}:${this.bar}:${this.menu?.chosen}:${this.menu?.title}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
@@ -1133,7 +1207,10 @@ export class TalkScreen {
     // While the list of commands is open, Esc closes that and interrupts nothing, so the line does not say it would.
     const offered = this.offered();
     let list: Offered | null = null;
-    if (offered !== null) {
+    if (this.menu !== null) {
+      // A menu is drawn as the commands are: its items under the box, the keys under them.
+      list = { matches: this.menu.items.map((item) => ({ name: item.name, hint: '', about: item.about, plain: false })), chosen: this.menu.chosen, keys: [this.menu.title, 'Enter does it', 'Esc back', 'Up/Down choose'] };
+    } else if (offered !== null) {
       const chosen = offered.matches[offered.chosen]!;
       const runs = chosen.name === offered.typed.name || takes(chosen) === 'none';
       list = { matches: offered.matches, chosen: offered.chosen, keys: ['Tab completes', runs ? 'Enter runs' : 'Enter completes', 'Esc closes', 'Up/Down choose'] };
@@ -1175,15 +1252,13 @@ export class TalkScreen {
       activity,
       workers: s.workers,
       edit: this.edit,
-      inputFocused: !this.menuSelected,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.offersWaiting > 0 ? [`${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you: /publish`] : this.offersUnsent > 0 ? [`${this.offersUnsent} approved, not sent: /publish`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      inputFocused: this.bar === null,
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
-      menu: this.offersWaiting > 0 || this.offersUnsent > 0
-        ? { label: 'Publish', detail: this.offersWaiting > 0 ? `${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you · /publish` : `${this.offersUnsent} approved, not sent · /publish`, selected: this.menuSelected }
-        : null,
       list,
+      bar: { actions: this.actions().map(({ label, note, hot }) => ({ label, note, hot })), chosen: this.bar },
     }));
   }
 

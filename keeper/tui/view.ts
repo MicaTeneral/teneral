@@ -318,7 +318,7 @@ export interface Live {
   /** What the agent is doing, while it is doing something. */
   activity: Line | null;
   edit: Edit;
-  /** Whether the input owns the visible cursor. False while a bottom-menu action is selected. */
+  /** Whether the input owns the visible cursor. False while an action on the bar is selected. */
   inputFocused?: boolean;
   /** Active delegated workers: one row each, while their tool calls remain open. */
   workers: { label: string; task: string }[];
@@ -329,10 +329,14 @@ export interface Live {
   context: string;
   /** Under the footer's left side: what is attached, or what is being waited for. May be empty. */
   hint: string;
-  /** A real bottom-menu action. The label is always visible; Enter opens it when selected. */
-  menu?: { label: string; detail: string; selected: boolean } | null;
   /** The commands offered for what is being typed, while they are: under the box, where the footer otherwise is. */
   list?: Offered | null;
+  /**
+   * The row of actions under the footer: links the owner can move onto and open, each a menu of
+   * what can be done there. `chosen` is the one the keys are on, or null while the keys are in the
+   * input. `hot` marks one that holds something waiting for the owner.
+   */
+  bar?: { actions: { label: string; note: string; hot: boolean }[]; chosen: number | null } | null;
 }
 
 export interface Offered {
@@ -383,6 +387,23 @@ function inputRow(text: string, col: number | null, word: { from: number; to: nu
 }
 
 /** The commands offered, one to a row: the chosen one marked, each with what may follow it and what it does. At most `rows` of them, the ones around the chosen. */
+/**
+ * The actions, in one row: each a link, the one the keys are on with its colours swapped, one
+ * that holds something for the owner in the accent colour with what it holds. At the right, how
+ * to get onto the row, or what the keys do while on it.
+ */
+function barRow(bar: NonNullable<Live['bar']>, max: number, g: Glyphs): Line {
+  const left: Line = [{ text: ` ${g.prompt}${g.prompt} `, style: { fg: 'accent', bold: true } }];
+  bar.actions.forEach((a, i) => {
+    if (i > 0) left.push({ text: ` ${g.sep} `, style: FAINT });
+    const on = bar.chosen === i;
+    left.push({ text: on ? ` ${a.label} ` : a.label, style: on ? { fg: 'ink', bg: 'accent', bold: true } : a.hot ? { fg: 'accent', bold: true, underline: true } : { underline: true } });
+    if (a.note !== '') left.push({ text: ` ${a.note}`, style: a.hot ? { fg: 'accent' } : DIM });
+  });
+  const keys = bar.chosen === null ? `Down selects` : `Left/Right move ${g.sep} Enter opens ${g.sep} Esc back`;
+  return ends(left, [{ text: keys, style: FAINT }], max);
+}
+
 function offeredRows(list: Offered, max: number, rows: number, g: Glyphs): Line[] {
   const wide = Math.max(...list.matches.map((c) => width(usage(c))));
   const start = windowStart(list.matches.length, list.chosen, rows);
@@ -495,8 +516,8 @@ export function liveRows(v: Live): Line[] {
     return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
   };
   const footer: Line[] = list !== null ? [] : [footerRow(v, max)];
-  // The slash list is itself the bottom menu while open; never draw a second competing one.
-  const menu = list === null ? v.menu ?? null : null;
+  // The actions stand under the footer, and give way before it does: the status line matters more.
+  let bar: Line[] = list === null && v.bar ? [barRow(v.bar, max, g)] : [];
   // What a small screen gives up, in this order, until the region fits.
   let pending = v.pending;
   let blank = true;
@@ -507,7 +528,6 @@ export function liveRows(v: Live): Line[] {
   ], max, { text: g.ellipsis, style: FAINT }));
   let framed = true;
   let chipped = true;
-  let bottom = menu;
   const build = (): Line[] => [
     ...(blank ? [[]] : []),
     ...pending,
@@ -516,18 +536,12 @@ export function liveRows(v: Live): Line[] {
     ...workers,
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
     ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer : []),
-    ...(bottom !== null ? [clip([
-      { text: ' ' },
-      { text: bottom.label, style: { fg: 'ink', bg: 'accent', bold: true, inverse: bottom.selected } },
-      { text: `  ${bottom.selected ? 'Enter opens' : 'Down selects' + sep + 'Enter opens'}`, style: bottom.selected ? { fg: 'ink', bg: 'accent' } : FAINT },
-      { text: `  ${bottom.detail.replaceAll('·', g.sep)}`, style: bottom.selected ? { fg: 'paper', bg: 'slab' } : DIM },
-    ], max, { text: g.ellipsis, style: DIM })] : []),
+    ...bar,
   ];
   const fits = (): boolean => build().length <= room;
-  // A short screen trims background work first. The menu is useful, but the status line matters more.
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   while (!fits() && workers.length > 0) workers = workers.slice(1);
-  if (!fits()) bottom = null;
+  if (!fits()) bar = [];
   if (!fits()) blank = false;
   while (!fits() && listed > 3) listed -= 1;
   if (!fits()) first = false;

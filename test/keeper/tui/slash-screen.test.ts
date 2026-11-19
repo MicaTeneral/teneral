@@ -60,23 +60,27 @@ function waitingOffer(s: Stage, commit = A, unsent = false): void {
 
 // --- the list ---
 
-test('Publish appears for a waiting offer, and Down/Enter open its shared publication page', () => {
+test('the publish action is marked for a waiting offer, and its menu opens the shared publication page', () => {
   const s = stage(100, 35);
   settled(s);
-  expect(s.live()).not.toContain('Publish');
+  expect(s.live()).toContain('publish');
+  expect(s.live()).toContain('Down selects');
   s.type(DOWN);
-  expect(s.live()).not.toContain('Enter opens');
-  expect(s.term.vt.block?.col).toBe(4);
+  expect(s.live()).toContain('Enter opens');
+  expect(s.term.vt.block).toBeNull();
   s.type(ESC);
   expect(transcript(s)).toBe('');
   waitingOffer(s);
   s.clock.at = 31_000;
   s.frame();
-  expect(rows(s.live()).at(-1)).toContain('Publish');
-  expect(rows(s.live()).at(-1)).toContain('Down selects · Enter opens');
+  expect(rows(s.live()).at(-1)).toContain('publish 1 waiting');
   s.type(DOWN);
-  expect(rows(s.live()).at(-1)).toContain('Publish');
-  expect(rows(s.live()).at(-1)).toContain('Enter opens');
+  s.type(ENTER);
+  expect(s.live()).toContain('let go');
+  expect(s.live()).toContain('what each holds');
+  s.type(DOWN);
+  s.type(DOWN);
+  expect(s.live()).toContain('▸ how it works');
   s.type(ENTER);
   expect(flowed(s)).toContain('publishing');
   expect(flowed(s)).toContain('Nothing your agent makes goes out by itself');
@@ -86,14 +90,14 @@ test('Publish appears for a waiting offer, and Down/Enter open its shared public
   expect(typed(s)).toEqual(['›']);
   expect(transcript(s).split('\n')).toHaveLength(1);
   s.type(DOWN);
-  s.type(ESC);
-  expect(typed(s)).toEqual(['›']);
-  s.type(DOWN);
   s.type(UP);
   s.type('not sent');
   s.type(ENTER);
   expect(channel(s)).toEqual([['.txt', 'not sent']]);
   taken(s);
+  s.type(DOWN);
+  s.type(ENTER);
+  s.type(DOWN);
   s.type(DOWN);
   s.type(ENTER);
   expect(transcript(s).split('\n')).toHaveLength(2);
@@ -105,13 +109,17 @@ test('Publish appears for a waiting offer, and Down/Enter open its shared public
   expect(typed(s)).toEqual(['›']);
 });
 
-test('an approved but unsent offer has the same visible Publish action', () => {
+test('an approved but unsent offer is marked on the publish action', () => {
   const s = stage(100, 35);
   waitingOffer(s, A, true);
   settled(s);
-  expect(rows(s.live()).at(-1)).toContain('Publish');
-  expect(rows(s.live()).at(-1)).toContain('approved, not sent');
+  expect(rows(s.live()).at(-1)).toContain('publish 1 unsent');
   s.type(DOWN);
+  s.type(ENTER);
+  expect(s.live()).toContain('send again');
+  s.type(DOWN);
+  s.type(DOWN);
+  expect(s.live()).toContain('▸ how it works');
   s.type(ENTER);
   expect(flowed(s)).toContain('One offer has your yes and was never sent.');
   expect(flowed(s)).toContain('Status footer fixture');
@@ -165,7 +173,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   // A letter no command goes on with: no list, and the footer is back.
   s.type('x');
   expect(listed(s)).toEqual([]);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  resting/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  resting/);
   s.type(BACKSPACE);
   expect(listed(s)).toEqual(['[/history]']);
   s.type(BACKSPACE.repeat(3));
@@ -222,7 +230,7 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   // Something has to follow /image: Enter completes, and waits for the path.
   s.type(`/i${ENTER}`);
   expect(typed(s)).toEqual(['› /image']);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol/);
   expect(s.all()).not.toContain('attaches an image file');
   // The whole name, as before this list was there: /image alone says what it wants.
   s.type(`${CTRL_U}/image${ENTER}`);
@@ -572,7 +580,7 @@ test('with images attached the list stands under the box that holds them, and a 
   s.type(ENTER);
   expect(flowed(s)).toContain('From now on each tool call is shown');
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1/), '›']);
-  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1/);
+  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1/);
 });
 
 test('a locale that is not UTF-8 gets the list in ASCII', () => {

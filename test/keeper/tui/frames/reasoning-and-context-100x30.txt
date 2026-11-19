@@ -34,13 +34,14 @@
 
 ○ thought, 2 lines ▸ The owner wants a count. I should not guess: `wc -l` gives it exactly.
 
-  ▪ bash  command: wc -l body/*.ts                                                           ✓ 200ms
+  ▪ bash  command: wc -l body/*.ts                                                          ✓ 200ms
 
 ○ thought ▸ Report the total.
 
 ● About 1,400.
 
-╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ›                                                                                                                                                           │
-╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol  effort high  resting  memory well · exam pending  …/work/teneral  gen 1 a1b2c3d      /help lists the keys and commands  context 9% (90.3k/1.05M)
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ›                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+ gpt-6.1-sol  effort high  resting  memory well · exam pending            context 9% (90.3k/1.05M)
+ ›› mutate · publish · memory · more                                                   Down selects
