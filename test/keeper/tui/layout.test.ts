@@ -175,10 +175,9 @@ test('of more commands than six, the six around the chosen one are shown, and th
   expect(at(0)[0]!.startsWith('  ▸ /help ')).toBe(true);
   expect(shown(at(5))).toEqual(['/stop', '/approve', '/tools', '/generations', '/history', '/offers']);
   expect(at(5)[3]!.startsWith('  ▸ /generations ')).toBe(true);
-  expect(shown(at(13))).toEqual(['/plain', '/usage', '/heart', '/memory', '/reasoning', '/quit']);
-  expect(shown(at(COMMANDS.length - 1))).toEqual(['/plain', '/usage', '/heart', '/memory', '/reasoning', '/quit']);
-  expect(at(COMMANDS.length - 1)[5]!.startsWith('  ▸ /quit ')).toBe(true);
-  expect(at(COMMANDS.length - 1).at(-1)).toMatch(/ {3,}15 of 15$/);
+  expect(shown(at(14))).toEqual(['/usage', '/heart', '/memory', '/reasoning', '/publish', '/quit']);
+  expect(at(14)[5]!.startsWith('  ▸ /quit ')).toBe(true);
+  expect(at(14).at(-1)).toMatch(/ {3,}15 of 15$/);
   for (let chosen = 0; chosen < COMMANDS.length; chosen++) expect(at(chosen).filter((row) => row.startsWith('  ▸ '))).toEqual([expect.stringContaining(COMMANDS[chosen]!.name)]);
 });
 

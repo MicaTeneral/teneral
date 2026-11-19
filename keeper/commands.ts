@@ -26,13 +26,14 @@ export const COMMANDS: readonly Command[] = [
   { name: '/generations', hint: '', about: 'the generations this individual has lived in', plain: false },
   { name: '/history', hint: '', about: 'print the earlier conversation that was read from the journal', plain: false },
   { name: '/offers', hint: '', about: 'what waits for your approval before it goes out to the species', plain: true },
-  { name: '/publish', hint: '', about: 'view local changes that are not published yet; publishes nothing', plain: false },
   { name: '/plain', hint: '', about: 'how to get the plain text client', plain: false },
   { name: '/usage', hint: '', about: 'what the requests to the model cost, and how much came from the cache', plain: false },
   { name: '/heart', hint: '', about: 'give the agenda one pulse now', plain: true },
   // Answered by keeper/memory.ts; what the owner says there is carried to the body (brain/owned.ts).
   { name: '/memory', hint: '[what]', about: 'the agent\'s memory, and your hand on it: pin, unpin, withdraw, back', plain: false },
   { name: '/reasoning', hint: '', about: 'print in full what the model last thought', also: 'Ctrl-R', plain: false },
+  // Answered by `ownerCommand` in species/offer.ts.
+  { name: '/publish', hint: '[commit]', about: 'how the agent\'s work goes out to the species; with a commit, let that offer go', plain: true },
   { name: '/quit', hint: '', about: 'leave', also: 'Ctrl-D on an empty line, and Ctrl-C', plain: true },
 ];
 

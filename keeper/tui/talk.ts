@@ -4,7 +4,7 @@ import { formatList, generations } from '../back';
 import { helpRows, takes, type Command } from '../commands';
 import { formatUsage, usageReport } from '../usage';
 import { journalSize, readEvents, readEventsFrom, type JournalEvent } from '../../brain/journal';
-import { ownerCommand } from '../../species/offer';
+import { install, ownerCommand, publishing } from '../../species/offer';
 import { interrupt, leaveWord, tell } from '../owner';
 import { memoryCommand } from '../memory';
 import { health, healthBadge } from '../../brain/health';
@@ -12,7 +12,7 @@ import { known } from '../../brain/known';
 import { standing } from '../../brain/owned';
 import * as providers from '../../brain/providers';
 import { holder, readState, type Paths } from '../../stem/supervisor';
-import { publication, publicationLines } from '../publication';
+import { publication } from '../publication';
 import { Follower } from '../talk';
 import { EMPTY, attach, edit, insert, sent, type Edit } from './editor';
 import {
@@ -238,6 +238,8 @@ export class TalkScreen {
   private publishPending = false;
   /** Focus in the visible bottom menu, rather than in the input editor. */
   private menuSelected = false;
+  private offersWaiting = 0;
+  private offersUnsent = 0;
   private ticks = 0;
   private readonly asks: Ask[] = [];
   /** One codec pipeline at a time; helper answers still arrive in their original order. */
@@ -864,8 +866,6 @@ export class TalkScreen {
         }
         return this.page('what the model was asked for', lines);
       }
-      case '/publish':
-        return this.page('publication status', publicationLines(this.o.paths, this.o.env));
       case '/heart':
         // The body turns this owner line into one bounded pulse; it is not a second running turn.
         return this.send('/heart');
@@ -882,6 +882,10 @@ export class TalkScreen {
         }
         const shown = clean(lines.join('\n')).split('\n');
         return shown.length <= 2 ? this.say(shown.join(' ')) : this.page('the agent\'s memory', shown);
+      }
+      case '/publish': {
+        const lines = clean((ownerCommand(this.o.paths.root, `${name} ${arg}`) ?? []).join('\n')).split('\n');
+        return lines.length === 1 ? this.say(lines[0]!) : this.page('publishing', lines);
       }
       case '/offers':
       case '/approve': {
@@ -1088,6 +1092,12 @@ export class TalkScreen {
       this.publishedAt = now;
       this.publishedCommit = p.commit;
       this.publishPending = p.pending;
+      // Only what the owner can act on is worth a place in the status line: that a lineage is ahead of its species is its ordinary state.
+      try {
+        const standing = publishing(install(this.o.paths.root));
+        this.offersWaiting = standing.waits.length;
+        this.offersUnsent = standing.approved.length;
+      } catch { this.offersWaiting = 0; this.offersUnsent = 0; }
     }
     const active = ['waking', 'thinking', 'mutating', 'starting'].includes(word) || word.startsWith('running ');
     const spin = active ? Math.floor(now / SPIN_MS) % g.spinner.length : 0;
@@ -1160,11 +1170,11 @@ export class TalkScreen {
       workers: s.workers,
       edit: this.edit,
       inputFocused: !this.menuSelected,
-      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
+      about: [model, effort === '' ? '' : `effort ${effort}`, state, ...(this.offersWaiting > 0 ? [`${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you: /publish`] : this.offersUnsent > 0 ? [`${this.offersUnsent} approved, not sent: /publish`] : []), ...(background ? [remembering === '' ? 'background: agenda' : 'background: remembering'] : []), ...this.memoryBadges(now), shortDir(clean(this.o.env.TENERAL_HOST_DIR || this.o.paths.root), g), generation],
       tip: this.tips()[tip % this.tips().length]!,
       context,
       hint,
-      menu: { label: 'Publish', detail: this.publishPending && this.publishedCommit !== null ? `${shortSha(this.publishedCommit)} not in ${this.o.env.TENERAL_UPSTREAM ?? 'the species'} · view only` : 'local publication status · view only', selected: this.menuSelected },
+      menu: { label: 'Publish', detail: this.offersWaiting > 0 ? `${this.offersWaiting} ${this.offersWaiting === 1 ? 'offer waits' : 'offers wait'} for you · /publish` : this.offersUnsent > 0 ? `${this.offersUnsent} approved, not sent · /publish` : 'how changes go out · /publish', selected: this.menuSelected },
       list,
     }));
   }

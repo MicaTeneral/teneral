@@ -63,7 +63,6 @@
     /generations       the generations this individual has lived in
     /history           print the earlier conversation that was read from the journal
     /offers            what waits for your approval before it goes out to the species
-    /publish           view local changes that are not published yet; publishes nothing
     /plain             how to get the plain text client
     /usage             what the requests to the model cost, and how much came from the
   cache
@@ -71,6 +70,8 @@
     /memory [what]     the agent's memory, and your hand on it: pin, unpin, withdraw,
   back
     /reasoning         print in full what the model last thought (also Ctrl-R)
+    /publish [commit]  how the agent's work goes out to the species; with a commit, let
+  that offer go
     /quit              leave (also Ctrl-D on an empty line, and Ctrl-C)
 
   Esc, or /stop, interrupts the agent in the middle of a turn: the request to the model
@@ -117,4 +118,4 @@
 │ ›                                                                                     │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral  gen 2 e5f6a7b
- Publish  Down selects · Enter opens  local publication status · view only
+ Publish  Down selects · Enter opens  how changes go out · /publish

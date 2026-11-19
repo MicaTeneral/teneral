@@ -268,6 +268,7 @@ To change provider or sign in again, run `./one setup`. It asks before replacing
 | `/history` | print the earlier conversation that was read from the journal when you attached |
 | `/generations` | the generations it has lived in, as `./one back --list` gives them |
 | `/offers` | what waits for your approval before it goes out to the species; `/approve <commit>` lets one go. See [Offering a change to the species](#offering-a-change-to-the-species) |
+| `/publish`, `/publish <commit>` | how the agent's work goes out to the species and where every offer stands: what waits for you, what you approved that was never sent, what was sent, each with the line to type for it. With a commit it lets that waiting offer go out and tells the agent to send it, or tells the agent again about one that has your yes and was not sent |
 | `/memory` | how the agent's memory stands, with a mark for each memory, fact and intention; then `/memory pin`, `unpin`, `withdraw <mark>` or `back [n]`. See [Memory](#memory) |
 | `/plain` | how to get the plain text client |
 | `/help` | the keys and commands |
@@ -289,7 +290,7 @@ A line that is a slash, a word of lower-case letters and, after a blank, whateve
 - A name that is no command is not sent to the agent. One line says so and names the nearest command, and what you typed stays in the box to be put right. The same goes for words after a command that takes none (`/stop now`).
 - To send the agent a line that begins with a slash, begin it with two: `//help me` arrives as `/help me`. That is rarely needed. A path such as `/home/you/notes.txt`, a slash further on in the line, a slash followed by a blank, a name with a capital or a digit in it, and any text of several lines are not commands: they are not listed, not coloured, and sent as they are, and a path that names an image is attached as before.
 
-The plain client has `/help`, `/stop`, `/approve`, `/offers` and `/quit`, typed whole; `/help` lists them there.
+The plain client has `/help`, `/stop`, `/approve`, `/offers`, `/heart`, `/publish` and `/quit`, typed whole; `/help` lists them there.
 
 ### Interrupting
 

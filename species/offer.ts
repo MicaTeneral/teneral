@@ -840,16 +840,90 @@ function approveCommand(i: Install, arg: string): string[] {
   return [`${approvedSummary(chosen)} The stem takes that in when the agent next asks for its mutation, and the agent was told to ask again.`];
 }
 
-/** `/offers` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is neither. */
+/** How many of the newest sent offers `/publish` names. */
+const SENT_SHOWN = 3;
+
+/**
+ * Where publishing stands, for the owner, in the order they would act on it. An offer the agent
+ * checked again after changing it leaves its older commits behind in the record: of each branch
+ * only the newest is shown, since the older ones can no longer go out.
+ */
+export function publishing(i: Install): { waits: Report[]; approved: Report[]; sent: Report[]; failed: number } {
+  const newest = new Map<string, Report>();
+  for (const r of reports(i.root)) if (r.what === 'publish') newest.set(r.branch ?? r.commit, r);
+  const all = [...newest.values()];
+  const sent = reports(i.root).filter((r) => r.what === 'publish' && r.published);
+  return {
+    waits: all.filter((r) => waiting(i.owner, r)),
+    approved: all.filter((r) => !r.published && r.ok && approved(i.owner, r.commit)),
+    sent, failed: all.filter((r) => !r.published && !r.ok).length,
+  };
+}
+
+/** What `/publish` says: how a change reaches the species, what stands where, and the one thing to type next. */
+function publishPage(i: Install): string[] {
+  const { waits, approved: ready, sent, failed } = publishing(i);
+  // Each line begins with what to type for it.
+  const row = (r: Report): string => `  /publish ${short(r.commit)}   ${r.branch}: ${r.title}`;
+  const ahead = (() => {
+    try {
+      const candidate = join(i.root, '.teneral', 'candidate');
+      const species = resolveSpecies(candidate, i.s.TENERAL_UPSTREAM);
+      if ('problem' in species) return null;
+      const count = Number(git(candidate, 'rev-list', '--count', `${species.ref}..HEAD`).trim());
+      return Number.isSafeInteger(count) ? { count, name: species.name } : null;
+    } catch { return null; }
+  })();
+  const lines = [
+    'Nothing your agent makes goes out by itself. It goes out as an offer: the agent prepares a branch and checks it, you let that one commit go, and the agent opens a pull request on the species.',
+    '',
+  ];
+  if (consent(i.s) === 'off') lines.push('TENERAL_PUBLISH is off in .env: nothing goes out until you change that.', '');
+  if (waits.length > 0) {
+    lines.push(`${waits.length === 1 ? 'One offer waits' : `${waits.length} offers wait`} for you. Typing its line lets it go out: the agent is told and opens the pull request.`, ...waits.map(row),
+      '  /offers                  shows what each holds, file by file, before you decide', '');
+  }
+  if (ready.length > 0) {
+    lines.push(`${ready.length === 1 ? 'One offer has' : `${ready.length} offers have`} your yes and ${ready.length === 1 ? 'was' : 'were'} never sent. Typing its line tells the agent again to send it.`, ...ready.map(row), '');
+  }
+  if (waits.length + ready.length === 0) lines.push('Nothing waits for you, and nothing you approved is unsent.', '');
+  if (sent.length > 0) lines.push(`Sent${sent.length > SENT_SHOWN ? ` (the last ${SENT_SHOWN} of ${sent.length})` : ''}:`, ...sent.slice(-SENT_SHOWN).map((r) => `  ${r.title}  ${r.published!.url}`), '');
+  if (ahead !== null && ahead.count > 0) {
+    lines.push(`The agent's lineage holds ${ahead.count} ${ahead.count === 1 ? 'commit' : 'commits'} that ${ahead.name} does not have. That is its own life and need not go anywhere. `
+      + 'To offer some of it, tell the agent what, in a line, such as "offer the Zulip change to the species"; when it has prepared and checked the offer, it appears here.');
+  } else lines.push('To offer something, tell the agent what, in a line, such as "offer the Zulip change to the species"; when it has prepared and checked the offer, it appears here.');
+  if (failed > 0) lines.push('', `${failed === 1 ? 'One offer' : `${failed} offers`} did not pass ${failed === 1 ? 'its' : 'their'} checks and cannot go out as ${failed === 1 ? 'it is' : 'they are'}: ./one offer list names ${failed === 1 ? 'it' : 'them'}.`);
+  return lines;
+}
+
+/** `/publish <commit>`: let a waiting offer go out, or tell the agent again about one that has the owner's yes and was not sent. */
+function publishCommand(i: Install, arg: string): string[] {
+  if (arg === '') return publishPage(i);
+  if (!/^[0-9a-f]{7,40}$/.test(arg)) return ['/publish, or /publish <commit>: the first seven or more characters of an offer, as /publish lists them.'];
+  const { waits, approved: ready } = publishing(i);
+  if (waits.some((r) => r.commit.startsWith(arg))) return approvePending(i, arg).text.split('\n');
+  const again = ready.filter((r) => r.commit.startsWith(arg));
+  if (again.length === 1) {
+    const r = again[0]!;
+    tell(i.owner, `I approved offer commit ${short(r.commit)} earlier and it has not been sent. Run bun species/offer.ts publish ${r.branch} and report the result.`);
+    return [`${short(r.commit)} (${r.branch}) already has your yes. The agent was told again to send it, and will say what came of it.`];
+  }
+  // A witness runs a stranger's code here: that yes is given with /approve, where what it is stands in front of the owner.
+  if (pending(i).some((r) => r.what === 'witness' && r.commit.startsWith(arg))) return [`${arg} is a witness of someone else's pull request, not an offer of your agent's. /offers shows it; /approve ${arg} lets it run.`];
+  return [`No offer that starts with ${arg} waits for you or is unsent. /publish lists what does.`];
+}
+
+/** `/offers`, `/publish [commit]` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is none of them. */
 export function ownerCommand(root: string, line: string): string[] | null {
   const [name = '', arg = '', ...more] = line.trim().split(/\s+/);
-  if (name !== '/offers' && name !== '/approve') return null;
+  if (name !== '/offers' && name !== '/approve' && name !== '/publish') return null;
   try {
     const i = install(root);
+    if (name === '/publish') return more.length > 0 ? ['/publish, or /publish <commit>.'] : publishCommand(i, arg);
     if (name === '/offers') {
       const all = pending(i);
       if (all.length === 0) return ['Nothing is waiting for your approval.'];
-      return [...all.flatMap((r) => [...showPending(i, r.commit).text.split('\n'), '']), `/approve <commit> lets one of them go out (TENERAL_PUBLISH is ${consent(i.s)}).`];
+      return [...all.flatMap((r) => [...showPending(i, r.commit).text.split('\n'), '']), `/publish <commit> lets one of them go out (TENERAL_PUBLISH is ${consent(i.s)}); /publish alone shows where everything stands.`];
     }
     if (more.length > 0) return ['/approve, or /approve <commit>: the first seven or more characters of one commit.'];
     return approveCommand(i, arg);

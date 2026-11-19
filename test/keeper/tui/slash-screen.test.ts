@@ -24,7 +24,7 @@ const taken = (s: Stage): void => {
 };
 const flowed = (s: Stage): string => s.all().replace(/\n {2}/g, ' ');
 /** Only what has scrolled into the conversation, excluding the redrawn bottom menu. */
-const transcript = (s: Stage): string => rows(s.all()).filter((row) => row.includes('── publication status')).join('\n');
+const transcript = (s: Stage): string => rows(s.all()).filter((row) => row.includes('── publishing')).join('\n');
 
 /** A life already under way, at rest. */
 function settled(s: Stage): void {
@@ -47,7 +47,7 @@ function working(s: Stage): void {
 
 // --- the list ---
 
-test('Publish is a visible bottom-menu action: Down selects it, Enter opens the read-only page, and the input is unchanged', () => {
+test('Publish is a visible bottom-menu action: Down selects it, Enter opens the shared publishing page, and the input is unchanged', () => {
   const s = stage(100, 35);
   settled(s);
   expect(rows(s.live()).at(-1)).toContain('Publish');
@@ -56,8 +56,9 @@ test('Publish is a visible bottom-menu action: Down selects it, Enter opens the 
   expect(rows(s.live()).at(-1)).toContain('Publish');
   expect(rows(s.live()).at(-1)).toContain('Enter opens');
   s.type(ENTER);
-  expect(flowed(s)).toContain('publication status');
-  expect(flowed(s)).toContain('does not publish anything');
+  expect(flowed(s)).toContain('publishing');
+  expect(flowed(s)).toContain('Nothing your agent makes goes out by itself');
+  expect(flowed(s)).toContain('Nothing waits for you, and nothing you approved is unsent.');
   expect(channel(s)).toEqual([]);
   expect(typed(s)).toEqual(['›']);
   expect(transcript(s).split('\n')).toHaveLength(1);
@@ -104,10 +105,10 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   expect(s.term.vt.block).toEqual({ row: s.term.vt.cursor.row + 2, col: 5 });
   // Down past the sixth: the list moves with the choice. Up from the first goes to the last.
   s.type(DOWN.repeat(7));
-  expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/publish', '/plain']);
+  expect(listed(s)).toEqual(['/tools', '/generations', '/history', '[/offers]', '/plain', '/usage']);
   expect(rows(s.live()).at(-1)).toMatch(/ {3,}8 of 15$/);
   s.type(UP.repeat(8));
-  expect(listed(s)).toEqual(['/plain', '/usage', '/heart', '/memory', '/reasoning', '[/quit]']);
+  expect(listed(s)).toEqual(['/usage', '/heart', '/memory', '/reasoning', '/publish', '[/quit]']);
   s.type(DOWN);
   expect(listed(s).slice(0, 2)).toEqual(['[/help]', '/image']);
   s.type(`${CTRL_N}${CTRL_N}${CTRL_P}`);
