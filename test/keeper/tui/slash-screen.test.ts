@@ -92,7 +92,7 @@ test('a slash lists the commands under the box, and each letter leaves fewer; Up
   // A letter no command goes on with: no list, and the footer is back.
   s.type('x');
   expect(listed(s)).toEqual([]);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol  resting/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol  resting/);
   s.type(BACKSPACE);
   expect(listed(s)).toEqual(['[/history]']);
   s.type(BACKSPACE.repeat(3));
@@ -149,7 +149,7 @@ test('Enter on a whole name runs it as before; on part of one it runs the chosen
   // Something has to follow /image: Enter completes, and waits for the path.
   s.type(`/i${ENTER}`);
   expect(typed(s)).toEqual(['› /image']);
-  expect(rows(s.live()).at(-1)).toMatch(/^ gpt-6\.1-sol/);
+  expect(rows(s.live()).at(-2)).toMatch(/^ gpt-6\.1-sol/);
   expect(s.all()).not.toContain('attaches an image file');
   // The whole name, as before this list was there: /image alone says what it wants.
   s.type(`${CTRL_U}/image${ENTER}`);
@@ -499,7 +499,7 @@ test('with images attached the list stands under the box that holds them, and a 
   s.type(ENTER);
   expect(flowed(s)).toContain('From now on each tool call is shown');
   expect(typed(s)).toEqual([expect.stringMatching(/^\[image 1/), '›']);
-  expect(rows(s.live()).at(-1)).toMatch(/ attached: image 1/);
+  expect(rows(s.live()).at(-2)).toMatch(/ attached: image 1/);
 });
 
 test('a locale that is not UTF-8 gets the list in ASCII', () => {
