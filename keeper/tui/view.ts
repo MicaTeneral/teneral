@@ -318,6 +318,8 @@ export interface Live {
   /** What the agent is doing, while it is doing something. */
   activity: Line | null;
   edit: Edit;
+  /** Whether the input owns the visible cursor. False while an action on the bar is selected. */
+  inputFocused?: boolean;
   /** Active delegated workers: one row each, while their tool calls remain open. */
   workers: { label: string; task: string }[];
   /** The footer's left side, the most needed first: the model, the directory, the generation. */
@@ -563,7 +565,7 @@ export function liveRows(v: Live): Line[] {
   const command = mark(v.edit.text);
   const typed = text.rows.map((row, i): Line => [
     { text: i === 0 && text.above === 0 ? `${g.prompt} ` : '  ', style: { fg: 'accent', bold: true } },
-    ...inputRow(row, i === text.row ? text.col : null, command === null ? null : { ...command, from: command.from - text.starts[i]!, to: command.to - text.starts[i]! }),
+    ...inputRow(row, i === text.row && v.inputFocused !== false ? text.col : null, command === null ? null : { ...command, from: command.from - text.starts[i]!, to: command.to - text.starts[i]! }),
   ]);
   const box = panel([...chips, ...typed], max, g, FAINT);
   const bare = panel(typed, max, g, FAINT);

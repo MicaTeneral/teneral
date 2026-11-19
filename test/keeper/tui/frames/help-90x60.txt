@@ -119,5 +119,5 @@
 ╭───────────────────────────────────────────────────────────────────────────────────────╮
 │ ›                                                                                     │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
- gpt-6.1-sol  resting  …/work/teneral  gen 2 e5f6a7b    /help lists the keys and commands
+ gpt-6.1-sol  resting  memory well · exam pending  …/work/teneral  gen 2 e5f6a7b
   ↻ mutate   ↑ publish   ◉ memory   ≡ more                                    ↓  actions

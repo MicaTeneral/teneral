@@ -140,7 +140,9 @@ test('a memory being formed goes on beside the turn that answers what arrived, a
   await l.until('ready', () => l.types().includes('generation.ready'));
   await l.until('the memory is asked for at rest', () => l.asked.some(memoryAsked));
   tell(l.owner, 'is the file there?');
-  await l.until('the turn begins beside it', () => l.events().some(e => e.type === 'tool.intent'));
+  // The local no-op guard completes a zero-effect tool call without `tool.intent`: either a
+  // real tool result or that guard's settled reply proves the answering turn began beside it.
+  await l.until('the turn begins beside it', () => l.events().some(e => e.type === 'tool.intent' || e.type === 'tool.result'));
   // The memory request was not thrown away for the owner's line.
   expect(l.asked.find(memoryAsked)!.aborted).toBe(false);
   release();
