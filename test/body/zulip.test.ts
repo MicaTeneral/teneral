@@ -583,3 +583,28 @@ test('a connection that was down for a while is said to the agent once, with its
   expect(got[2]!.text).not.toContain('was down');
   expect(c.got).toHaveLength(0);
 });
+
+test('the first message from a stream brings its roster with it, once, and a roster that cannot be had holds nothing up', async () => {
+  const got: Stimulus[] = [];
+  const heard: string[] = [];
+  const pages: unknown[][] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (url.pathname === '/api/v1/users') return new Response(JSON.stringify({ members: [{ user_id: 7, full_name: 'Ann Lee', is_bot: false }, { user_id: 50, full_name: 'CI', is_bot: true }, { user_id: 99, full_name: 'Mica', is_bot: false }] }));
+    if (url.pathname === '/api/v1/streams/5/members') return new Response(JSON.stringify({ subscribers: [7, 50, 99, 1234] }));
+    if (url.pathname === '/api/v1/streams/6/members') return new Response('{}', { status: 403 });
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true,
+    entered: (stream, members) => { heard.push(`${stream.name} ${JSON.stringify(members)}`); return members === null ? '' : `This is the first you hear from ${stream.name}.`; } }, s => got.push(s));
+  const msg = (id: number, stream_id: number, name: string) => ({ id, sender_id: 7, sender_full_name: 'Ann Lee', type: 'stream', stream_id, display_recipient: name, subject: 't', content: '@**Mica** hello', flags: ['mentioned'] });
+  pages.push([msg(1, 5, 'engineering'), msg(2, 5, 'engineering'), msg(3, 6, 'private-ish')]);
+  await p.poll();
+  // The agent itself is not among those it shares the stream with; someone the directory does not list is named by id.
+  expect(heard).toEqual(['#engineering [{"id":"7","name":"Ann Lee","bot":false},{"id":"50","name":"CI","bot":true},{"id":"1234","name":"user 1234"}]', '#private-ish null']);
+  expect(got).toHaveLength(3);
+  expect(got[0]!.text).toContain('This is the first you hear from #engineering.');
+  expect(got[1]!.text).not.toContain('first you hear');
+  expect(got[2]!.text).toContain('@**Mica** hello');
+});

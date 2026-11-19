@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { IMAGE_MAX_BYTES } from './images';
 import type { JournalEvent } from '../brain/journal';
 import type { Sensor, Stimulus } from './sensors';
-import { chat, type ChatMessage, type ChatWords } from './chat';
+import { chat, type ChatMessage, type ChatWords, type Speaker } from './chat';
 
 interface Credentials { site: string; email: string; api_key: string }
 export function zulipCredentials(path: string): Credentials | undefined {
@@ -34,6 +34,10 @@ interface Options {
   ambient?: boolean;
   /** False: with nothing heard yet, the newest hundred messages are taken as new, as they once were. */
   baseline?: boolean;
+  /** Who spoke in what is about to be shown: answered with what the agent knows of them (body/participants.ts). */
+  who?: (speakers: Speaker[]) => string;
+  /** Asked once for each stream a message comes from, with who the service says is subscribed: see `entered` in body/chat.ts. */
+  entered?: (stream: { id: string; name: string }, members: { id: string; name: string; bot?: boolean }[] | null) => string;
   /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
   wide?: boolean;
   /** Of the event queue: a request waits at the server until something happens, instead of returning at once. */
@@ -106,7 +110,26 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   // Polls that failed in a row, and since when: said to the agent once the connection is back.
   let failures = 0, downSince = 0;
   // When a message wakes the agent and what it is told is the same for every service (body/chat.ts).
-  const attention = chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now });
+  /** Everyone in the organisation by id, from the same list that says who is a bot. */
+  const everyone = new Map<number, { name: string; bot: boolean }>();
+  let reach: Credentials | undefined;
+  /** Who is subscribed to a stream, as the service says; null when it will not say. */
+  async function roster(stream: { id: string }): Promise<{ id: string; name: string; bot?: boolean }[] | null> {
+    if (reach === undefined) return null;
+    try {
+      const r = await (o.send ?? fetch)(new URL(`/api/v1/streams/${stream.id}/members`, reach.site), {
+        headers: { Authorization: 'Basic ' + Buffer.from(reach.email + ':' + reach.api_key).toString('base64') }, signal: AbortSignal.timeout(15_000), redirect: 'error',
+      });
+      const d = r.ok ? await r.json() as any : undefined;
+      if (!Array.isArray(d?.subscribers)) return null;
+      return d.subscribers.filter((id: unknown): id is number => Number.isSafeInteger(id) && id !== identity?.id).slice(0, 500)
+        .map((id: number) => ({ id: String(id), name: everyone.get(id)?.name ?? `user ${id}`, ...(everyone.has(id) ? { bot: everyone.get(id)!.bot } : {}) }));
+    } catch { return null; }
+  }
+  const attention = chat({
+    words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
+    ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
+  });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
       const line = e.text.split('\n', 1)[0] ?? '';
@@ -123,6 +146,9 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
     return {
       id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
+      ...(Number.isSafeInteger(m.sender_id) ? { sender: { id: String(m.sender_id), name: text(m.sender_full_name, 200) || `user ${m.sender_id}` } } : {}),
+      ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { where: `#${text(m.display_recipient, 100)}` } : m.type === 'private' ? { where: 'a direct message' } : {}),
+      ...(m.type === 'stream' && Number.isSafeInteger(m.stream_id) ? { channel: { id: String(m.stream_id), name: `#${text(m.display_recipient, 100) || m.stream_id}` } } : {}),
       own: m.sender_id === identity!.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000), ...(again ? { again } : {}),
       // Zulip's quote-and-reply names the quoted author by a silent mention with their id.
       answers: text(m.content, 6000).includes(`|${identity!.id}** [`),
@@ -184,7 +210,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         if (!Number.isSafeInteger(profile.user_id) || profile.user_id <= 0) throw new Error("Invalid identity");
         identity = { key, id: profile.user_id, name: typeof profile.full_name === 'string' ? profile.full_name.slice(0, 100) : '' };
       }
-      if (o.ambient && (bots === undefined || now() - botsAt > BOTS_REFRESH_MS)) {
+      reach = c;
+      if ((o.ambient || o.entered) && (bots === undefined || now() - botsAt > BOTS_REFRESH_MS)) {
         // Who is a bot is the server's to say. Until it has said, nobody is taken for a person and
         // channel talk stays context: a webhook's posts must never be what wakes the agent.
         botsAt = bots === undefined ? now() - BOTS_REFRESH_MS + BOTS_RETRY_MS : now();
@@ -196,6 +223,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
           const listed = all.ok ? await all.json() as any : undefined;
           if (Array.isArray(listed?.members)) {
             bots = new Set(listed.members.filter((m: any) => m?.is_bot === true && Number.isSafeInteger(m.user_id)).map((m: any) => m.user_id as number));
+            for (const m of listed.members) if (Number.isSafeInteger(m?.user_id) && typeof m.full_name === 'string') everyone.set(m.user_id, { name: m.full_name.slice(0, 200), bot: m.is_bot === true });
             botsAt = now();
           }
         } catch { /* asked again in a few minutes */ }

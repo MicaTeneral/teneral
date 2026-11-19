@@ -36,6 +36,8 @@ import { confirmedZulipOwnerId } from '../brain/zulip-owner';
 import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
+import { enter, meet, whoLines } from './participants';
+import type { Speaker } from './chat';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
 function env(name: string): string {
@@ -157,6 +159,16 @@ let retryAt: number | null = null;
 /** The already-requested mutation to hand to the stem once no foreground terminal line is unanswered. */
 let handoff: string | null = null;
 const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
+
+/**
+ * Who speaks in what a chat sensor is about to show: everyone not met before is recorded, and each
+ * is shown with what the agent knows of them. For any service: only its name differs.
+ */
+function whoSpeaks(service: string, speakers: Speaker[]): string {
+  const events = readEvents(journal);
+  const seen = speakers.map((s) => ({ service, id: s.id, name: s.name, ...(s.bot === undefined ? {} : { bot: s.bot }), ...(s.where === undefined ? {} : { met: s.where }) }));
+  return whoLines(events, seen, meet(journal, gen, events, seen));
+}
 
 // A stimulus is on disk before anything reacts to it, so a crash right after cannot lose it.
 function emit(s: Stimulus): void {
@@ -297,6 +309,8 @@ const sensors: Sensor[] = [
   zulipLive({
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
     ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
+    who: (speakers) => whoSpeaks('zulip', speakers),
+    entered: (stream, members) => enter(journal, gen, readEvents(journal), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
       const pending = readEvents(journal).findLast(e => e.type === 'note' && e.kind === ZULIP_QUEUE_CURSOR_KIND);
