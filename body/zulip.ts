@@ -32,6 +32,8 @@ interface Options {
    * paused, to join in or stay silent. Off, such talk only accompanies the next message that does.
    */
   ambient?: boolean;
+  /** False: with nothing heard yet, the newest hundred messages are taken as new, as they once were. */
+  baseline?: boolean;
   now?: () => number;
 }
 
@@ -39,8 +41,8 @@ const BOTS_REFRESH_MS = 3_600_000;
 const BOTS_RETRY_MS = 5 * 60_000;
 /** How Zulip is spoken of in what the agent is told (body/chat.ts). */
 const WORDS: ChatWords = {
-  title: 'Zulip', kinds: { direct: 'private', mention: 'mention', channel: 'stream' },
-  source: SOURCE, ownerSource: OWNER_SOURCE, reply: 'zulip_reply', history: 'zulip_history', channels: 'streams',
+  title: 'Zulip', name: 'zulip', kinds: { direct: 'private', mention: 'mention', channel: 'stream' },
+  source: SOURCE, ownerSource: OWNER_SOURCE, reply: 'chat_reply', history: 'chat_history', channels: 'streams',
 };
 export { namedIn } from './chat';
 
@@ -88,6 +90,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   let cursor = 0, stopped = false, busy = false, failed = false;
   const now = (): number => o.now?.() ?? Date.now();
   let bots: Set<number> | undefined, botsAt = 0;
+  /** Where listening began when nothing had ever been heard: kept in memory, since no stimulus holds it yet. */
+  let began = 0;
   // When a message wakes the agent and what it is told is the same for every service (body/chat.ts).
   const attention = chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now });
   for (const e of o.events()) {
@@ -133,6 +137,20 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         } catch { /* asked again in a few minutes */ }
       }
       if (stopped) return;
+      if (cursor === 0 && o.baseline !== false) {
+        // Never told of anything here yet: what was said before this moment is the past, not mail
+        // waiting for an answer. The newest message is where listening begins, and nothing is emitted.
+        const newest = new URL('/api/v1/messages', c.site);
+        newest.search = new URLSearchParams({ anchor: 'newest', num_before: '1', num_after: '0', narrow: '[]', apply_markdown: 'false' }).toString();
+        const first = await (o.send ?? fetch)(newest, { headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') }, signal: AbortSignal.timeout(15_000), redirect: 'error' });
+        if (!first.ok) throw new Error('Zulip request failed');
+        const page = await first.json();
+        if (!Array.isArray(page.messages)) throw new Error('Invalid message list');
+        began = page.messages.reduce((most: number, m: any) => (Number.isSafeInteger(m?.id) && m.id > most ? m.id : most), 0);
+        cursor = began;
+        // An empty organisation has no newest message: everything that comes is new.
+        if (cursor === 0) o.baseline = false;
+      }
       const url = new URL('/api/v1/messages', c.site);
       url.search = new URLSearchParams({ anchor: cursor ? String(cursor) : 'newest',
         num_before: cursor ? '0' : '100', num_after: cursor ? '100' : '0',
@@ -158,11 +176,14 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         await attention.take({
           id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: direct ? 'direct' : 'channel',
           own: m.sender_id === identity.id, bot: bots?.has(m.sender_id), owner, mentioned, text: text(m.content, 6000),
+          // Zulip's quote-and-reply names the quoted author by a silent mention with their id.
+          answers: text(m.content, 6000).includes(`|${identity.id}** [`),
           line: JSON.stringify({
             sender_id: m.sender_id, sender: text(m.sender_full_name, 200),
-            type: m.type, stream_id: m.stream_id, topic: text(m.subject, 200),
+            type: m.type, stream_id: m.stream_id, ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { stream: text(m.display_recipient, 100) } : {}), topic: text(m.subject, 200),
             mentioned, self: false,
-            timestamp: m.timestamp, content: text(m.content, 6000),
+            timestamp: m.timestamp, ...(Number.isSafeInteger(m.timestamp) ? { at: new Date(m.timestamp * 1000).toISOString() } : {}),
+            ...(m.last_edit_timestamp ? { edited: true } : {}), content: text(m.content, 6000),
           }),
           // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
           // owner's trusted image pipeline. Every upload is bounded before it reaches that store.

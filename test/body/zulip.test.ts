@@ -11,7 +11,7 @@ test('Zulip DMs sorted, marked untrusted, deduplicated across restart and pagina
     urls.push(new URL(url));
     return new Response(JSON.stringify({ messages: [{ id: 2, content: 'hello', type: 'private' }, { id: 1, content: 'earlier', type: 'private' }] }));
   }) as unknown as typeof fetch;
-  const p = zulipPoller({ credentials, events: () => [], send }, s => notices.push(s));
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send }, s => notices.push(s));
   await p.poll(); await p.poll();
   expect(notices).toHaveLength(2);
   expect(notices[0].text).toStartWith('Zulip private 1\n');
@@ -19,7 +19,7 @@ test('Zulip DMs sorted, marked untrusted, deduplicated across restart and pagina
   expect(urls[1].searchParams.get('anchor')).toBe('2');
   expect(urls[1].searchParams.get('num_after')).toBe('100');
   const events = notices.map(s => ({ type: 'stimulus', ...s })) as JournalEvent[];
-  const restart = zulipPoller({ credentials, events: () => events, send }, s => notices.push(s));
+  const restart = zulipPoller({ baseline: false, credentials, events: () => events, send }, s => notices.push(s));
   await restart.poll(); expect(notices).toHaveLength(2);
   restart.stop(); const count = urls.length; await restart.poll(); expect(urls).toHaveLength(count);
 });
@@ -31,9 +31,9 @@ test('Zulip absent credentials do not fetch; failure retries without advancing c
     calls++;
     return new Response(JSON.stringify({ messages: [{ id: 10, content: 'hi', type: 'private' }] }));
   }) as unknown as typeof fetch;
-  await zulipPoller({ credentials: () => undefined, events: () => [], send }, () => {}).poll();
+  await zulipPoller({ baseline: false, credentials: () => undefined, events: () => [], send }, () => {}).poll();
   expect(calls).toBe(0);
-  const p = zulipPoller({ credentials, events: () => [], send }, () => {
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send }, () => {
     attempts++; if (attempts === 1) throw Error('journal unavailable');
   });
   await p.poll(); await p.poll(); await p.poll();
@@ -53,7 +53,7 @@ test('conversation mode fetches streams as well as DMs and publishes presence af
     expect(String(init.body)).toContain('status=active');
     return new Response('{}');
   }) as unknown as typeof fetch;
-  await zulipPoller({ credentials, events: () => [], send, conversations: true }, () => {}).poll();
+  await zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true }, () => {}).poll();
   expect(urls[1]).toEndWith('/users/me/presence');
 });
 
@@ -72,7 +72,7 @@ test('own echoes are silent; private wakes, plain stream is held, mention wakes'
     anchors.push(url.searchParams.get('anchor')!);
     return new Response(JSON.stringify({messages: pages.shift() ?? []}));
   }) as unknown as typeof fetch;
-  const p = zulipPoller({credentials, events: () => [], send}, s => notices.push(s));
+  const p = zulipPoller({baseline:false,credentials, events: () => [], send}, s => notices.push(s));
   await p.poll(); expect(notices).toHaveLength(0);
   await p.poll();
   expect(notices).toHaveLength(1);
@@ -93,7 +93,7 @@ test('ordinary stream pages stay silent until a later private message carries th
   const send = (async (url: URL) => new Response(JSON.stringify(
     url.pathname === '/api/v1/users/me' ? {user_id: 99} : {messages: pages.shift() ?? []},
   ))) as unknown as typeof fetch;
-  const p = zulipPoller({credentials, events: () => [], send}, s => notices.push(s));
+  const p = zulipPoller({baseline:false,credentials, events: () => [], send}, s => notices.push(s));
   await p.poll();
   expect(notices).toHaveLength(0);
   await p.poll();
@@ -110,7 +110,7 @@ test('only the configured numeric Zulip sender becomes an owner source; both sou
       {id: 21, sender_id: 101, type: 'private', content: 'outsider'},
     ]},
   ))) as unknown as typeof fetch;
-  const p = zulipPoller({credentials, events: () => [], send, ownerId: 100}, s => notices.push(s));
+  const p = zulipPoller({baseline:false,credentials, events: () => [], send, ownerId: 100}, s => notices.push(s));
   await p.poll();
   expect(notices.map(n => n.source)).toEqual(['owner:zulip', 'agent:zulip']);
   expect(notices[0].text).toContain('API-verified owner message.');
@@ -120,7 +120,7 @@ test('only the configured numeric Zulip sender becomes an owner source; both sou
     url.pathname === '/api/v1/users/me' ? {user_id: 99} : (anchors.push(url.searchParams.get('anchor')!), {messages: []}),
   ))) as unknown as typeof fetch;
   const events = notices.map(s => ({type: 'stimulus', ...s})) as JournalEvent[];
-  await zulipPoller({credentials, events: () => events, send: restartSend, ownerId: 100}, () => {}).poll();
+  await zulipPoller({baseline:false,credentials, events: () => events, send: restartSend, ownerId: 100}, () => {}).poll();
   expect(anchors).toEqual(['21']);
 });
 
@@ -130,7 +130,7 @@ test('self echoes refetched after restart remain silent', async () => {
     {id: 5, sender_id: 99, sender_email: 'different@test'},
   ]}))) as unknown as typeof fetch;
   for (let restart = 0; restart < 2; restart++) {
-    const p = zulipPoller({credentials, events: () => [], send}, () => { emitted++; });
+    const p = zulipPoller({baseline:false,credentials, events: () => [], send}, () => { emitted++; });
     await p.poll(); p.stop();
   }
   expect(emitted).toBe(0);
@@ -147,7 +147,7 @@ test('identity failures preserve cursor; cache is reused and invalidated on cred
   reads++;
   return new Response(JSON.stringify({messages:[{id:reads,sender_id:key==='first'?99:100}]}));
  }) as unknown as typeof fetch;
- const p=zulipPoller({credentials:()=>({...credentials(),api_key:key}),events:()=>[],send},s=>notices.push(s));
+ const p=zulipPoller({baseline:false,credentials:()=>({...credentials(),api_key:key}),events:()=>[],send},s=>notices.push(s));
  await p.poll();expect(reads).toBe(0);
  await p.poll();await p.poll();expect(lookups).toBe(2);expect(reads).toBe(2);
  key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
@@ -262,7 +262,7 @@ test('only verified owner uploads enter the image store; HTML and bytes stay bou
     if (url.pathname === '/api/v1/messages/40') return new Response(JSON.stringify({message:{content:'<p>look <a href="/user_uploads/1/a/pic.png">pic</a><img src="/user_uploads/thumbnail/1/a/pic.png/840x560.webp"></p>'}}));
     fetched.push(url.pathname); return new Response(png);
   }) as unknown as typeof fetch;
-  await zulipPoller({credentials,events:()=>[],send,ownerId:100,keepImage:async b=>{kept.push(b);return '[image: memory/images/'+('a'.repeat(64))+'.png]'}},s=>notices.push(s)).poll();
+  await zulipPoller({baseline:false,credentials,events:()=>[],send,ownerId:100,keepImage:async b=>{kept.push(b);return '[image: memory/images/'+('a'.repeat(64))+'.png]'}},s=>notices.push(s)).poll();
   expect(fetched).toEqual(['/user_uploads/1/a/pic.png']);
   expect(kept).toEqual([png]);
   expect(notices[0].source).toBe('owner:zulip');
@@ -279,7 +279,7 @@ test('owner attachment failures do not lose the message or download untrusted fi
     return new Response(new Uint8Array(10*1024*1024+1));
   }) as unknown as typeof fetch;
   let kept = 0;
-  await zulipPoller({credentials,events:()=>[],send,ownerId:100,keepImage:()=>{kept++;return ''}},s=>notices.push(s)).poll();
+  await zulipPoller({baseline:false,credentials,events:()=>[],send,ownerId:100,keepImage:()=>{kept++;return ''}},s=>notices.push(s)).poll();
   expect(kept).toBe(0); expect(notices).toHaveLength(1);
   expect(notices[0].text).toContain('[Zulip image exceeds 10 MB]');
 });
@@ -297,7 +297,7 @@ function channel(more: { ownerId?: number; ambient?: boolean; users?: unknown } 
     if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
     return new Response('{}');
   }) as unknown as typeof fetch;
-  const p = zulipPoller({ credentials, events: () => [], send, conversations: true, ambient: more.ambient ?? true, ownerId: more.ownerId, now: () => clock.at }, s => got.push(s));
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true, ambient: more.ambient ?? true, ownerId: more.ownerId, now: () => clock.at }, s => got.push(s));
   let id = 100;
   const say = (sender_id: number, content: string, extra: Record<string, unknown> = {}) => ({ id: ++id, sender_id, sender_full_name: `user ${sender_id}`, type: 'stream', stream_id: 5, subject: 'general chat', content, flags: [], ...extra });
   const poll = async (messages: unknown[] = [], afterMs = 30_000) => { clock.at += afterMs; pages.push(messages); await p.poll(); };
@@ -411,4 +411,44 @@ test('when the server will not say who is a bot, talk is context only', async ()
   await c.poll([c.say(7, 'does anyone know the port?')]);
   await c.poll([], 300_000);
   expect(c.got).toHaveLength(0);
+});
+
+// --- where listening begins ---
+
+test('with nothing ever heard, what was said before is the past: listening begins at the newest message and nothing old is answered', async () => {
+  const got: Stimulus[] = [];
+  const asked: URLSearchParams[] = [];
+  const pages: unknown[][] = [
+    [{ id: 50, sender_id: 7, type: 'private', content: 'a question from last week' }],
+    [],
+    [{ id: 51, sender_id: 7, type: 'private', content: 'are you there now?' }],
+  ];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    asked.push(url.searchParams);
+    return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ credentials, events: () => [], send }, s => got.push(s));
+  await p.poll();
+  expect(got).toHaveLength(0);
+  // One message asked for to find where to begin, then forward from it.
+  expect([asked[0]!.get('anchor'), asked[0]!.get('num_before')]).toEqual(['newest', '1']);
+  expect([asked[1]!.get('anchor'), asked[1]!.get('num_after')]).toEqual(['50', '100']);
+  await p.poll();
+  expect(got).toHaveLength(1);
+  expect(got[0]!.text).toStartWith('Zulip private 51\n');
+  expect(got[0]!.text).toContain('naming this message as zulip:51');
+});
+
+test('a message that quotes the agent is taken as an answer to it, and is shown with its stream, its time and that it was edited', async () => {
+  const c = channel({ users: people });
+  await c.poll([c.say(8, '@_**Mica Teneral|99** [said](https://example.test/#narrow/channel/5/topic/x/near/90):\n```quote\nThe listener is on 5000.\n```\nstill true?', { display_recipient: 'engineering', timestamp: 1_800_000_000, last_edit_timestamp: 1_800_000_050 })]);
+  expect(c.got).toHaveLength(1);
+  expect(c.got[0]!.text).toContain('It quotes something you said.');
+  const shown = JSON.parse(c.got[0]!.text.split('\n').at(-1)!);
+  expect(shown).toMatchObject({ stream: 'engineering', topic: 'general chat', at: '2027-01-15T08:00:00.000Z', edited: true, sender_id: 8 });
+  // A quote of someone else is ordinary talk.
+  const other = channel({ users: people });
+  await other.poll([other.say(8, '@_**Ann|7** [said](https://example.test/#narrow/near/90):\n```quote\nhm\n```\nagreed')]);
+  expect(other.got).toHaveLength(0);
 });
