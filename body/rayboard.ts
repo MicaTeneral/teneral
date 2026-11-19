@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { JournalEvent } from '../brain/journal';
 import type { Stimulus } from './sensors';
+import { chat, type ChatMessage, type ChatWords, type Mode, type Speaker } from './chat';
 
 export const RAYBOARD_SOURCE = 'agent:rayboard';
 export const RAYBOARD_OWNER_SOURCE = 'owner:rayboard';
@@ -12,7 +13,50 @@ const PREFIX = 'Rayboard notification ';
 const MAX_BYTES = 1_000_000;
 const MAX_ITEMS = 100;
 type Row = Record<string, unknown>;
-interface Options { url: string; token: () => string | undefined; events: () => JournalEvent[]; send?: typeof fetch; requestMs?: number; ca?: string; ownerId?: string; }
+interface Options {
+  url: string; token: () => string | undefined; events: () => JournalEvent[]; send?: typeof fetch; requestMs?: number; ca?: string; ownerId?: string;
+  /**
+   * What people say on the board, in channels, direct conversations and task threads, goes through
+   * the chat layer (body/chat.ts), as any chat's does. Off, every notification is told as it always was.
+   * What is not talk, a task handed over, a review, a verdict, is told as a notification either way.
+   */
+  chat?: boolean;
+  ambient?: boolean;
+  who?: (speakers: Speaker[]) => string;
+  mode?: (channel: { id: string; name: string }) => Mode;
+  now?: () => number;
+}
+/** How Rayboard is spoken of in what the agent is told (body/chat.ts). */
+const WORDS: ChatWords = {
+  title: 'Rayboard', name: 'rayboard', kinds: { direct: 'dm', mention: 'mention', channel: 'message', edit: 'edit' },
+  source: RAYBOARD_SOURCE, ownerSource: RAYBOARD_OWNER_SOURCE, reply: 'chat_reply', history: 'chat_history', channels: 'channels',
+};
+/** The notifications that are someone talking. */
+const TALK = new Set(['message', 'mention', 'dm', 'comment']);
+/** The first line of a stimulus this sensor journaled, in either of its two forms, with the notification's seq. */
+export const RAYBOARD_LINE = /^Rayboard (?:notification|dm|mention|message|edit) ([1-9][0-9]*)$/;
+
+/**
+ * A notification of talk as the chat layer takes it. Who wrote it, and whether that is an agent
+ * or a person, is the board's own account: an id it gave, never a name read from the text.
+ */
+export function rayboardChat(n: Row, ownerId?: string): ChatMessage {
+  const said = String(n.text);
+  // The board words a message as "<name> in <place>: <text>".
+  const head = /^(\S{1,40}) in (\S{1,80}): /.exec(said);
+  const sender = String(n.sender);
+  const subject = String(n.subject);
+  const direct = n.type === 'dm';
+  return {
+    id: n.seq as number, place: subject, kind: direct ? 'direct' : 'channel',
+    sender: { id: sender, name: head?.[1] ?? sender }, where: direct ? 'a direct message' : head?.[2] ?? subject,
+    ...(!direct && /^c_[a-z0-9]{8}$/.test(subject) ? { channel: { id: subject, name: head?.[2] ?? subject } } : {}),
+    own: false, bot: sender.startsWith('a_') ? true : sender.startsWith('u_') ? false : undefined,
+    owner: ownerId !== undefined && sender === ownerId,
+    // A mention names the agent; a comment on a task of the agent's is said to it as well.
+    mentioned: n.type === 'mention' || n.type === 'comment', text: said, line: JSON.stringify(n),
+  };
+}
 export function rayboardCa(path: string | undefined): string | undefined {
   if (!path) return;
   const pem = readFileSync(path, 'utf8');
@@ -42,9 +86,12 @@ export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll:
   const url = rayboardUrl(o.url), send = o.send ?? fetch, ms = o.requestMs ?? 65_000, ca = o.ca;
   let stopped = false, busy = false;
   const delivered = new Set<number>();
-  for (const e of o.events()) if (e.type === 'stimulus' && (e.source === RAYBOARD_SOURCE || e.source === RAYBOARD_OWNER_SOURCE) && e.text.startsWith(PREFIX)) {
-    const seq = Number(e.text.slice(PREFIX.length).split('\n')[0]); if (Number.isSafeInteger(seq) && seq > 0) delivered.add(seq);
+  for (const e of o.events()) if (e.type === 'stimulus' && (e.source === RAYBOARD_SOURCE || e.source === RAYBOARD_OWNER_SOURCE)) {
+    const seq = Number(RAYBOARD_LINE.exec(e.text.split('\n', 1)[0] ?? '')?.[1]); if (Number.isSafeInteger(seq) && seq > 0) delivered.add(seq);
+    // Talk that came along as context with a later message was delivered too.
+    for (const m of e.text.matchAll(/^\{"seq":([1-9][0-9]*),/gm)) delivered.add(Number(m[1]));
   }
+  const attention = o.chat ? chat({ words: WORDS, emit, ambient: o.ambient === true, ownName: () => '', ...(o.now ? { now: o.now } : {}), ...(o.who ? { who: o.who } : {}), ...(o.mode ? { mode: o.mode } : {}) }) : null;
   async function poll(): Promise<void> {
     if (stopped || busy) return;
     busy = true;
@@ -63,7 +110,10 @@ export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll:
         });
         for (const n of items) {
           if (stopped) return;
-          if (!delivered.has(n.seq as number)) {
+          if (!delivered.has(n.seq as number) && attention !== null && TALK.has(n.type as string)) {
+            await attention.take(rayboardChat(n, o.ownerId));
+            delivered.add(n.seq as number);
+          } else if (!delivered.has(n.seq as number)) {
             // The authenticated Rayboard API supplies this id; its text is never the credential.
             const verifiedOwner = o.ownerId !== undefined && n.sender === o.ownerId;
             emit({ source: verifiedOwner ? RAYBOARD_OWNER_SOURCE : RAYBOARD_SOURCE,
@@ -74,6 +124,7 @@ export function rayboardPoller(o: Options, emit: (s: Stimulus) => void): { poll:
         if (items.length > 0) await request(send, url, token, { through: items.at(-1)!.seq as number }, ms, ca);
         more = result.more === true;
       }
+      attention?.paused();
     } catch { /* Retry the same unread page; journal delivery suppresses its already emitted prefix. */ }
     finally { busy = false; }
   }

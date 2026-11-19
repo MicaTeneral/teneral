@@ -285,6 +285,8 @@ const sensors: Sensor[] = [
     url: process.env.TENERAL_RAYBOARD_URL,
     // No implicit binding: the owner chooses which API-verified account can speak for them.
     ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
+    // Talk on the board is chat like any other: the same attention, the same hands, the same record of who is there.
+    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => readEvents(journal),

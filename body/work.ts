@@ -4,6 +4,7 @@ import { standing } from '../brain/owned';
 import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type WorkState } from '../brain/known';
 import type { Tool } from './tools';
 import type { Sensor } from './sensors';
+import { lookedAt } from '../brain/agenda';
 
 export type WorkStatus = 'queued' | 'waiting' | 'done';
 export interface WorkUpdate {
@@ -152,8 +153,19 @@ export function resumeWork(journal: string, gen: string, busy: () => boolean, no
       try {
         if (busy()) return;
         const events = standing(readEvents(journal));
-        const item = agenda(known(events), new Date(now()).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now());
-        if (item?.work === undefined) return;
+        const held = known(events);
+        const item = agenda(held, new Date(now()).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now());
+        if (item?.work === undefined) {
+          // Nothing is ready, but the time the agent set to look again at something has come. That
+          // time is a promise to itself made in the course of the work: it wakes the agent when it
+          // comes, and does not wait for the clock's next tick, which may be half an hour away.
+          const due = held.intentions.find((i) => !i.waits && i.work?.status === 'waiting' && i.work.checkAt !== undefined && i.work.checkAt <= now());
+          if (due?.work === undefined) return;
+          // Journal first, as below: looked at once more, and not again before a wait that doubles.
+          progress(journal, gen, due, lookedAt(due.work, now()));
+          emit({ source: 'work', text: `The time you set to look again at ${due.mark} has come. It waits for: ${due.work.next} Look once, at the thing itself. If it has come, go on with the work and record its state with work; if not, record with work when to look again, or leave it and you are woken later by itself. Do not look twice in one turn. Task: ${due.text}` });
+          return;
+        }
         if (item.work.attempts >= 3) {
           progress(journal, gen, item, { ...item.work, status: 'waiting' });
           emit({ source: 'work', text: `Task ${item.mark} paused after three resumptions without a recorded next-step change. Report the blocker honestly; do not silently reset the budget. Task: ${item.text}` });

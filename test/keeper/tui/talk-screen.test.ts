@@ -1560,3 +1560,22 @@ test('the status line says how the memory stands and what the last exam came to,
   s.clock.at += 31_000;
   expect(footer()).toContain('2 for you');
 });
+
+test('a turn nobody asked for shows only its last few lines while it goes on, and the footer stays', () => {
+  const s = stage(100, 40);
+  settled(s);
+  s.journal({ type: 'stimulus', source: 'clock', text: 'Clock tick at 2026-11-19T10:00:00.000Z. This is time of your own.' }, 0);
+  for (let i = 0; i < 10; i++) {
+    s.journal(more({ type: 'assistant', text: '', toolCalls: [{ id: `c${i}`, name: 'bash', args: { command: `step ${i}` } }] }), 100 + i * 10);
+    s.journal({ type: 'tool.intent', callId: `c${i}`, name: 'bash', args: { command: `step ${i}` } }, 101 + i * 10);
+    s.journal({ type: 'tool.result', callId: `c${i}`, ok: true, output: 'ok' }, 102 + i * 10);
+  }
+  s.clock.at = 3000;
+  const live = s.live();
+  // The newest steps, not all ten, and nothing of it is printed for good yet.
+  expect(live).toContain('step 9');
+  expect(live).not.toContain('step 4');
+  expect(s.all().split('step 6')[0]).not.toContain('step');
+  // The footer is where it was: the model's name is in its last row.
+  expect(live.split('\n').at(-1)).toContain('gpt-6.1-sol');
+});
