@@ -206,7 +206,7 @@ Messages are not signed. The agent is told to treat them as untrusted and not to
 
 ## Run it
 
-Requires Docker and git.
+Requires Docker and git. On Linux, `one` warns when Docker is installed through snap: its AppArmor confinement can deny the image build, `no-new-privileges`, or port publishing. If that happens, use a normally packaged Docker rather than disabling the container's security flags; see [issue #11](https://github.com/RayforceDB/teneral/issues/11).
 
     ./one up                # start the agent in the background; the first time, it sets up a model provider first
     ./one talk              # attach this terminal to it
