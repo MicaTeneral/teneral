@@ -38,13 +38,15 @@ interface Options {
   who?: (speakers: Speaker[]) => string;
   /** Asked once for each stream a message comes from, with who the service says is subscribed: see `entered` in body/chat.ts. */
   entered?: (stream: { id: string; name: string }, members: { id: string; name: string; bot?: boolean }[] | null) => string;
+  /** Told of every message taken: see `heard` in body/chat.ts. */
+  heard?: (m: ChatMessage, how: 'own' | 'dm' | 'mention' | 'quote' | 'name' | 'follow' | 'none') => void;
   /** How the agent listens in a stream: see `mode` in body/chat.ts. */
   mode?: (stream: { id: string; name: string }) => Mode;
   /** Of the event queue: it carries messages, edits and deletions as well as reactions, and tells of them through `on`. */
   wide?: boolean;
   /** Of the event queue: a request waits at the server until something happens, instead of returning at once. */
   block?: boolean;
-  on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void };
+  on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void; joined?: (streams: { id: string; name: string }[]) => void };
   now?: () => number;
 }
 
@@ -113,6 +115,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const addressed = new Set<number>();
   // Edits and deletions the event queue told of, taken up at the next poll so that everything happens in one order.
   const changed = new Set<number>(), gone = new Set<number>();
+  // Streams the agent was added to, as the event queue told of them: taken up at the next poll, when the service can be asked who is there.
+  const added: { id: string; name: string }[] = [];
   // Polls that failed in a row, and since when: said to the agent once the connection is back.
   let failures = 0, downSince = 0;
   // When a message wakes the agent and what it is told is the same for every service (body/chat.ts).
@@ -135,7 +139,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const attention = chat({
     words: WORDS, emit, ambient: o.ambient === true, ownName: () => identity?.name ?? '', now, ...(o.who ? { who: o.who } : {}),
     ...(o.entered ? { entered: async (stream) => o.entered!(stream, await roster(stream)) } : {}),
-    ...(o.mode ? { mode: o.mode } : {}),
+    ...(o.mode ? { mode: o.mode } : {}), ...(o.heard ? { heard: o.heard } : {}),
   });
   for (const e of o.events()) {
     if (e.type === 'stimulus' && (e.source === SOURCE || e.source === OWNER_SOURCE)) {
@@ -147,12 +151,18 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     }
   }
   const text = (v: unknown, limit: number) => typeof v === 'string' ? v.slice(0, limit) : '';
+  /** The others in a direct conversation, by id, in order; its sender alone when the service names no recipients. */
+  const direct = (m: any): number[] => {
+    const ids = Array.isArray(m.display_recipient) ? m.display_recipient.map((p: any) => p?.id).filter((id: unknown): id is number => Number.isSafeInteger(id) && id !== identity!.id) : [];
+    return (ids.length > 0 ? ids : [m.sender_id]).sort((x: number, y: number) => x - y);
+  };
   /** A Zulip message as the chat layer takes it. Identity is the API's, never a display name or message content. */
   function toChat(c: Credentials, m: any, again = false): ChatMessage {
     const mentioned = Array.isArray(m.flags) && m.flags.includes('mentioned');
     const owner = o.ownerId !== undefined && m.sender_id === o.ownerId;
     return {
-      id: m.id, place: `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
+      // A direct conversation is a place of its own, by who is in it besides the agent.
+      id: m.id, place: m.type === 'private' ? `dm:${direct(m).join(',')}` : `${m.stream_id}\n${m.subject}`, kind: m.type === 'private' ? 'direct' : 'channel',
       ...(Number.isSafeInteger(m.sender_id) ? { sender: { id: String(m.sender_id), name: text(m.sender_full_name, 200) || `user ${m.sender_id}` } } : {}),
       ...(m.type === 'stream' && typeof m.display_recipient === 'string' ? { where: `#${text(m.display_recipient, 100)}` } : m.type === 'private' ? { where: 'a direct message' } : {}),
       ...(m.type === 'stream' && Number.isSafeInteger(m.stream_id) ? { channel: { id: String(m.stream_id), name: `#${text(m.display_recipient, 100) || m.stream_id}` } } : {}),
@@ -276,6 +286,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         cursor = m.id;
       }
       if (!stopped && changed.size + gone.size > 0) await changes(c);
+      while (!stopped && added.length > 0) await attention.joined(added.shift()!);
       if (!stopped) attention.paused();
       if (o.conversations && !stopped) {
         const presence = await (o.send ?? fetch)(new URL('/api/v1/users/me/presence', c.site), { method: 'POST',
@@ -303,6 +314,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     /** From the event queue: these messages were changed by their senders, or taken back. Taken up at the next poll. */
     edited: (ids: number[]) => { for (const id of ids) changed.add(id); },
     deleted: (ids: number[]) => { for (const id of ids) gone.add(id); },
+    joined: (streams: { id: string; name: string }[]) => { for (const s of streams) if (!added.some(a => a.id === s.id)) added.push(s); },
   };
 }
 export function zulip(o: Options): Sensor {
@@ -331,6 +343,7 @@ export function zulipLive(o: Options, startMs = 60_000): Sensor {
       message: soon,
       edited: (ids) => { messages.edited(ids); soon(); },
       deleted: (ids) => { messages.deleted(ids); soon(); },
+      joined: (streams) => { messages.joined(streams); soon(); },
     } }, emit);
     // Registration is delayed so that a smoke run does not depend on Zulip.
     const start = setTimeout(async () => {
@@ -422,7 +435,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       restore(c);
       if (!cursor) {
         const registered = await request(c, '/api/v1/register', { method: 'POST', body: new URLSearchParams({
-          event_types: JSON.stringify(o.wide ? ['reaction', 'message', 'update_message', 'delete_message'] : ['reaction']), fetch_event_types: JSON.stringify(['reaction']),
+          event_types: JSON.stringify(o.wide ? ['reaction', 'message', 'update_message', 'delete_message', 'subscription'] : ['reaction']), fetch_event_types: JSON.stringify(['reaction']),
           client_capabilities: JSON.stringify({ notification_settings_null: true }),
         }) });
         if (typeof registered.queue_id !== 'string' || !Number.isSafeInteger(registered.last_event_id) || registered.last_event_id < -1) throw new Error('Invalid Zulip queue');
@@ -482,6 +495,11 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         const ids = (event: any): number[] => (Array.isArray(event.message_ids) ? event.message_ids : [event.message_id]).filter((id: unknown): id is number => Number.isSafeInteger(id));
         const edited = news.filter((event: any) => event.type === 'update_message' && event.rendering_only !== true).flatMap(ids);
         const deleted = news.filter((event: any) => event.type === 'delete_message').flatMap(ids);
+        // The agent was subscribed to a stream, by itself or by someone adding it.
+        const streams = news.filter((event: any) => event.type === 'subscription' && event.op === 'add' && Array.isArray(event.subscriptions))
+          .flatMap((event: any) => event.subscriptions).filter((s: any) => Number.isSafeInteger(s?.stream_id) && typeof s.name === 'string')
+          .map((s: any) => ({ id: String(s.stream_id), name: `#${String(s.name).slice(0, 100)}` }));
+        if (streams.length > 0) o.on?.joined?.(streams);
         if (edited.length > 0) o.on?.edited([...new Set<number>(edited)]);
         if (deleted.length > 0) o.on?.deleted([...new Set<number>(deleted)]);
       }

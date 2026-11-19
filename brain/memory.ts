@@ -332,15 +332,19 @@ export function buildMessages(journaled: JournalEvent[], system: string, budgetC
 
 /** True when the last thing in the conversation is not the agent's own finished reply, nor its owner stopping the turn. */
 export function needsTurn(journaled: JournalEvent[]): boolean {
-  let afterReply = false;
   // What the owner took back asks for nothing any more. Derive acceptance from that same view.
   const events = standing(journaled);
   const accepted = acceptanceNotes(events);
-  for (const e of events) {
-    if (e.type === 'assistant') afterReply = reply(e).calls.length > 0 || !replyIsCurrent(events, e);
+  // Only the last thing that bears on it decides: each such event overrides all before it. So the
+  // journal is read from its end to the first one, and whether a reply is current, which goes
+  // through the journal itself, is asked once and not of every reply the agent ever gave. Asked of
+  // each, this took seconds on a journal a week old, and it is asked every few seconds.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === 'assistant') return reply(e).calls.length > 0 || !replyIsCurrent(events, e);
     // The owner ended that turn. What was unanswered stays so until something else arrives.
-    else if (e.type === 'turn.interrupted') afterReply = false;
-    else if (e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id)) afterReply = true;
+    if (e.type === 'turn.interrupted') return false;
+    if (e.type === 'stimulus' || stemNote(e) !== null || accepted.has(e.id)) return true;
   }
-  return afterReply;
+  return false;
 }

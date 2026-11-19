@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { appendEvent, readEvents } from '../brain/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { standing } from '../brain/owned';
 import { DONE_KIND, INTENTION_KIND, LEGACY_WORK_KIND, WORK_KIND, agenda, byMark, known, type Intention, type WorkState } from '../brain/known';
 import type { Tool } from './tools';
@@ -147,12 +147,12 @@ export const work: Tool = {
 };
 
 /** One automatic resumption for the first ready commitment, never for an unsure or waiting item. */
-export function resumeWork(journal: string, gen: string, busy: () => boolean, now = Date.now, intervalMs = 5000): Sensor {
+export function resumeWork(journal: string, gen: string, busy: () => boolean, now = Date.now, intervalMs = 5000, read: () => JournalEvent[] = () => readEvents(journal)): Sensor {
   return (emit) => {
     const timer = setInterval(() => {
       try {
         if (busy()) return;
-        const events = standing(readEvents(journal));
+        const events = standing(read());
         const held = known(events);
         const item = agenda(held, new Date(now()).toISOString().slice(0, 10)).find((i) => i.work?.status === 'queued' && i.work.resumeAt <= now());
         if (item?.work === undefined) {

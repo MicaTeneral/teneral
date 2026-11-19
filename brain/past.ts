@@ -29,6 +29,8 @@ export interface Past {
   sync(): void;
   persist(): void;
   close(): void;
+  /** The database itself, when it answers: for other tables made from the journal (body/community.ts). A process has one runtime. */
+  ray?: Ray;
 }
 
 export interface Found extends Hit {
@@ -185,6 +187,7 @@ export function storePast(journal: string, ray: Ray, store: Store, owned: boolea
   const stands = (ranges: [number, number][], off: number, e: JournalEvent): boolean =>
     !wasSaid(e) || !ranges.some(([from, to]) => off >= from && off < to);
   return {
+    ray,
     by: 'store',
     find(question, options) {
       store.sync();

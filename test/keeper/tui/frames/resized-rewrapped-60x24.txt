@@ -53,3 +53,4 @@ s and commands.                       │
 │ › half a line                                           │
 ╰─────────────────────────────────────────────────────────╯
  gpt-6.1-sol  …/work/teneral  gen 1 a1b2c3d
+ ›› mutate · publish · memory · more           Down selects

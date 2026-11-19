@@ -142,3 +142,39 @@ test('a channel is listened to as the agent chose: muted talk is not kept, menti
   expect(r.got[1]!.text).toContain('context only');
   expect(r.got[1]!.text).not.toContain('never kept');
 });
+
+test('every message taken is reported with how it addressed the agent, its own included; talk in a muted channel is not heard at all', async () => {
+  const heard: string[] = [];
+  const r = room({ heard: (m, how) => heard.push(`${m.id} ${how}`), mode: (channel) => (channel.id === 'm' ? 'muted' : 'ambient') });
+  await r.c.take(r.said('just talking'));
+  await r.c.take(r.said('maybe mica knows'));
+  await r.c.take(r.said('quoting you', { answers: true }));
+  await r.c.take(r.said('a call', { mentioned: true }));
+  await r.c.take(r.said('my own words', { own: true }));
+  await r.c.take(r.said('after you spoke'));
+  await r.c.take(r.said('a whisper', { kind: 'direct', place: 'dm/7' }));
+  await r.c.take(r.said('in a muted room', { place: 'm', channel: { id: 'm', name: '#muted' } }));
+  await r.c.take(r.said('named in a muted room, mica', { place: 'm', channel: { id: 'm', name: '#muted' }, mentioned: true }));
+  expect(heard).toEqual(['1 none', '2 name', '3 quote', '4 mention', '5 own', '6 follow', '7 dm', '9 mention']);
+});
+
+
+test('being added to a channel wakes the agent at once with who is there, once, and its first message there does not say it again', async () => {
+  const asked: string[] = [];
+  const r = room({ entered: async (channel) => { asked.push(channel.name); return `This is the first you hear from ${channel.name}. There with you: Ann.`; } });
+  await r.c.joined({ id: '7', name: '#project' });
+  expect(r.got).toHaveLength(1);
+  expect(r.got[0]!.source).toBe('agent:parley');
+  expect(r.got[0]!.text).toStartWith('Parley joined 7\nYou were added to #project on Parley. Nobody has addressed you');
+  expect(r.got[0]!.text).toContain('There with you: Ann.');
+  expect(r.got[0]!.text).toContain('answer exactly [teneral: no reply]');
+  await r.c.joined({ id: '7', name: '#project' });
+  await r.c.take(r.said('welcome', { place: 'p', channel: { id: '7', name: '#project' }, mentioned: true }));
+  expect(asked).toEqual(['#project']);
+  expect(r.got).toHaveLength(2);
+  expect(r.got[1]!.text).not.toContain('first you hear');
+  // A channel the journal already knows gives nothing to say, and no wake.
+  const known = room({ entered: async () => '' });
+  await known.c.joined({ id: '8', name: '#old' });
+  expect(known.got).toHaveLength(0);
+});

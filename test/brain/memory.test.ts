@@ -690,3 +690,44 @@ test('a completed tool round adds no mutable footer or synthetic work message', 
   expect(a.some((m) => m.content === 'work version one')).toBe(false);
   expect(b[0]!.content).toBe('fixed instructions');
 });
+
+test('whether a turn is owed is decided by the last thing that bears on it, the same as going through every event, and at a cost that does not grow with the square of a life', async () => {
+  const { needsTurn: owed } = await import('../../brain/memory');
+  const { replyIsCurrent } = await import('../../brain/shown');
+  const { standing } = await import('../../brain/owned');
+  // The definition as it stood: every event in order, each overriding what came before.
+  const slowly = (journaled: JournalEvent[]): boolean => {
+    let after = false;
+    const all = standing(journaled);
+    for (const e of all) {
+      if (e.type === 'assistant') after = (e.toolCalls?.length ?? 0) > 0 || !replyIsCurrent(all, e);
+      else if (e.type === 'turn.interrupted') after = false;
+      else if (e.type === 'stimulus') after = true;
+    }
+    return after;
+  };
+  let seed = 7;
+  const pick = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const made: JournalEvent[] = [];
+  const add = (body: Record<string, unknown>): void => { made.push({ ...body, v: 1, id: `x${made.length}`, ts: new Date(1_800_000_000_000 + made.length * 1000).toISOString(), gen: 'g' } as unknown as JournalEvent); };
+  for (let i = 0; i < 400; i++) {
+    const kind = pick(7);
+    if (kind === 0) add({ type: 'stimulus', source: pick(2) === 0 ? 'terminal' : 'clock', text: 'said' });
+    else if (kind === 1) add({ type: 'assistant', text: 'reply', toolCalls: [] });
+    else if (kind === 2) add({ type: 'assistant', text: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] });
+    else if (kind === 3) add({ type: 'turn.interrupted' });
+    else if (kind === 4) add({ type: 'note', kind: 'brain.shown.v1', data: { through: made.length > 0 ? made[pick(made.length)]!.id : null } });
+    else if (kind === 5) add({ type: 'tool.result', callId: 'c', ok: true, output: 'ok' });
+    else add({ type: 'note', kind: 'cache.probe.v1', data: {} });
+    expect(owed(made)).toBe(slowly(made));
+  }
+  // Ten thousand finished replies: asked of each, this was seconds; now it is asked of one.
+  const long: JournalEvent[] = [];
+  for (let i = 0; i < 10_000; i++) {
+    long.push({ type: 'stimulus', source: 'terminal', text: 'q', v: 1, id: `s${i}`, ts: '2026-01-01T00:00:00.000Z', gen: 'g' } as JournalEvent);
+    long.push({ type: 'assistant', text: 'a', toolCalls: [], v: 1, id: `a${i}`, ts: '2026-01-01T00:00:00.000Z', gen: 'g' } as JournalEvent);
+  }
+  const began = performance.now();
+  expect(owed(long)).toBe(false);
+  expect(performance.now() - began).toBeLessThan(500);
+});

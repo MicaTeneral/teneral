@@ -1,6 +1,7 @@
 import { appendEvent, type JournalEvent } from '../brain/journal';
-import { known, type Fact } from '../brain/known';
+import { INTENTION_KIND, known, type Fact, type IntentionData } from '../brain/known';
 import { fromOwner, standing } from '../brain/owned';
+import { tieWord, type Community } from './community';
 
 // Who the agent shares its chats with. A member of a chat knows who the others are: their names,
 // which of them are programs, what each works on and answers for. The agent is told none of that
@@ -94,6 +95,7 @@ export function meet(journal: string, gen: string, events: JournalEvent[], seen:
 //
 // Indicators: what the journal itself shows of them, counted with no model asked: how often they
 // were heard, when first and last, how often the agent answered them. They cannot be flattered.
+// They are asked of the table every heard message is laid out in (body/community.ts).
 //
 // Several accounts can be one contact, on different services or the same: only on the owner's word.
 
@@ -168,28 +170,6 @@ export function ownerSays(events: JournalEvent[], words: string): JournalEvent |
   return events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source) && flat(e.text).includes(wanted)) ?? null;
 }
 
-export interface Indicators { heard: number; first: string | null; last: string | null; answered: number }
-
-/**
- * What the journal shows of an account, with no model asked: the stimuli it spoke in, by the line
- * that names it there, and how many of those the agent answered with something other than silence.
- */
-export function indicators(events: JournalEvent[], keys: string[]): Indicators {
-  const marks = keys.map((key) => `(${key},`);
-  const found: Indicators = { heard: 0, first: null, last: null, answered: 0 };
-  let open = false;
-  for (const e of events) {
-    if (e.type === 'stimulus') {
-      open = marks.some((mark) => e.text.includes(mark));
-      if (open) { found.heard += 1; found.first ??= e.ts; found.last = e.ts; }
-    } else if (open && e.type === 'tool.intent' && (e.name === 'chat_reply' || e.name === 'chat_send' || e.name.endsWith('_reply'))) {
-      found.answered += 1;
-      open = false;
-    }
-  }
-  return found;
-}
-
 /** The most facts shown of one participant, and the most characters of each. */
 const FACTS_EACH = 4;
 const FACT_CHARS = 240;
@@ -210,7 +190,7 @@ export function knownOf(facts: Fact[], name: string): Fact[] {
  * Who is speaking, for the end of a stimulus: each participant with what kind they are and what
  * the agent knows of them. `fresh` are those met in this very message.
  */
-export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = []): string {
+export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = [], community?: Pick<Community, 'indicators'> & Partial<Pick<Community, 'standing'>>): string {
   if (speakers.length === 0) return '';
   const facts = known(standing(events)).facts;
   const held = contacts(events);
@@ -220,9 +200,10 @@ export function whoLines(events: JournalEvent[], speakers: Participant[], fresh:
     const first = fresh.some((f) => keyOf(f) === keyOf(p));
     const c = held.get(keyOf(p));
     const circle = c?.circle !== undefined ? `, ${c.circle}, by your owner's word` : c?.supposed !== undefined ? `, ${c.supposed}, as you suppose` : ', in no circle yet';
-    const seen = indicators(events, [keyOf(p), ...(c?.same ?? [])]);
-    // This very message is not counted yet: it is journaled after this is written.
-    const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`;
+    const seen = community?.indicators([keyOf(p), ...(c?.same ?? [])]) ?? { heard: 0, first: null, last: null, answered: 0 };
+    const stand = community?.standing?.([keyOf(p), ...(c?.same ?? [])]) ?? null;
+    const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`
+      + (stand === null ? '' : `; tie ${stand.tie} of 100 (${tieWord(stand.tie)}), importance ${stand.importance} of 100`);
     const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
     const what = [traits, ...of.map((f) => `${f.mark} [${f.source}] ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
     return `- ${p.name} (${keyOf(p)}, ${kind}${circle}${count}): ${what !== '' ? what : first ? 'you have not met them before' : 'you have set nothing down about them yet'}`;
@@ -234,11 +215,17 @@ export function whoLines(events: JournalEvent[], speakers: Participant[], fresh:
 
 /** How many members of a place are named when the agent first hears from it; the rest are counted. */
 const ROSTER_SHOWN = 12;
+/** The most newcomers one place has circles supposed for: a channel of hundreds is not a list of people the agent deals with. */
+const SUPPOSED_MAX = 40;
 
 /**
- * The agent hears from a place for the first time: everyone the service says is there is
- * recorded, the place is, and what the agent is told with its next wake is returned. Empty for a
- * place it has heard from before, or when the service gave no roster.
+ * The agent hears from a place for the first time, or was added to it. Everyone the service says
+ * is there is recorded, and the place is. Then the circles go on being formed: of those who are
+ * in none, a bot is supposed a service, and a person is supposed to be what most of the people
+ * already placed there are, when at least two of them agree. A supposed circle opens nothing; it
+ * is what the agent asks its owner about, in one question set down for them, so that being added
+ * somewhere ends with the owner saying who these people are and not with a list nobody looked at.
+ * Returns what the agent is told. Empty for a place it has heard from before.
  */
 export function enter(journal: string, gen: string, events: JournalEvent[], service: string, place: { id: string; name: string }, members: Participant[] | null): string {
   if (places(events).has(`${service}:${place.id}`)) return '';
@@ -246,5 +233,30 @@ export function enter(journal: string, gen: string, events: JournalEvent[], serv
   if (members === null || members.length === 0) return `This is the first you hear from ${place.name}.`;
   meet(journal, gen, events, members.map((m) => ({ ...m, met: place.name })));
   const named = members.slice(0, ROSTER_SHOWN).map((m) => `${m.name} (${keyOf(m)}${m.bot === true ? ', a bot' : ''})`).join(', ');
-  return `This is the first you hear from ${place.name}. There with you: ${named}${members.length > ROSTER_SHOWN ? `, and ${members.length - ROSTER_SHOWN} more` : ''}.`;
+  const roster = `This is the first you hear from ${place.name}. There with you: ${named}${members.length > ROSTER_SHOWN ? `, and ${members.length - ROSTER_SHOWN} more` : ''}.`;
+
+  const held = contacts(events);
+  const tally = new Map<string, number>();
+  for (const m of members) { const circle = held.get(keyOf(m))?.circle; if (circle !== undefined) tally.set(circle, (tally.get(circle) ?? 0) + 1); }
+  const placed = [...tally.values()].reduce((sum, n) => sum + n, 0);
+  const [most, count] = [...tally].sort((x, y) => y[1] - x[1])[0] ?? ['', 0];
+  const likely = count >= 2 && count * 2 > placed ? most : null;
+  const unplaced = members.filter((m) => { const c = held.get(keyOf(m)); return c?.circle === undefined && c?.supposed === undefined; });
+  const supposed: Participant[] = [], unknown: Participant[] = [];
+  for (const m of unplaced.slice(0, SUPPOSED_MAX)) {
+    const circle = m.bot === true ? 'service' : likely;
+    if (circle === null) { unknown.push(m); continue; }
+    appendEvent(journal, gen, { type: 'note', kind: CONTACT_KIND, data: { key: keyOf(m), supposed: circle, why: m.bot === true ? 'the service says it is a bot' : `${count} of the ${placed} people already placed in ${place.name} are ${circle}` } });
+    if (m.bot !== true) supposed.push(m);
+  }
+  if (supposed.length + unknown.length === 0) return roster;
+  const names = (list: Participant[]): string => list.slice(0, ROSTER_SHOWN).map((m) => m.name).join(', ') + (list.length > ROSTER_SHOWN ? ` and ${list.length - ROSTER_SHOWN} more` : '');
+  const ask = `Who are the people I met in ${place.name} on ${service}, to you? `
+    + (supposed.length > 0 ? `I suppose ${names(supposed)} ${supposed.length === 1 ? 'is' : 'are'} ${likely}, as most of those there you placed are. ` : '')
+    + (unknown.length > 0 ? `I have nothing to go on for ${names(unknown)}.` : '');
+  appendEvent(journal, gen, { type: 'note', kind: INTENTION_KIND, data: { text: ask.trim(), origin: 'ask' } satisfies IntentionData });
+  return `${roster} ${supposed.length > 0 ? `Of those new to you, ${names(supposed)} ${supposed.length === 1 ? 'is' : 'are'} supposed ${likely} for now, as most there are. ` : ''}`
+    + `${unknown.length > 0 ? `For ${names(unknown)} there is nothing to go on yet. ` : ''}`
+    + 'A question for your owner about them is set down and stands in what waits for an answer: put it to them once, with its mark, and record what they say with `contact` and their own words. '
+    + 'Until then a supposed circle opens nothing, and with all of them you are helpful and say nothing of your owner\'s affairs.';
 }
