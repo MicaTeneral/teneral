@@ -134,3 +134,44 @@ test('a commitment is named by its mark or its words; a mark that names nothing 
     expect(known(readEvents(s.journal)).intentions[0]!.work!.at).toBeDefined();
   } finally { rmSync(s.dir, { recursive: true }); }
 });
+
+test('the time the agent set to look again wakes it when it comes, once, and then after a wait that doubles', async () => {
+  const s = setup();
+  let now = Date.now();
+  const woken: string[] = [];
+  try {
+    await work.run({ status: 'waiting', task: 'Publish after the test run', next: 'The detached test run to finish.', check: 3 }, s.ctx);
+    const mark = item(s.journal, 'Publish after the test run')!.mark;
+    const stop = resumeWork(s.journal, 'g1', () => false, () => now, 5)((stimulus) => woken.push(stimulus.text));
+    try {
+      await Bun.sleep(25);
+      // Not before its time.
+      expect(woken).toEqual([]);
+      now += 3 * 60_000 + 1000;
+      await Bun.sleep(25);
+      expect(woken).toHaveLength(1);
+      expect(woken[0]).toStartWith(`The time you set to look again at ${mark} has come. It waits for: The detached test run to finish.`);
+      expect(woken[0]).toEndWith('Task: Publish after the test run');
+      // Looked at once: the next look is half an hour on, not at the next poll.
+      const after = item(s.journal, 'Publish after the test run')!.work!;
+      expect(after).toMatchObject({ status: 'waiting', attempts: 1 });
+      expect(after.checkAt).toBe(now + 30 * 60_000);
+      await Bun.sleep(25);
+      expect(woken).toHaveLength(1);
+      now += 30 * 60_000;
+      await Bun.sleep(25);
+      expect(woken).toHaveLength(2);
+      expect(item(s.journal, 'Publish after the test run')!.work!.checkAt).toBe(now + 60 * 60_000);
+    } finally { stop(); }
+    // What waits for an arrival, with no time set, is never woken for by the clockwork.
+    const quiet = setup();
+    try {
+      await work.run({ status: 'waiting', task: 'Publish once approved', next: "The owner's approval." }, quiet.ctx);
+      const none: string[] = [];
+      const halt = resumeWork(quiet.journal, 'g1', () => false, () => Date.now() + 10 * 24 * 3_600_000, 5)((stimulus) => none.push(stimulus.text));
+      await Bun.sleep(25);
+      halt();
+      expect(none).toEqual([]);
+    } finally { rmSync(quiet.dir, { recursive: true }); }
+  } finally { rmSync(s.dir, { recursive: true }); }
+});
