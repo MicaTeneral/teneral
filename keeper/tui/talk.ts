@@ -247,6 +247,7 @@ export class TalkScreen {
   private publishPending = false;
   private offersWaiting = 0;
   private offersUnsent = 0;
+  private offersStale = 0;
   /** The mutation that waits for the owner's approval, by the start of its commit; empty when none does. */
   private mutationWaiting = '';
   /** The action the keys are on, while they are on the row of actions under the footer; null while they are in the input. */
@@ -691,14 +692,16 @@ export class TalkScreen {
         ],
       },
       {
-        label: 'publish', icon: 'publish', tone: 'brand', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : '', hot: this.offersWaiting + this.offersUnsent > 0,
+        label: 'publish', icon: 'publish', tone: 'brand', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : this.offersStale > 0 ? `${this.offersStale} stale` : '', hot: this.offersWaiting + this.offersUnsent + this.offersStale > 0,
         items: () => {
-          let standing: ReturnType<typeof publishing> = { waits: [], approved: [], sent: [], failed: 0 };
+          let standing: ReturnType<typeof publishing> = { waits: [], approved: [], stale: [], sent: [], failed: 0 };
           try { standing = publishing(install(this.o.paths.root)); } catch { /* nothing to list */ }
           const row = (verb: string, r: { commit: string; branch?: string; title: string }): MenuItem => ({ name: `${verb} ${r.commit.slice(0, SHORT)}`, about: `${r.branch ?? ''}: ${r.title}`, run: `/publish ${r.commit.slice(0, 12)}` });
           return [
             ...standing.waits.map((r) => row('let go', r)), ...standing.approved.map((r) => row('send again', r)),
-            ...(standing.waits.length + standing.approved.length === 0 ? [{ name: 'nothing waits', about: 'no offer waits for you, and none you approved is unsent', run: null }] : []),
+            // An offer the species has moved past cannot go out: the one thing to do with it here is to take it off the list.
+            ...standing.stale.map((r): MenuItem => ({ name: `withdraw ${r.commit.slice(0, SHORT)}`, about: `stale, built on an older species · ${r.branch ?? ''}: ${r.title}`, run: `/publish withdraw ${r.commit.slice(0, 12)}` })),
+            ...(standing.waits.length + standing.approved.length + standing.stale.length === 0 ? [{ name: 'nothing waits', about: 'no offer waits for you, and none you approved is unsent', run: null }] : []),
             { name: 'what each holds', about: 'every waiting offer, file by file', run: '/offers' },
             { name: 'how it works', about: 'how the agent\'s work goes out, and where everything stands', run: '/publish' },
           ];
@@ -1174,7 +1177,8 @@ export class TalkScreen {
         const standing = publishing(install(this.o.paths.root));
         this.offersWaiting = standing.waits.length;
         this.offersUnsent = standing.approved.length;
-      } catch { this.offersWaiting = 0; this.offersUnsent = 0; }
+        this.offersStale = standing.stale.length;
+      } catch { this.offersWaiting = 0; this.offersUnsent = 0; this.offersStale = 0; }
       try {
         const approval = readApproval(this.o.paths.root);
         this.mutationWaiting = approval.asked !== undefined && approval.asked !== approval.approved ? approval.asked.slice(0, 12) : '';
@@ -1189,7 +1193,7 @@ export class TalkScreen {
     const background = s.background || remembering !== '';
     const beat = !s.background && (word === 'thinking' || word === 'waking') ? this.beat(now) : '';
     const tip = Math.floor(now / TIP_MS);
-    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.mutationWaiting}|${this.interrupting !== null}`;
+    const stamp = `${remembering === '' ? '' : Math.floor(now / SPIN_MS)}|${s.trouble === null ? '' : `${s.trouble.failures}:${s.trouble.retryAt === null ? '' : Math.ceil((s.trouble.retryAt - now) / 30_000)}`}|${cols}x${rows}|${word}|${spin}|${clock}|${beat}|${this.name}|${s.current}|${tip}|${s.tool?.name}|${s.workers.map(w => `${w.callId}:${w.task}`).join('|')}|${this.publishPending}:${this.publishedCommit}:${this.offersWaiting}:${this.offersUnsent}:${this.offersStale}:${this.mutationWaiting}|${this.interrupting !== null}`;
     if (!this.dirty && stamp === this.painted) return;
     this.dirty = false;
     this.painted = stamp;
