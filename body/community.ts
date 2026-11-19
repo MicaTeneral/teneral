@@ -40,10 +40,40 @@ const ANSWER_MS = 30 * 60_000;
 /** One message follows another when it comes in the same place, from someone else, within this long. */
 const FOLLOW_MS = 10 * 60_000;
 
-interface Row { ts: number; who: string; name: string; place: string; where: string; own: boolean; addressed: boolean; answered: boolean; prev: string }
+interface Row { ts: number; who: string; name: string; place: string; where: string; own: boolean; addressed: boolean; answered: boolean; prev: string; how: How }
+
+// Two measures of a person, both counted and neither guessed.
+//
+// The tie is between that person and the agent. Every message of theirs adds to it by how it
+// addressed the agent: most when said to it alone, less for a mention or a quote, very little for
+// talk in a room the agent only sat in; and an answer of the agent's adds more than any of them,
+// because a tie is what goes both ways. Each message counts for half as much every HALF_LIFE_DAYS
+// without being renewed, so a tie that is not kept up fades. It is said as 0 to 100.
+//
+// Importance is that person's standing among the others, whatever they are to the agent: how many
+// different people speak after them, how much they are heard, and in how many places, each
+// against whoever is highest in it. It is said as 0 to 100 as well, and 100 is only "the most
+// here", not a judgement of anyone.
+const WEIGHT: Record<How, number> = { own: 0, dm: 3, mention: 2.5, quote: 2, name: 1.5, follow: 1.5, none: 0.25 };
+const ANSWER_WEIGHT = 2;
+export const HALF_LIFE_DAYS = 21;
+/** The raw weight at which a tie is said as about 63 of 100. */
+const TIE_SCALE = 12;
+const DAY_MS = 86_400_000;
+/** A tie's raw weight as a number from 0 to 100. */
+export const tieOf = (raw: number): number => Math.round(100 * (1 - Math.exp(-raw / TIE_SCALE)));
+/** How a tie is said in a word. */
+export const tieWord = (tie: number): string => (tie >= 60 ? 'strong' : tie >= 25 ? 'steady' : tie > 0 ? 'slight' : 'none');
 
 export interface Indicators { heard: number; first: string | null; last: string | null; answered: number }
-export interface Person { who: string; name: string; heard: number; addressed: number; answered: number; places: number; first: string; last: string }
+export interface Person {
+  who: string; name: string; heard: number; addressed: number; answered: number; places: number; first: string; last: string;
+  /** The tie between them and the agent, and their standing among the others: each 0 to 100. */
+  tie: number;
+  importance: number;
+  /** How many different others speak after them. */
+  reach: number;
+}
 export interface Place { where: string; messages: number; speakers: number; mine: number; last: string }
 export interface Pair { who: string; after: string; times: number }
 export interface Circle { circle: string; people: number; heard: number; answered: number }
@@ -56,6 +86,8 @@ export interface Community {
   messages(): number;
   /** What was heard of these accounts together: one contact may have several. */
   indicators(keys: string[]): Indicators;
+  /** The tie and the importance of these accounts together, or null when nothing was heard of them. */
+  standing(keys: string[]): { tie: number; importance: number } | null;
   /** Everyone heard, the most heard first. */
   people(limit?: number): Person[];
   places(): Place[];
@@ -74,12 +106,14 @@ const str = (cells: unknown, i: number): string => String((cells as ArrayLike<un
 /** The names the table and what is asked of it are bound to in the database. */
 const TABLE = 'com_heard', ASKED = 'com_asked', CIRCLES = 'com_circles';
 
-export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Community {
+export function openCommunity(ray: Ray | null, events: JournalEvent[] = [], clock: () => number = Date.now): Community {
   const rows: Row[] = [];
   const seen = new Set<string>();
   /** The rows of each place still waiting for an answer, and its last speaker. */
   const open = new Map<string, { waiting: Row[]; last: Row | null }>();
-  let taken = 0, bound = -1, circled = '';
+  let taken = 0, bound = -1, circled = '', boundAt = 0;
+  /** A message's weight in its sender's tie with the agent, as of now. */
+  const weigh = (r: Row, now: number): number => (r.own ? 0 : (WEIGHT[r.how] + (r.answered ? ANSWER_WEIGHT : 0)) * 0.5 ** (Math.max(0, now - r.ts) / (HALF_LIFE_DAYS * DAY_MS)));
   let circleOf = new Map<string, string>();
 
   function take(e: JournalEvent): void {
@@ -97,6 +131,7 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Com
       ts, who: `${d.service}:${d.sender}`, name: typeof d.name === 'string' ? d.name.slice(0, 200) : d.sender, place, where: typeof d.where === 'string' ? d.where.slice(0, 200) : d.place,
       own: d.how === 'own', addressed: d.how !== 'own' && d.how !== 'none' && d.how !== undefined, answered: false,
       prev: at.last !== null && at.last.who !== `${d.service}:${d.sender}` && ts - at.last.ts <= FOLLOW_MS ? at.last.who : '',
+      how: d.how !== undefined && d.how in WEIGHT ? d.how : 'none',
     };
     if (row.own) {
       // The agent spoke here: what it had heard in this place a little while before is answered.
@@ -121,7 +156,9 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Com
   /** Hands the rows over, when they have changed since the last question. */
   function table(): boolean {
     if (ray === null) return false;
-    if (bound === rows.length) return true;
+    // The weights fade with time, so the rows are handed over again after an hour even when none was added.
+    if (bound === rows.length && clock() - boundAt < 3_600_000) return true;
+    const now = clock();
     const flag = (of: (r: Row) => boolean): Column => ({ type: 'bool', data: Uint8Array.from(rows, (r) => (of(r) ? 1 : 0)) });
     try {
       ray.bind(TABLE, {
@@ -129,7 +166,9 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Com
         who: { type: 'sym', data: rows.map((r) => r.who) }, place: { type: 'sym', data: rows.map((r) => r.place) }, prev: { type: 'sym', data: rows.map((r) => r.prev) },
         own: flag((r) => r.own), addressed: flag((r) => r.addressed), answered: flag((r) => r.answered), follows: flag((r) => r.prev !== ''),
         n: { type: 'i64', data: BigInt64Array.from(rows, () => 1n) },
+        tw: { type: 'f64', data: Float64Array.from(rows, (r) => weigh(r, now)) },
       });
+      boundAt = now;
       const keys = [...circleOf.keys()];
       ray.bind(CIRCLES, { who: { type: 'sym', data: keys }, circle: { type: 'sym', data: keys.map((key) => circleOf.get(key)!) } });
       bound = rows.length;
@@ -151,22 +190,38 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Com
   /** Everyone heard, from the table or from the rows: the same people with the same counts either way. */
   function everyone(): Person[] {
     const names = nameOf();
-    const t = ask(`(select {from: ${TABLE} where: (== own false) by: who heard: (sum n) addressed: (sum (as 'I64 addressed)) answered: (sum (as 'I64 answered)) first: (min ts) last: (max ts)})`);
+    const t = ask(`(select {from: ${TABLE} where: (== own false) by: who heard: (sum n) addressed: (sum (as 'I64 addressed)) answered: (sum (as 'I64 answered)) first: (min ts) last: (max ts) tie: (sum tw)})`);
+    // How many different others speak after each: the people who answer them.
+    const after = ask(`(select {from: (select {from: ${TABLE} where: follows by: {prev: prev who: who} k: (sum n)}) by: prev reach: (count who)})`);
     const spread = ask(`(select {from: (select {from: ${TABLE} where: (== own false) by: {who: who place: place} k: (sum n)}) by: who places: (count place)})`);
     if (t !== null && spread !== null) {
       const places = new Map<string, number>();
       for (let i = 0; i < spread.rows; i++) places.set(str(spread.columns.who, i), num(spread.columns.places, i));
-      return Array.from({ length: t.rows }, (_, i): Person => {
+      const reach = new Map<string, number>();
+      if (after !== null) for (let i = 0; i < after.rows; i++) reach.set(str(after.columns.prev, i), num(after.columns.reach, i));
+      return ranks(Array.from({ length: t.rows }, (_, i): Person => {
         const who = str(t.columns.who, i);
-        return { who, name: names.get(who) ?? who, heard: num(t.columns.heard, i), addressed: num(t.columns.addressed, i), answered: num(t.columns.answered, i), places: places.get(who) ?? 0, first: iso((t.columns.first as BigInt64Array)[i]), last: iso((t.columns.last as BigInt64Array)[i]) };
-      });
+        return { who, name: names.get(who) ?? who, heard: num(t.columns.heard, i), addressed: num(t.columns.addressed, i), answered: num(t.columns.answered, i), places: places.get(who) ?? 0, first: iso((t.columns.first as BigInt64Array)[i]), last: iso((t.columns.last as BigInt64Array)[i]),
+          tie: tieOf(Number((t.columns.tie as Float64Array)[i] ?? 0)), importance: 0, reach: reach.get(who) ?? 0 };
+      }));
     }
+    const now = clock();
+    const followers = new Map<string, Set<string>>();
+    for (const r of rows) if (r.prev !== '') followers.set(r.prev, (followers.get(r.prev) ?? new Set()).add(r.who));
     const by = new Map<string, Row[]>();
     for (const r of heard()) by.set(r.who, [...(by.get(r.who) ?? []), r]);
-    return [...by].map(([who, of]): Person => ({
+    return ranks([...by].map(([who, of]): Person => ({
       who, name: names.get(who) ?? who, heard: of.length, addressed: of.filter((r) => r.addressed).length, answered: of.filter((r) => r.answered).length,
       places: new Set(of.map((r) => r.place)).size, first: new Date(Math.min(...of.map((r) => r.ts))).toISOString(), last: new Date(Math.max(...of.map((r) => r.ts))).toISOString(),
-    }));
+      tie: tieOf(of.reduce((sum, r) => sum + weigh(r, now), 0)), importance: 0, reach: followers.get(who)?.size ?? 0,
+    })));
+  }
+  /** Importance is said against whoever is highest in each of its three parts, so it is worked out over everyone at once. */
+  function ranks(people: Person[]): Person[] {
+    const most = (of: (p: Person) => number): number => Math.max(1, ...people.map(of));
+    const [reach, heardMost, places] = [most((p) => p.reach), most((p) => p.heard), most((p) => p.places)];
+    for (const p of people) p.importance = Math.round(100 * (0.5 * p.reach / reach + 0.3 * p.heard / heardMost + 0.2 * p.places / places));
+    return people;
   }
   const ranked = (people: Person[]): Person[] => people.sort((a, b) => b.heard - a.heard || a.who.localeCompare(b.who));
 
@@ -189,6 +244,13 @@ export function openCommunity(ray: Ray | null, events: JournalEvent[] = []): Com
       const of = heard().filter((r) => keys.includes(r.who));
       return of.length === 0 ? { heard: 0, first: null, last: null, answered: 0 }
         : { heard: of.length, answered: of.filter((r) => r.answered).length, first: new Date(Math.min(...of.map((r) => r.ts))).toISOString(), last: new Date(Math.max(...of.map((r) => r.ts))).toISOString() };
+    },
+    standing(keys) {
+      const of = everyone().filter((p) => keys.includes(p.who));
+      if (of.length === 0) return null;
+      // Several accounts of one contact: their ties add as raw weight, and the contact stands as high as its highest account.
+      const raw = of.reduce((sum, p) => sum - TIE_SCALE * Math.log(Math.max(1e-9, 1 - Math.min(99.99, p.tie) / 100)), 0);
+      return { tie: tieOf(raw), importance: Math.max(...of.map((p) => p.importance)) };
     },
     people: (limit = 30) => ranked(everyone()).slice(0, limit),
     places() {

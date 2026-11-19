@@ -46,7 +46,7 @@ interface Options {
   wide?: boolean;
   /** Of the event queue: a request waits at the server until something happens, instead of returning at once. */
   block?: boolean;
-  on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void };
+  on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void; joined?: (streams: { id: string; name: string }[]) => void };
   now?: () => number;
 }
 
@@ -115,6 +115,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
   const addressed = new Set<number>();
   // Edits and deletions the event queue told of, taken up at the next poll so that everything happens in one order.
   const changed = new Set<number>(), gone = new Set<number>();
+  // Streams the agent was added to, as the event queue told of them: taken up at the next poll, when the service can be asked who is there.
+  const added: { id: string; name: string }[] = [];
   // Polls that failed in a row, and since when: said to the agent once the connection is back.
   let failures = 0, downSince = 0;
   // When a message wakes the agent and what it is told is the same for every service (body/chat.ts).
@@ -284,6 +286,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
         cursor = m.id;
       }
       if (!stopped && changed.size + gone.size > 0) await changes(c);
+      while (!stopped && added.length > 0) await attention.joined(added.shift()!);
       if (!stopped) attention.paused();
       if (o.conversations && !stopped) {
         const presence = await (o.send ?? fetch)(new URL('/api/v1/users/me/presence', c.site), { method: 'POST',
@@ -311,6 +314,7 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     /** From the event queue: these messages were changed by their senders, or taken back. Taken up at the next poll. */
     edited: (ids: number[]) => { for (const id of ids) changed.add(id); },
     deleted: (ids: number[]) => { for (const id of ids) gone.add(id); },
+    joined: (streams: { id: string; name: string }[]) => { for (const s of streams) if (!added.some(a => a.id === s.id)) added.push(s); },
   };
 }
 export function zulip(o: Options): Sensor {
@@ -339,6 +343,7 @@ export function zulipLive(o: Options, startMs = 60_000): Sensor {
       message: soon,
       edited: (ids) => { messages.edited(ids); soon(); },
       deleted: (ids) => { messages.deleted(ids); soon(); },
+      joined: (streams) => { messages.joined(streams); soon(); },
     } }, emit);
     // Registration is delayed so that a smoke run does not depend on Zulip.
     const start = setTimeout(async () => {
@@ -430,7 +435,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
       restore(c);
       if (!cursor) {
         const registered = await request(c, '/api/v1/register', { method: 'POST', body: new URLSearchParams({
-          event_types: JSON.stringify(o.wide ? ['reaction', 'message', 'update_message', 'delete_message'] : ['reaction']), fetch_event_types: JSON.stringify(['reaction']),
+          event_types: JSON.stringify(o.wide ? ['reaction', 'message', 'update_message', 'delete_message', 'subscription'] : ['reaction']), fetch_event_types: JSON.stringify(['reaction']),
           client_capabilities: JSON.stringify({ notification_settings_null: true }),
         }) });
         if (typeof registered.queue_id !== 'string' || !Number.isSafeInteger(registered.last_event_id) || registered.last_event_id < -1) throw new Error('Invalid Zulip queue');
@@ -490,6 +495,11 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         const ids = (event: any): number[] => (Array.isArray(event.message_ids) ? event.message_ids : [event.message_id]).filter((id: unknown): id is number => Number.isSafeInteger(id));
         const edited = news.filter((event: any) => event.type === 'update_message' && event.rendering_only !== true).flatMap(ids);
         const deleted = news.filter((event: any) => event.type === 'delete_message').flatMap(ids);
+        // The agent was subscribed to a stream, by itself or by someone adding it.
+        const streams = news.filter((event: any) => event.type === 'subscription' && event.op === 'add' && Array.isArray(event.subscriptions))
+          .flatMap((event: any) => event.subscriptions).filter((s: any) => Number.isSafeInteger(s?.stream_id) && typeof s.name === 'string')
+          .map((s: any) => ({ id: String(s.stream_id), name: `#${String(s.name).slice(0, 100)}` }));
+        if (streams.length > 0) o.on?.joined?.(streams);
         if (edited.length > 0) o.on?.edited([...new Set<number>(edited)]);
         if (deleted.length > 0) o.on?.deleted([...new Set<number>(deleted)]);
       }

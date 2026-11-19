@@ -1,6 +1,6 @@
 import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
 import { CONTACT_KIND, contacts, ownerSays, participants, type Participant } from './participants';
-import { openCommunity, type Community } from './community';
+import { openCommunity, tieWord, type Community } from './community';
 import { memberOf, type Mode } from './chat';
 import { QUIET_REPLY } from '../brain/quiet';
 import type { Tool, ToolContext } from './tools';
@@ -343,8 +343,10 @@ export const contact: Tool = {
     }
     if (said.length === 0) {
       const c = contacts(events).get(key);
-      const seen = communityOf(ctx, events).indicators([key, ...(c?.same ?? [])]);
-      return `${p.name} (${[key, ...(c?.same ?? [])].join(' = ')}${p.bot === true ? ', a bot' : ''}): ${c?.circle ?? (c?.supposed !== undefined ? `${c.supposed}, as you suppose` : 'in no circle')}; heard ${seen.heard}, answered ${seen.answered}${p.met ? `; first met in ${p.met}` : ''}`
+      const community = communityOf(ctx, events);
+      const seen = community.indicators([key, ...(c?.same ?? [])]);
+      const stand = community.standing([key, ...(c?.same ?? [])]);
+      return `${p.name} (${[key, ...(c?.same ?? [])].join(' = ')}${p.bot === true ? ', a bot' : ''}): ${c?.circle ?? (c?.supposed !== undefined ? `${c.supposed}, as you suppose` : 'in no circle')}; heard ${seen.heard}, answered ${seen.answered}${stand === null ? '' : `; tie ${stand.tie} of 100 (${tieWord(stand.tie)}), importance ${stand.importance} of 100`}${p.met ? `; first met in ${p.met}` : ''}`
         + `${Object.entries(c?.traits ?? {}).map(([name, value]) => `\n  ${name}: ${value}`).join('')}`;
     }
     appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: CONTACT_KIND, data });
@@ -511,12 +513,13 @@ export const communityTool: Tool = {
   spec: {
     name: 'community',
     description: 'Ask about the people, bots and agents you share your chats with, as your journal shows them: counted from every message you heard, with no model asked. '
-      + 'people: everyone heard, the most heard first, with how often each addressed you and how often you answered. places: where talk happens, how many speak there, how much of it is yours. '
+      + 'people: everyone heard, the most heard first, with how often each addressed you and how often you answered. '
+      + 'ties: the same people by the strength of your tie with each, 0 to 100, which grows with what they say to you and what you answer and halves every three weeks without it, beside their importance among the others, 0 to 100, from how many answer them, how much they are heard and in how many places. places: where talk happens, how many speak there, how much of it is yours. '
       + 'pairs: who speaks after whom, the nearest thing there is to who talks with whom. quiet: who was heard before and not in the last days (default 7). circles: how each circle your owner named stands. '
       + 'For one person, use contact.',
     parameters: {
       type: 'object',
-      properties: { question: { type: 'string', enum: ['people', 'places', 'pairs', 'quiet', 'circles'] }, days: { type: 'integer', description: 'For quiet: not heard in this many days' } },
+      properties: { question: { type: 'string', enum: ['people', 'ties', 'places', 'pairs', 'quiet', 'circles'] }, days: { type: 'integer', description: 'For quiet: not heard in this many days' } },
       required: ['question'],
     },
   },
@@ -528,6 +531,8 @@ export const communityTool: Tool = {
     switch (a.question) {
       case 'people':
         return `${head}\n${c.people().map((p) => `${p.name} (${p.who}): heard ${p.heard}, addressed you ${p.addressed}, answered ${p.answered}, in ${p.places} ${p.places === 1 ? 'place' : 'places'}, ${day(p.first)} to ${day(p.last)}`).join('\n')}`;
+      case 'ties':
+        return `${head}\n${c.people(200).sort((x, y) => y.tie - x.tie || y.importance - x.importance).slice(0, 30).map((p) => `${p.name} (${p.who}): tie ${p.tie} of 100 (${tieWord(p.tie)}), importance ${p.importance} of 100 (${p.reach} ${p.reach === 1 ? 'person answers' : 'people answer'} them, heard ${p.heard}, in ${p.places} ${p.places === 1 ? 'place' : 'places'})`).join('\n')}`;
       case 'places':
         return `${head}\n${c.places().map((p) => `${p.where}: ${p.messages} messages, ${p.speakers} ${p.speakers === 1 ? 'speaker' : 'speakers'}, ${p.mine} yours, last ${day(p.last)}`).join('\n')}`;
       case 'pairs': {
@@ -542,7 +547,7 @@ export const communityTool: Tool = {
       case 'circles':
         return `${head}\n${c.circles().map((x) => `${x.circle === '' ? 'in no circle' : x.circle}: ${x.people} ${x.people === 1 ? 'one' : 'of them'}, heard ${x.heard}, answered ${x.answered}`).join('\n')}`;
       default:
-        throw new Error('question is one of people, places, pairs, quiet, circles');
+        throw new Error('question is one of people, ties, places, pairs, quiet, circles');
     }
   },
 };
