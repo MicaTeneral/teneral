@@ -38,8 +38,9 @@ import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { enter, meet, whoLines } from './participants';
 import type { Speaker } from './chat';
+import { typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
-import { zulipTypingScope, rayboardTypingScope } from './typing';
+import { rayboardTypingScope } from './rayboard-typing';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -330,7 +331,7 @@ const sensors: Sensor[] = [
 async function turn(): Promise<{ error: unknown } | null> {
   // Any wake except the owner's terminal/birth may settle quietly. Keep streamed markers out of the terminal.
   const quietTick = mayStayQuiet(readEvents(journal).findLast(e => e.type === 'stimulus')?.source);
-  const typing = zulipTypingScope(zulipCredentialPath);
+  const genericTyping = typingFor(workspace);
   // To stderr, so the terminal is not silent for the minutes a reply or a tool can take.
   console.error('[thinking]');
   current = new AbortController();
@@ -342,7 +343,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
-      onTyping: (stimulus) => { const z = typing(stimulus), r = rayboardTypingScope(stimulus); return active => { z(active); r(active); }; },
+      // Generic chat services own Zulip typing; the lineage's Rayboard adapter remains composed beside it.
+      onTyping: (stimulus) => { const chat = genericTyping(stimulus), rayboard = rayboardTypingScope(stimulus); return active => { chat(active); rayboard(active); }; },
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;

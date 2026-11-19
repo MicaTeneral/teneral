@@ -102,3 +102,84 @@ test('chat_history on Zulip reads a topic or a conversation back, each message n
   await chatHistory.run({ service: 'zulip', user: '7' }, z.ctx);
   expect(z.asked.at(-1)!.query).toMatchObject({ anchor: 'newest', narrow: '[{"operator":"dm","operand":[7]}]' });
 });
+
+// --- more hands: reactions, changing one's own message, places, and "is writing" ---
+
+import { chatEdit, chatPlaces, chatReact, typingFor } from '../../body/chat-tools';
+import { typingTarget } from '../../body/zulip-tools';
+
+test('chat_react adds and removes a reaction; chat_edit changes or takes back only a message of the agent\'s own', async () => {
+  const z = zulipAt((url, method) => {
+    if (url.pathname.endsWith('/users/me')) return { user_id: 99 };
+    if (method === 'GET') return { message: { sender_id: url.pathname.endsWith('/700') ? 99 : 7 } };
+    return {};
+  });
+  expect(await chatReact.run({ message: 'zulip:641', emoji: ':thumbs_up:' }, z.ctx)).toBe('Reacted to zulip:641 with thumbs_up.');
+  expect(z.asked.at(-1)).toMatchObject({ path: '/api/v1/messages/641/reactions', method: 'POST', body: { emoji_name: 'thumbs_up' } });
+  expect(await chatReact.run({ message: 'zulip:641', emoji: 'eyes', remove: true }, z.ctx)).toBe('Reaction eyes taken off zulip:641.');
+  expect(z.asked.at(-1)).toMatchObject({ method: 'DELETE', body: { emoji_name: 'eyes' } });
+  await expect(chatReact.run({ message: 'zulip:641', emoji: 'two words' }, z.ctx)).rejects.toThrow('name the emoji as the chat does');
+
+  expect(await chatEdit.run({ message: 'zulip:700', content: 'It is on 5001.' }, z.ctx)).toBe('Changed: zulip:700.');
+  expect(z.asked.at(-1)).toMatchObject({ path: '/api/v1/messages/700', method: 'PATCH', body: { content: 'It is on 5001.' } });
+  expect(await chatEdit.run({ message: 'zulip:700', delete: true }, z.ctx)).toBe('Taken back: zulip:700.');
+  expect(z.asked.at(-1)).toMatchObject({ path: '/api/v1/messages/700', method: 'DELETE' });
+  // Someone else's message is refused before anything is sent.
+  const before = z.asked.filter((a) => a.method !== 'GET').length;
+  await expect(chatEdit.run({ message: 'zulip:641', content: 'mine now' }, z.ctx)).rejects.toThrow('zulip:641 is not a message of yours');
+  await expect(chatEdit.run({ message: 'zulip:641', delete: true }, z.ctx)).rejects.toThrow('not a message of yours');
+  expect(z.asked.filter((a) => a.method !== 'GET').length).toBe(before);
+  await expect(chatEdit.run({ message: 'zulip:700' }, z.ctx)).rejects.toThrow('give content');
+});
+
+test('chat_places lists the channels the agent is in, and the topics of one', async () => {
+  const z = zulipAt((url) => (url.pathname.endsWith('/subscriptions') ? { subscriptions: [{ name: 'engineering', stream_id: 5, description: 'the work' }, { name: 'random', stream_id: 6, description: '' }] }
+    : { topics: [{ name: 'release notes', max_id: 700 }, { name: 'ports', max_id: 641 }] }));
+  expect(await chatPlaces.run({ service: 'zulip' }, z.ctx)).toBe('#engineering (stream_id 5): the work\n#random (stream_id 6)');
+  expect(await chatPlaces.run({ service: 'zulip', channel: '#engineering' }, z.ctx)).toBe('Topics of #engineering, newest first:\n- release notes (last message zulip:700)\n- ports (last message zulip:641)');
+  expect(z.asked.at(-1)!.path).toBe('/api/v1/users/me/5/topics');
+  await expect(chatPlaces.run({ service: 'zulip', channel: 'nowhere' }, z.ctx)).rejects.toThrow('you are in no channel called nowhere');
+});
+
+test('"is writing" is shown in the conversation of the message that woke the agent, as the sensor recorded it, and not for talk that only paused', () => {
+  const line = (m: object): string => JSON.stringify(m);
+  expect(typingTarget(`Zulip private 9\nAPI-verified owner message.\n${line({ sender_id: 7, type: 'private', topic: '' })}\nWho is speaking:\n- x`)).toEqual({ type: 'direct', to: '[7]' });
+  // The waking message, not the overheard context after it.
+  expect(typingTarget(`Zulip mention 9\nUntrusted.\n${line({ sender_id: 7, type: 'stream', stream_id: 5, topic: 'ports' })}\nEarlier subscribed-stream traffic\nstream 3\n${line({ sender_id: 8, type: 'stream', stream_id: 6, topic: 'other' })}`))
+    .toEqual({ type: 'stream', stream_id: '5', topic: 'ports' });
+  expect(typingTarget(`Zulip stream 9\nUntrusted.\nstream 9\n${line({ sender_id: 7, type: 'stream', stream_id: 5, topic: 'ports' })}`)).toBeUndefined();
+  expect(typingTarget('Zulip reaction add 3\nUntrusted.\n{}')).toBeUndefined();
+  expect(typingTarget(`Zulip private 9\nUntrusted.\n${line({ type: 'private', sender_id: 'mallory' })}`)).toBeUndefined();
+});
+
+test('the indicator starts with the turn, is refreshed, and its stop never overtakes a start still on its way', async () => {
+  const sent: string[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => { release = resolve; });
+  const z = zulipAt((url, _method, body) => {
+    if (url.pathname.endsWith('/typing')) sent.push(`${body.get('op')} ${body.get('to')}`);
+    return {};
+  });
+  const realFetch2 = globalThis.fetch;
+  let first = true;
+  globalThis.fetch = (async (...args: Parameters<typeof fetch>) => { if (first) { first = false; await slow; } return realFetch2(...args); }) as typeof fetch;
+  const stimulus = { source: 'owner:zulip', text: `Zulip private 9\nAPI-verified owner message.\n${JSON.stringify({ sender_id: 7, type: 'private' })}` };
+  const typing = typingFor(z.ctx.workspace)(stimulus);
+  typing(true);
+  typing(true);
+  typing(false);
+  // The start is still waiting on the network; the stop is queued behind it.
+  expect(sent).toEqual([]);
+  release();
+  await Bun.sleep(30);
+  expect(sent).toEqual(['start [7]', 'stop [7]']);
+  // Over is over: nothing after the stop, and nothing for a turn that no chat woke.
+  typing(true);
+  await Bun.sleep(10);
+  expect(sent).toHaveLength(2);
+  typingFor(z.ctx.workspace)({ source: 'clock', text: 'Clock tick' })(true);
+  typingFor(z.ctx.workspace)({ source: 'terminal', text: 'hello' })(true);
+  typingFor(z.ctx.workspace)(undefined)(true);
+  await Bun.sleep(10);
+  expect(sent).toHaveLength(2);
+});

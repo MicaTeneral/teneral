@@ -28,6 +28,52 @@ export interface ChatService {
   history?: (ctx: ToolContext, where: Partial<{ channel: string; thread: string; user: string; before: string }>) => Promise<string>;
   /** Whether `user` is the owner there, or has written to the agent before: only they are written to first. */
   knows?: (ctx: ToolContext, events: JournalEvent[], user: string) => boolean;
+  /** Adds the agent's reaction to a message, or takes it away. */
+  react?: (ctx: ToolContext, id: string, emoji: string, remove: boolean) => Promise<void>;
+  /** Changes, or takes back, a message of the agent's own; the service refuses anyone else's. */
+  edit?: (ctx: ToolContext, id: string, content: string) => Promise<void>;
+  remove?: (ctx: ToolContext, id: string) => Promise<void>;
+  /** The channels the agent is in; with `channel`, the threads or topics of that one, newest first. */
+  places?: (ctx: ToolContext, channel?: string) => Promise<string>;
+  /**
+   * How to show, where the stimulus came from, that the agent is writing: one call that says so and
+   * one that takes it back, and how often the first must be repeated to stay shown. Undefined when
+   * the stimulus is not one to show it for.
+   */
+  typing?: (stimulus: string, workspace: string) => { say: (writing: boolean) => Promise<void>; refreshMs: number } | undefined;
+}
+
+/**
+ * Shows, in the chat a turn was woken from, that the agent is writing, for as long as the turn
+ * runs. For body/main.ts to hand to the turn (brain/loop.ts). A turn of the agent's own, or one
+ * woken from the owner's terminal, shows nothing anywhere. The calls go out in the order they were
+ * asked for, so that a stop can never overtake a start still on its way; nothing here can hold up
+ * or fail a reply, and stopping is always attempted, also after an interruption.
+ */
+export function typingFor(workspace: string): (stimulus?: { source: string; text: string }) => (writing: boolean) => void {
+  return (stimulus) => {
+    const name = /^(?:agent|owner):([a-z][a-z0-9_-]*)$/.exec(stimulus?.source ?? '')?.[1];
+    let shown: ReturnType<NonNullable<ChatService['typing']>>;
+    try { shown = name === undefined ? undefined : services.get(name)?.typing?.(stimulus!.text, workspace); } catch { shown = undefined; }
+    if (shown === undefined) return () => {};
+    const { say, refreshMs } = shown;
+    let sent: Promise<void> = Promise.resolve();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let on = false, over = false;
+    const queue = (writing: boolean): void => { sent = sent.then(() => say(writing)).catch(() => { /* a status never costs a reply */ }); };
+    return (writing) => {
+      if (over || writing === on) return;
+      on = writing;
+      if (writing) {
+        queue(true);
+        timer = setInterval(() => queue(true), refreshMs);
+      } else {
+        over = true;
+        clearInterval(timer);
+        queue(false);
+      }
+    };
+  };
 }
 
 const services = new Map<string, ChatService>();
@@ -293,4 +339,68 @@ export const contact: Tool = {
   },
 };
 
-export const CHAT_TOOLS: Tool[] = [chatReply, chatSend, chatHistory, contact];
+const can = <K extends keyof ChatService>(service: ChatService, what: K, said: string): NonNullable<ChatService[K]> => {
+  const able = service[what];
+  if (able === undefined) throw new Error(`${service.name} has no way to ${said}`);
+  return able as NonNullable<ChatService[K]>;
+};
+
+export const chatReact: Tool = {
+  spec: {
+    name: 'chat_react',
+    description: 'Put a reaction on a chat message, or take yours away: the lightest way to say seen, agreed or thanks without adding a message to the conversation. '
+      + 'Prefer it to a message that would only acknowledge. Name the message as its stimulus showed it, and the emoji by its name in that chat, such as thumbs_up or eyes.',
+    parameters: {
+      type: 'object',
+      properties: { message: { type: 'string', description: 'service:id' }, emoji: { type: 'string', description: 'The emoji\'s name, without colons' }, remove: { type: 'boolean', description: 'Take your reaction away instead' } },
+      required: ['message', 'emoji'],
+    },
+  },
+  async run(args, ctx) {
+    const a = args as Record<string, unknown>;
+    const { service, id } = reference(a.message);
+    const emoji = text(args, 'emoji')?.replace(/^:|:$/g, '');
+    if (emoji === undefined || !/^[a-z0-9_+-]{1,60}$/i.test(emoji)) throw new Error('name the emoji as the chat does, such as thumbs_up');
+    await can(service, 'react', 'react to a message')(ctx, id, emoji, a.remove === true);
+    return a.remove === true ? `Reaction ${emoji} taken off ${service.name}:${id}.` : `Reacted to ${service.name}:${id} with ${emoji}.`;
+  },
+};
+
+export const chatEdit: Tool = {
+  spec: {
+    name: 'chat_edit',
+    description: 'Change a chat message of your own: to mend a mistake in it, or, with delete, to take it back. Only your own messages; others have read the first version, so for anything more than a slip, say the correction in a new message instead.',
+    parameters: {
+      type: 'object',
+      properties: { message: { type: 'string', description: 'Your message, as service:id' }, content: { type: 'string', description: 'How it should read now' }, delete: { type: 'boolean', description: 'Take the message back instead' } },
+      required: ['message'],
+    },
+  },
+  async run(args, ctx) {
+    const a = args as Record<string, unknown>;
+    const { service, id } = reference(a.message);
+    if (a.delete === true) {
+      await can(service, 'remove', 'take a message back')(ctx, id);
+      return `Taken back: ${service.name}:${id}.`;
+    }
+    const content = text(args, 'content');
+    if (content === undefined) throw new Error('give content, how the message should read now, or delete');
+    if (content.length > service.limit) throw new Error(`a message there holds at most ${service.limit} characters`);
+    await can(service, 'edit', 'change a message')(ctx, id, content);
+    return `Changed: ${service.name}:${id}.`;
+  },
+};
+
+export const chatPlaces: Tool = {
+  spec: {
+    name: 'chat_places',
+    description: 'Where you are in a chat: the channels you belong to, or, with channel, the topics or threads of that one, newest first. For finding where something belongs before you say it.',
+    parameters: { type: 'object', properties: { service: { type: 'string' }, channel: { type: 'string', description: 'A channel, by name or id: list its topics' } }, required: ['service'] },
+  },
+  async run(args, ctx) {
+    const service = named((args as Record<string, unknown>).service);
+    return can(service, 'places', 'list its places')(ctx, text(args, 'channel'));
+  },
+};
+
+export const CHAT_TOOLS: Tool[] = [chatReply, chatSend, chatHistory, chatReact, chatEdit, chatPlaces, contact];
