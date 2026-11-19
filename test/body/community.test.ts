@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { HEARD_KIND, openCommunity, type Community, type How } from '../../body/community';
+import { HALF_LIFE_DAYS, HEARD_KIND, openCommunity, tieOf, tieWord, type Community, type How } from '../../body/community';
 import { CONTACT_KIND } from '../../body/participants';
 import type { EventBody, JournalEvent } from '../../brain/journal';
 import { library, ray } from '../brain/rayforce';
@@ -28,11 +28,11 @@ const morning = (): JournalEvent[] => [
 ];
 
 /** The same questions put to both ways of answering, where the database is at hand; to the rows alone otherwise. */
-function both(events: JournalEvent[]): Community[] {
-  const rows = openCommunity(null, events);
+function both(events: JournalEvent[], clock: () => number = () => T0 + 300 * 60_000): Community[] {
+  const rows = openCommunity(null, events, clock);
   expect(rows.by).toBe('rows');
   if (library === null) return [rows];
-  const database = openCommunity(ray(), events);
+  const database = openCommunity(ray(), events, clock);
   expect(database.by).toBe('database');
   return [rows, database];
 }
@@ -76,5 +76,59 @@ test('what the journal gains is taken in, a message noted twice is one message, 
     // Nothing heard: every question has an empty answer, and none fails.
     const empty = openCommunity(c.by === 'database' ? ray() : null, []);
     expect([empty.people(), empty.places(), empty.pairs(), empty.circles(), empty.quiet(0)]).toEqual([[], [], [], [], []]);
+  }
+});
+
+
+test('a tie grows with what someone says to the agent and what it answers, fades without it, and is the same asked of the database or of the rows', () => {
+  const day = 24 * 60;
+  const events = [
+    // Ann writes to the agent alone and is answered, three times.
+    ...[0, 10, 20].flatMap((minute) => [heard(minute, '7', 'Ann', 'dm:7', 'dm'), heard(minute + 1, '99', 'Mica', 'dm:7', 'own')]),
+    // Bo only talks in a room the agent sits in, many times.
+    ...Array.from({ length: 12 }, (_, i) => heard(30 + i, '8', 'Bo', '#eng', 'none')),
+    // Cy mentioned it once, long ago.
+    heard(-90 * day, '9', 'Cy', '#eng', 'mention'),
+  ];
+  const at = T0 + 60 * 60_000;
+  const [first, ...rest] = both(events, () => at).map((c) => c.people());
+  for (const other of rest) expect(other).toEqual(first!);
+  const by = new Map(first!.map((p) => [p.name, p]));
+  // Three direct messages, each answered: 3 x (3 + 2) of weight, hardly faded.
+  expect(by.get('Ann')!.tie).toBe(tieOf(15 * 0.5 ** (1 / (HALF_LIFE_DAYS * 24))));
+  expect(tieWord(by.get('Ann')!.tie)).toBe('strong');
+  // A dozen messages near the agent are worth less than one conversation with it.
+  expect(by.get('Bo')!.tie).toBeLessThan(by.get('Ann')!.tie);
+  expect(tieWord(by.get('Bo')!.tie)).toBe('slight');
+  // Three months on, a single mention has all but faded.
+  expect(by.get('Cy')!.tie).toBeLessThanOrEqual(1);
+  // Later still, with nothing new, Ann's tie has faded as well: it is kept up or it goes.
+  const later = both(events, () => at + 63 * day * 60_000)[0]!.people().find((p) => p.name === 'Ann')!;
+  expect(later.tie).toBeLessThan(by.get('Ann')!.tie / 2);
+  expect([tieOf(0), tieWord(0), tieWord(30)]).toEqual([0, 'none', 'steady']);
+});
+
+test('importance is someone\'s standing among the others: who is answered by most, heard most and in most places, whatever they are to the agent', () => {
+  const events = [
+    // Ann speaks in two places and three different people speak after her; she never addresses the agent.
+    heard(0, '7', 'Ann', '#eng', 'none'), heard(1, '8', 'Bo', '#eng', 'none'),
+    heard(2, '7', 'Ann', '#eng', 'none'), heard(3, '9', 'Cy', '#eng', 'none'),
+    heard(4, '7', 'Ann', '#random', 'none'), heard(5, '10', 'Dee', '#random', 'none'),
+    // Eli writes to the agent directly and nobody else answers him.
+    heard(30, '11', 'Eli', 'dm:11', 'dm'), heard(31, '99', 'Mica', 'dm:11', 'own'),
+  ];
+  for (const c of both(events)) {
+    const by = new Map(c.people().map((p) => [p.name, p]));
+    expect(by.get('Ann')).toMatchObject({ reach: 3, heard: 3, places: 2, importance: 100 });
+    // Bo is answered by one, heard once, in one place: half of nothing, a third of thirty, half of twenty.
+    expect(by.get('Bo')).toMatchObject({ reach: 1, importance: Math.round(100 * (0.5 * 1 / 3 + 0.3 * 1 / 3 + 0.2 * 1 / 2)) });
+    // The strongest tie and the highest standing are different people.
+    expect(by.get('Eli')!.tie).toBeGreaterThan(by.get('Ann')!.tie);
+    expect(by.get('Eli')!.importance).toBeLessThan(by.get('Ann')!.importance);
+    expect(c.standing(['zulip:7'])).toEqual({ tie: by.get('Ann')!.tie, importance: 100 });
+    // Two accounts of one contact: the ties add, the standing is that of the higher.
+    expect(c.standing(['zulip:7', 'zulip:11'])!.tie).toBeGreaterThanOrEqual(by.get('Eli')!.tie);
+    expect(c.standing(['zulip:7', 'zulip:11'])!.importance).toBe(100);
+    expect(c.standing(['zulip:404'])).toBeNull();
   }
 });

@@ -526,7 +526,7 @@ test('the event queue is the bell: a message rings the poller, edits and deletio
     asked.push(new URL(String(url)));
     if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
     if (url.pathname === '/api/v1/register') {
-      expect(new URLSearchParams(String(init.body)).get('event_types')).toBe('["reaction","message","update_message","delete_message"]');
+      expect(new URLSearchParams(String(init.body)).get('event_types')).toBe('["reaction","message","update_message","delete_message","subscription"]');
       return new Response(JSON.stringify({ queue_id: 'q1', last_event_id: 0 }));
     }
     if (first) { first = false; return new Response(JSON.stringify({ events: [] })); }
@@ -645,4 +645,36 @@ test('each direct conversation is a place of its own, by who is in it besides th
   const p = zulipPoller({ baseline: false, credentials, events: () => [], send, heard: (m, how) => heard.push(`${m.sender?.name} in ${m.place}: ${how}`) }, () => {});
   await p.poll();
   expect(heard).toEqual(['Ann in dm:7: dm', 'Mica in dm:7: own', 'Bo in dm:7,8: dm']);
+});
+
+
+test('a subscription the event queue tells of reaches the poller, which wakes the agent for the new stream with its roster', async () => {
+  const told: unknown[] = [];
+  const batches: unknown[][] = [[{ id: 1, type: 'subscription', op: 'add', subscriptions: [{ stream_id: 5, name: 'project' }] }, { id: 2, type: 'subscription', op: 'peer_add', stream_ids: [5] }]];
+  let first = true;
+  const qsend = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/register') return new Response(JSON.stringify({ queue_id: 'q', last_event_id: 0 }));
+    if (first) { first = false; return new Response(JSON.stringify({ events: [] })); }
+    return new Response(JSON.stringify({ events: batches.shift() ?? [] }));
+  }) as unknown as typeof fetch;
+  const q = zulipReactionPoller({ credentials, events: () => [], send: qsend, wide: true, on: { message: () => {}, edited: () => {}, deleted: () => {}, joined: (streams) => told.push(...streams) } }, () => {});
+  await q.poll(); await q.poll();
+  expect(told).toEqual([{ id: '5', name: '#project' }]);
+
+  const got: Stimulus[] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (url.pathname === '/api/v1/users') return new Response(JSON.stringify({ members: [{ user_id: 7, full_name: 'Ann Lee', is_bot: false }] }));
+    if (url.pathname === '/api/v1/streams/5/members') return new Response(JSON.stringify({ subscribers: [7, 99] }));
+    return new Response(JSON.stringify({ messages: [] }));
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true, entered: (stream, members) => `This is the first you hear from ${stream.name}. There with you: ${members?.map((m) => m.name).join(', ')}.` }, s => got.push(s));
+  p.joined([{ id: '5', name: '#project' }]);
+  await p.poll();
+  expect(got).toHaveLength(1);
+  expect(got[0]!.text).toStartWith('Zulip joined 5\nYou were added to #project on Zulip.');
+  expect(got[0]!.text).toContain('There with you: Ann Lee.');
+  await p.poll();
+  expect(got).toHaveLength(1);
 });

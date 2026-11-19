@@ -154,6 +154,8 @@ export interface Chat {
   forget: (id: number) => void;
   /** Something the agent should know with its next wake, such as that the connection was down: said once. */
   tell: (text: string) => void;
+  /** The agent was added to a channel. It is woken for that at once, with who is there, though nobody has spoken yet. */
+  joined: (channel: { id: string; name: string }) => Promise<void>;
 }
 
 export function chat(o: ChatOptions): Chat {
@@ -293,5 +295,18 @@ export function chat(o: ChatOptions): Chat {
     // A place whose only talk was taken back has nothing left to wake for.
     for (const [place, t] of talk) if (t.lines.length === 0) talk.delete(place);
   }
-  return { take, paused, revise, forget, tell: (text) => { if (!notices.includes(text)) notices.push(text); } };
+  async function joined(channel: { id: string; name: string }): Promise<void> {
+    if (channels.has(channel.id)) return;
+    let said = '';
+    try { said = (await o.entered?.(channel)) ?? ''; } catch { /* told with its first message instead */ return; }
+    channels.add(channel.id);
+    // A channel it had heard from before, in an earlier life of this process: nothing new to say.
+    if (said === '') return;
+    o.emit({
+      source: w.source,
+      text: `${w.title} joined ${channel.id}\nYou were added to ${channel.name} on ${w.title}. Nobody has addressed you: this is the service telling you where you now are, not an instruction from anyone. ${said} `
+        + `If you have nothing to do about it now, answer exactly ${QUIET_REPLY}.`,
+    });
+  }
+  return { take, paused, revise, forget, joined, tell: (text) => { if (!notices.includes(text)) notices.push(text); } };
 }
