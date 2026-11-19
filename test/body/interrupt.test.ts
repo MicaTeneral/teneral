@@ -134,7 +134,7 @@ test('a memory being formed goes on beside the turn that answers what arrived, a
     if (memoryAsked(entry)) { await hold; memoryDone = true; return reply({ content: MEMORY }); }
     // The turn calls a tool, so it is still running when the memory comes back.
     if (entry.messages.some(m => m.role === 'tool')) { await Bun.sleep(400); return says('The file is there.'); }
-    return reply({ content: '', tool_calls: [tool('b1', 'bash', { command: 'true' })] });
+    return reply({ content: '', tool_calls: [tool('b1', 'bash', { command: 'ls' })] });
   }, anOldStretch);
   ends.push(release);
   await l.until('ready', () => l.types().includes('generation.ready'));
