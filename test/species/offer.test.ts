@@ -7,7 +7,7 @@ import { git, sh, type GateResult } from '../../immune/gates';
 import { TOKEN_FILE, api, githubRemote, saveToken, GitHubError } from '../../species/github';
 import { readEvents } from '../../brain/journal';
 import {
-  SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, outletOf, ownSecrets, ownerCommand, pending, publish, readReport, readWitness,
+  SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, outletOf, ownSecrets, ownerCommand, pending, publish, publishing, readReport, readWitness,
   scan, settings, sign, slugOf, speciesHead, speciesRef, witness,
 } from '../../species/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../species/offerkey';
@@ -441,6 +441,51 @@ t('an approval is for one commit: the branch mended after it waits again', async
   expect((await w.hub.state()).pushes).toEqual([]);
 });
 
+t('/publish says how a change goes out, where each offer stands and what to type for it; with a commit it lets that offer go, or has one sent that never was', async () => {
+  const w = await world('ask');
+  const i = install(w.root);
+  const empty = ownerCommand(w.root, '/publish')!.join('\n');
+  expect(empty).toContain('Nothing your agent makes goes out by itself');
+  expect(empty).toContain('Nothing waits for you, and nothing you approved is unsent.');
+  expect(empty).toContain('tell the agent what, in a line');
+
+  const first = offer(w.root, 'greeting', GREETING);
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  // Changed and checked again: only the newest commit of a branch can go out, so only that one is shown.
+  const commit = offer(w.root, 'greeting', { ...GREETING, 'body/more.ts': 'export const more = 1;\n' });
+  await checkBranch(i, 'offer/greeting', { gates: passes });
+  const waits = ownerCommand(w.root, '/publish')!;
+  expect(waits.join('\n')).toContain('One offer waits for you. Typing its line lets it go out');
+  expect(waits.filter((line) => line.startsWith('  /publish '))).toEqual([`  /publish ${commit.slice(0, 12)}   offer/greeting: body: a greeting`]);
+  expect(waits.join('\n')).not.toContain(first.slice(0, 12));
+  expect(publishing(i)).toMatchObject({ waits: [{ commit }], approved: [], sent: [], failed: 0 });
+
+  expect(ownerCommand(w.root, '/publish nonsense')!.join(' ')).toContain('first seven or more characters of an offer');
+  expect(ownerCommand(w.root, '/publish 0000000')!.join(' ')).toContain('No offer that starts with 0000000');
+  expect(ownerCommand(w.root, `/publish ${commit.slice(0, 7)} more`)).toEqual(['/publish, or /publish <commit>.']);
+  expect(approved(i.owner, commit)).toBe(false);
+
+  // The owner's yes: recorded, and the agent is told to publish, in the owner's own channel.
+  expect(ownerCommand(w.root, `/publish ${commit.slice(0, 7)}`)!.join(' ')).toContain('may be published. The agent was told to run the publish command');
+  expect(approved(i.owner, commit)).toBe(true);
+  const told = (): string[] => readdirSync(i.owner).filter((name) => !name.startsWith('.') && statSync(join(i.owner, name)).isFile()).map((name) => readFileSync(join(i.owner, name), 'utf8'));
+  expect(told().some((line) => line.includes(`I approved offer commit ${commit.slice(0, 12)}. Run bun species/offer.ts publish offer/greeting`))).toBe(true);
+
+  // Approved and never sent: it is shown as that, and its line has the agent told again.
+  const unsent = ownerCommand(w.root, '/publish')!.join('\n');
+  expect(unsent).toContain('One offer has your yes and was never sent. Typing its line tells the agent again to send it.');
+  expect(unsent).toContain(`  /publish ${commit.slice(0, 12)}   offer/greeting`);
+  const before = told().length;
+  expect(ownerCommand(w.root, `/publish ${commit.slice(0, 7)}`)!.join(' ')).toContain('already has your yes. The agent was told again to send it');
+  expect(told().length).toBe(before + 1);
+
+  // Sent: it is named with its pull request, and nothing waits any more.
+  expect((await publish(i, 'offer/greeting')).status).toBe(0);
+  const sent = ownerCommand(w.root, '/publish')!.join('\n');
+  expect(sent).toContain('Nothing waits for you, and nothing you approved is unsent.');
+  expect(sent).toMatch(/Sent:\n {2}body: a greeting {2}https?:\/\//);
+});
+
 t('the owner sees what waits and approves it by the start of its commit, in the talk client or at the command line; neither is open to a pipe', async () => {
   const w = await world('ask');
   const i = install(w.root);
@@ -451,7 +496,7 @@ t('the owner sees what waits and approves it by the start of its commit, in the 
   expect(ownerCommand(w.root, 'hello')).toBeNull();
   expect(ownerCommand(w.root, '/approved')).toBeNull();
   const listed = ownerCommand(w.root, '/offers')!.join('\n');
-  for (const part of [commit, 'body: a greeting', 'body/greeting.ts', 'Not verified:', '/approve <commit>']) expect(listed).toContain(part);
+  for (const part of [commit, 'body: a greeting', 'body/greeting.ts', 'Not verified:', '/publish <commit>']) expect(listed).toContain(part);
   // /approve is the owner's one word, for a mutation outside the body as well: with nothing of that kind asked for, it says so and points at what does wait.
   expect(ownerCommand(w.root, '/approve')!.join(' ')).toContain('nothing is waiting for your approval');
   expect(ownerCommand(w.root, '/approve')!.join(' ')).toContain('One commit waits to go out to the species: /offers shows what');
