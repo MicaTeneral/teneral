@@ -865,3 +865,43 @@ test('a hung poll pass releases the busy latch so the sensor retries instead of 
   await Promise.race([hung, new Promise(r => setTimeout(r, 50))]); // let the hung pass settle
   p.stop();
 });
+
+async function stalledOwnerPass(recoveryHasMessage: boolean) {
+  const got: Stimulus[] = [];
+  const anchors: string[] = [];
+  let release!: () => void;
+  const firstRendered = new Promise<void>(resolve => { release = resolve; });
+  let page = 0, rendered = 0;
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/messages/7') {
+      if (++rendered === 1) await firstRendered;
+      return new Response(JSON.stringify({ message: { id: 7, content: 'owner DM' } }));
+    }
+    if (url.pathname === '/api/v1/messages') {
+      anchors.push(url.searchParams.get('anchor')!);
+      page++;
+      const owner = { id: 7, sender_id: 100, sender_full_name: 'Owner', type: 'private', content: 'owner DM' };
+      return new Response(JSON.stringify({ messages: page === 1 || (page === 2 && recoveryHasMessage) ? [owner] : [] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, ownerId: 100, keepImage: () => '', pollDeadlineMs: 5 }, s => got.push(s));
+  const stalled = p.poll();
+  for (let n = 0; n < 200 && rendered === 0; n++) await Bun.sleep(1);
+  expect(rendered).toBe(1); // the first pass is suspended before emit and cursor advancement
+  await Bun.sleep(20); // the watchdog releases busy and invalidates that pass
+  await p.poll();
+  release(); // the stale pass resumes only after recovery has finished
+  await stalled;
+  await Bun.sleep(10);
+  const delivered = got.map(s => s.text.split('\n', 1)[0]);
+  p.stop();
+  return { anchors, delivered };
+}
+
+test('a watchdog-expired pass cannot deliver an owner DM a second time after its recovery', async () => {
+  const r = await stalledOwnerPass(true);
+  expect(r.anchors).toEqual(['newest', 'newest']);
+  expect(r.delivered).toEqual(['Zulip private 7']);
+});
