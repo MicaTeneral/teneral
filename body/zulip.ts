@@ -338,7 +338,11 @@ export function zulipLive(o: Options, startMs = 60_000): Sensor {
 
 export const ZULIP_REACTION_SOURCE = 'agent:zulip-reaction';
 export const ZULIP_QUEUE_CURSOR_KIND = 'zulip.reactions.cursor.v1';
-export interface ZulipQueueCursor { queueId: string; eventId: number; site: string; email: string }
+export interface ZulipQueueCursor {
+  queueId: string; eventId: number; site: string; email: string;
+  /** The queue was registered for messages, edits and deletions as well as reactions. A queue is what it was registered as, for its whole life. */
+  wide?: true;
+}
 const QUEUE_PREFIX = 'Zulip reaction ';
 const MAX_REACTIONS = 100;
 
@@ -347,7 +351,7 @@ function queueCursor(value: unknown, c: Credentials): ZulipQueueCursor | undefin
   const d = value as Record<string, unknown>;
   if (d.site !== c.site || d.email !== c.email || typeof d.queueId !== 'string' || d.queueId.length > 500 ||
       !Number.isSafeInteger(d.eventId) || (d.eventId as number) < -1) return;
-  return { queueId: d.queueId, eventId: d.eventId as number, site: c.site, email: c.email };
+  return { queueId: d.queueId, eventId: d.eventId as number, site: c.site, email: c.email, ...(d.wide === true ? { wide: true as const } : {}) };
 }
 
 /**
@@ -368,7 +372,8 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
     for (const event of o.events()) {
       if (event.type === 'note' && event.kind === ZULIP_QUEUE_CURSOR_KIND) {
         const restored = queueCursor(event.data, c);
-        if (restored) cursor = restored;
+        // A queue an earlier generation registered for reactions alone would never ring for a message: it is not taken up as a wide one.
+        if (restored) cursor = (restored.wide === true) === (o.wide === true) ? restored : undefined;
       } else if (event.type === 'stimulus' && event.source === ZULIP_REACTION_SOURCE && event.text.startsWith(QUEUE_PREFIX)) {
         const lines = event.text.split('\n');
         try {
@@ -416,7 +421,7 @@ export function zulipReactionPoller(o: Options, emit: (s: Stimulus) => void) {
         const baseline = await request(c, `/api/v1/events?${new URLSearchParams({ queue_id: registered.queue_id, last_event_id: String(registered.last_event_id), dont_block: 'true' })}`);
         const historical = Array.isArray(baseline.events) ? baseline.events : [];
         const eventId = historical.reduce((last: number, event: any) => Number.isSafeInteger(event?.id) && event.id > last ? event.id : last, registered.last_event_id);
-        cursor = { queueId: registered.queue_id, eventId, site: c.site, email: c.email };
+        cursor = { queueId: registered.queue_id, eventId, site: c.site, email: c.email, ...(o.wide ? { wide: true as const } : {}) };
         o.checkpoint?.(cursor);
         failed = false;
         // A new queue knows nothing of what was said while there was none: have the messages fetched from their own cursor.

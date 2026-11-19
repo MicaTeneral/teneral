@@ -153,7 +153,7 @@ test('identity failures preserve cursor; cache is reused and invalidated on cred
  key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
 });
 
-import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND } from '../../body/zulip';
+import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
 
 test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
   const notices: Stimulus[] = [];
@@ -607,4 +607,26 @@ test('the first message from a stream brings its roster with it, once, and a ros
   expect(got[0]!.text).toContain('This is the first you hear from #engineering.');
   expect(got[1]!.text).not.toContain('first you hear');
   expect(got[2]!.text).toContain('@**Mica** hello');
+});
+
+test('a queue registered for reactions alone is not taken up as the bell: after such a restart a new one is registered', async () => {
+  const narrow = { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: { queueId: 'old', eventId: 4, site: 'https://example.test', email: 'mica@test' } } as JournalEvent;
+  const registered: string[] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/register') { registered.push('new'); return new Response(JSON.stringify({ queue_id: 'new', last_event_id: -1 })); }
+    return new Response(JSON.stringify({ events: [] }));
+  }) as unknown as typeof fetch;
+  const kept: ZulipQueueCursor[] = [];
+  const wide = zulipReactionPoller({ credentials, events: () => [narrow], send, wide: true, checkpoint: c => { kept.push(c); } }, () => {});
+  await wide.poll();
+  expect(registered).toEqual(['new']);
+  expect(kept[0]).toMatchObject({ queueId: 'new', wide: true });
+  // And the other way round: one that carries only reactions goes on with its own queue, and a wide one with a wide one.
+  const again = zulipReactionPoller({ credentials, events: () => [narrow], send }, () => {});
+  await again.poll();
+  expect(registered).toEqual(['new']);
+  const resumed = zulipReactionPoller({ credentials, events: () => [{ ...narrow, data: kept[0] } as JournalEvent], send, wide: true }, () => {});
+  await resumed.poll();
+  expect(registered).toEqual(['new']);
 });
