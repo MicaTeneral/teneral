@@ -7,8 +7,8 @@ import { NO_OP_REPLY, QUIET_REPLY } from '../../brain/quiet';
 import { ProviderError, type ChatMessage, type Provider, type Reply } from '../../brain/provider';
 import type { Tool, ToolContext } from '../../body/tools';
 import { needsTurn } from '../../brain/memory';
-import { QUIET_REPLY } from '../../brain/quiet';
 import { decideBudget } from '../../body/adaptive-budget';
+
 import { appendEvent, readEvents } from '../../brain/journal';
 import { buildMessages } from '../../brain/memory';
 
