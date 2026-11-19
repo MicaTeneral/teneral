@@ -5,7 +5,7 @@ import { markdown } from './markdown';
 import { inQueue, type Entry } from './model';
 import { mark, windowStart } from './slash';
 import { clip, detab, fit, lineWidth, width, wrap, type Line, type Span } from './text';
-import type { Glyphs, Style } from './theme';
+import type { ColourName, Glyphs, Style } from './theme';
 
 // What the talk client shows, as rows: each transcript entry at a given width, the welcome panel
 // and the status lines under it, and the live region (what is still under way, the input box and
@@ -336,7 +336,9 @@ export interface Live {
    * what can be done there. `chosen` is the one the keys are on, or null while the keys are in the
    * input. `hot` marks one that holds something waiting for the owner.
    */
-  bar?: { actions: { label: string; note: string; hot: boolean }[]; chosen: number | null } | null;
+  bar?: { actions: BarAction[]; chosen: number | null } | null;
+  /** The menu an action opened, while one is open: it stands under the box in place of the footer, over the row of actions. */
+  menu?: Menu | null;
 }
 
 export interface Offered {
@@ -386,24 +388,86 @@ function inputRow(text: string, col: number | null, word: { from: number; to: nu
   return row;
 }
 
-/** The commands offered, one to a row: the chosen one marked, each with what may follow it and what it does. At most `rows` of them, the ones around the chosen. */
-/**
- * The actions, in one row: each a link, the one the keys are on with its colours swapped, one
- * that holds something for the owner in the accent colour with what it holds. At the right, how
- * to get onto the row, or what the keys do while on it.
- */
-function barRow(bar: NonNullable<Live['bar']>, max: number, g: Glyphs): Line {
-  const left: Line = [{ text: ` ${g.prompt}${g.prompt} `, style: { fg: 'accent', bold: true } }];
-  bar.actions.forEach((a, i) => {
-    if (i > 0) left.push({ text: ` ${g.sep} `, style: FAINT });
-    const on = bar.chosen === i;
-    left.push({ text: on ? ` ${a.label} ` : a.label, style: on ? { fg: 'ink', bg: 'accent', bold: true } : a.hot ? { fg: 'accent', bold: true, underline: true } : { underline: true } });
-    if (a.note !== '') left.push({ text: ` ${a.note}`, style: a.hot ? { fg: 'accent' } : DIM });
-  });
-  const keys = bar.chosen === null ? `Down selects` : `Left/Right move ${g.sep} Enter opens ${g.sep} Esc back`;
-  return ends(left, [{ text: keys, style: FAINT }], max);
+/** One of the actions as the row draws it: its mark and colour are its own, so that each is found by eye before it is read. */
+export interface BarAction { label: string; note: string; hot: boolean; icon: keyof Glyphs['icons']; tone: ColourName }
+
+/** Keys and what they do, at the right of a row: each key on a cap of its own, what it does said faintly after it. */
+function caps(pairs: [key: string, does: string][], max: number): Line {
+  const draw = (some: [string, string][]): Line => some.flatMap(([key, does], i): Line => [
+    ...(i > 0 ? [{ text: '  ' }] : []),
+    { text: ` ${key} `, style: { fg: 'paper', bg: 'slab', bold: true } },
+    { text: ` ${does}`, style: FAINT },
+  ]);
+  let shown = pairs;
+  while (shown.length > 1 && lineWidth(draw(shown)) > max) shown = shown.slice(0, -1);
+  return draw(shown);
 }
 
+/**
+ * The actions, in one row. Each has its mark in its own colour. The one the keys are on is a
+ * chip on that colour; one that holds something for the owner carries what it holds as a small
+ * badge. At the right, on caps, how to get onto the row, or what the keys do while on it.
+ */
+function barRow(bar: NonNullable<Live['bar']>, max: number, g: Glyphs, open: boolean): Line {
+  const left: Line = [{ text: ' ' }];
+  bar.actions.forEach((a, i) => {
+    if (i > 0) left.push({ text: ' ' });
+    const on = bar.chosen === i;
+    const ground: Style = { fg: 'ink', bg: a.tone, bold: true };
+    // The same cells whether the keys are on it or not, so that nothing beside it moves when they come and go.
+    const cap = (glyph: string): Span[] => (glyph === '' ? [] : [on ? { text: glyph, style: { fg: a.tone } } : { text: ' '.repeat(width(glyph)) }]);
+    left.push(...cap(g.segBack));
+    if (on) left.push({ text: ` ${g.icons[a.icon]} ${a.label} `, style: ground });
+    else left.push({ text: ` ${g.icons[a.icon]} `, style: { fg: a.tone, bold: true } }, { text: `${a.label} `, style: a.hot ? { bold: true } : bar.chosen === null ? undefined : DIM });
+    // What waits for the owner: said on the action's own colour, so that it is seen from across the room.
+    if (a.note !== '') left.push({ text: `${on ? g.sep : ' '} ${a.note} `, style: on || a.hot ? ground : DIM });
+    left.push(...cap(g.seg));
+  });
+  const keys: [string, string][] = open ? [[g.keys.choose, 'choose'], [g.keys.enter, 'do it'], [g.keys.esc, 'back']]
+    : bar.chosen === null ? [[g.keys.down, 'actions']]
+      : [[g.keys.sides, 'move'], [g.keys.enter, 'open'], [g.keys.esc, 'back']];
+  return ends(left, [...caps(keys, Math.max(0, max - lineWidth(left) - 3)), { text: ' ' }], max);
+}
+
+/** What an action opened: its items, and which of them the keys are on. An item with `says` only says something. */
+export interface Menu { title: string; icon: keyof Glyphs['icons']; tone: ColourName; items: { name: string; about: string; says?: boolean }[]; chosen: number }
+
+/**
+ * An open menu: a frame in the action's colour with its name in the upper edge, one item to a
+ * row, the chosen one on a ground of its own from edge to edge. At most `rows` items, the ones
+ * around the chosen; the upper edge then says which of how many. Without `framed`, the items alone.
+ */
+function menuRows(menu: Menu, max: number, rows: number, g: Glyphs, framed: boolean): Line[] {
+  const edge: Style = { fg: menu.tone };
+  const inner = Math.max(8, max - 4);
+  const wide = Math.min(Math.max(...menu.items.map((item) => width(item.name))), Math.max(8, Math.floor(inner / 2)));
+  const start = windowStart(menu.items.length, menu.chosen, rows);
+  const body = menu.items.slice(start, start + rows).map((item, i): Line => {
+    const on = start + i === menu.chosen;
+    const ground = on ? { bg: 'slab' as ColourName } : {};
+    const row = fit(clip([
+      { text: on ? `${g.pointer} ` : '  ', style: { fg: menu.tone, bold: true, ...ground } },
+      { text: item.name, style: item.says ? { fg: on ? 'paper' : 'dim', italic: true, ...ground } : on ? { fg: 'paper', bold: true, ...ground } : undefined },
+      { text: ' '.repeat(Math.max(0, wide - width(item.name)) + 3), style: ground },
+      { text: item.about, style: { fg: on ? 'paper' : 'dim', ...ground } },
+    ], inner, { text: g.ellipsis, style: { fg: 'dim', ...ground } }), inner);
+    // The ground runs to the frame: the padding `fit` added is given it too.
+    return on ? row.map((span) => (span.style?.bg === undefined ? { ...span, style: { ...span.style, ...ground } } : span)) : row;
+  });
+  if (!framed) return body.map((row): Line => [{ text: '  ' }, ...row]);
+  const [tl, tr, bl, br] = g.corners;
+  const title = ` ${g.icons[menu.icon]} ${menu.title} `;
+  const count = menu.items.length > rows ? ` ${menu.chosen + 1} of ${menu.items.length} ` : '';
+  const rule = Math.max(0, inner + 2 - 1 - width(title) - width(count) - (count === '' ? 0 : 1));
+  const side = (on: boolean): Span => ({ text: ' ', style: on ? { bg: 'slab' } : undefined });
+  return [
+    [{ text: `${tl}${g.rule}`, style: edge }, { text: title, style: { fg: menu.tone, bold: true } }, { text: g.rule.repeat(rule), style: edge }, { text: count, style: DIM }, { text: `${count === '' ? '' : g.rule}${tr}`, style: edge }],
+    ...body.map((row, i): Line => [{ text: g.bar, style: edge }, side(start + i === menu.chosen), ...row, side(start + i === menu.chosen), { text: g.bar, style: edge }]),
+    [{ text: `${bl}${g.rule.repeat(inner + 2)}${br}`, style: edge }],
+  ];
+}
+
+/** The commands offered, one to a row: the chosen one marked, each with what may follow it and what it does. At most `rows` of them, the ones around the chosen. */
 function offeredRows(list: Offered, max: number, rows: number, g: Glyphs): Line[] {
   const wide = Math.max(...list.matches.map((c) => width(usage(c))));
   const start = windowStart(list.matches.length, list.chosen, rows);
@@ -515,9 +579,13 @@ export function liveRows(v: Live): Line[] {
     while (parts.length > 1 && width(parts.join(sep)) + 1 > max) parts = parts.slice(0, -1);
     return ends([{ text: ` ${parts.join(sep)}`, style: FAINT }], list!.matches.length > listed ? [{ text: `${list!.chosen + 1} of ${list!.matches.length}`, style: DIM }] : [], max);
   };
-  const footer: Line[] = list !== null ? [] : [footerRow(v, max)];
+  // An open menu belongs to the row of actions, so it needs one; while commands are offered there is neither.
+  const menu = list === null && v.bar ? v.menu ?? null : null;
+  let shown = menu === null ? 0 : Math.min(menu.items.length, LIST_ROWS);
+  let menuFramed = true;
+  const footer: Line[] = list !== null || menu !== null ? [] : [footerRow(v, max)];
   // The actions stand under the footer, and give way before it does: the status line matters more.
-  let bar: Line[] = list === null && v.bar ? [barRow(v.bar, max, g)] : [];
+  let bar: Line[] = list === null && v.bar ? [barRow(v.bar, max, g, menu !== null)] : [];
   // What a small screen gives up, in this order, until the region fits.
   let pending = v.pending;
   let blank = true;
@@ -535,14 +603,18 @@ export function liveRows(v: Live): Line[] {
     ...(activity !== null ? [clip(activity, max, { text: g.ellipsis, style: DIM })] : []),
     ...workers,
     ...(framed ? (chipped ? box : bare) : typed.slice(text.row, text.row + 1)),
-    ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : first ? footer : []),
+    ...(list !== null ? [...offeredRows(list, max, listed, g), ...(first ? [keys()] : [])] : menu !== null ? menuRows(menu, max, shown, g, menuFramed) : first ? footer : []),
     ...bar,
   ];
   const fits = (): boolean => build().length <= room;
   while (!fits() && pending.length > 0) pending = pending.slice(1);
   while (!fits() && workers.length > 0) workers = workers.slice(1);
-  if (!fits()) bar = [];
+  // The row under an open menu says what the keys do there, so it stays; the menu gives up rows, then its frame.
+  if (!fits() && menu === null) bar = [];
   if (!fits()) blank = false;
+  while (!fits() && shown > 3) shown -= 1;
+  if (!fits()) menuFramed = false;
+  while (!fits() && shown > 1) shown -= 1;
   while (!fits() && listed > 3) listed -= 1;
   if (!fits()) first = false;
   if (!fits()) activity = null;

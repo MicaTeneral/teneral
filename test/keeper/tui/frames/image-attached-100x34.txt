@@ -30,4 +30,4 @@
 │ › what is wrong in this screenshot?                                                             │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  resting                   attached: image 1 · Backspace at the start removes the last
- ›› mutate · publish · memory · more                                                   Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more                                              ↓  actions

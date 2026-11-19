@@ -37,4 +37,4 @@
 │ › half a line                                           │
 ╰─────────────────────────────────────────────────────────╯
  gpt-6.1-sol  memory well · exam pending  …/work/teneral
- ›› mutate · publish · memory · more           Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more      ↓  actions

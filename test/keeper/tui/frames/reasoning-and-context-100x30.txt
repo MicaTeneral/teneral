@@ -44,4 +44,4 @@
 │ ›                                                                                               │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  effort high  resting  memory well · exam pending            context 9% (90.3k/1.05M)
- ›› mutate · publish · memory · more                                                   Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more                                              ↓  actions

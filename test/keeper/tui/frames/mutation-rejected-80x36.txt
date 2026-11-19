@@ -54,4 +54,4 @@
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  memory well · exam pending  …/work/teneral  gen 1 a1b2c3d
- ›› mutate · publish · memory · more                               Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more                          ↓  actions

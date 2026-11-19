@@ -99,7 +99,7 @@ test('start: the welcome panel with the mark and the facts, where things stand, 
     `╰${'─'.repeat(97)}╯`,
     expect.stringMatching(/^ gpt-6\.1-sol  waiting for you  memory well · exam pending  …\/work\/teneral  gen 2 e5f6a7b( {3,}\S.*)?$/),
     // Under the footer, the actions: links to move onto and open.
-    expect.stringMatching(/^ ›› mutate · publish · memory · more +Down selects$/),
+    expect.stringMatching(/^  ↻ mutate +↑ publish +◉ memory +≡ more +↓  actions$/),
   ]);
   // The terminal's own cursor is hidden at the top of the live region; the one the owner sees is drawn in the box.
   expect(s.term.vt.cursorVisible).toBe(false);
@@ -1589,10 +1589,10 @@ test('under the footer stands a row of actions: Down goes onto it, Left and Righ
   settled(s);
   const last = (n = 1): string => s.live().split('\n').slice(-n).join('\n');
   // The footer is the row above; the actions are the last row, with how to get onto them.
-  expect(last()).toMatch(/mutate .* publish .* memory .* more +Down selects$/);
+  expect(last()).toMatch(/mutate .* publish .* memory .* more +↓  actions$/);
   expect(last(2).split('\n')[0]).toContain('gpt-6.1-sol');
   s.type('\x1b[B');
-  expect(last()).toContain('Left/Right move');
+  expect(last()).toContain('←→  move');
   s.type('\x1b[C');
   s.type('\r');
   // The publish menu: nothing waits in this install, and the two ways to read about it are there.
@@ -1600,22 +1600,25 @@ test('under the footer stands a row of actions: Down goes onto it, Left and Righ
   expect(menu).toContain('nothing waits');
   expect(menu).toContain('what each holds');
   expect(menu).toContain('how it works');
-  expect(menu.split('\n').at(-1)).toMatch(/publish .* Enter does it .* Esc back/);
+  expect(menu.split('\n').at(-1)).toMatch(/publish .* ↵  do it +esc  back/);
+  // The menu is a frame with the action's name in its upper edge, and the keys begin on what can be done.
+  expect(menu).toMatch(/╭─ ↑ publish ─+╮/);
+  expect(menu).toMatch(/│ ▸ what each holds /);
   // Down to "how it works" and Enter: the same page /publish prints.
-  s.type('\x1b[B'); s.type('\x1b[B');
+  s.type('\x1b[B');
   s.type('\r');
   expect(s.all()).toContain('Nothing your agent makes goes out by itself');
   // The keys are back in the input, and the row is as it was.
-  expect(last()).toContain('Down selects');
+  expect(last()).toContain('↓  actions');
   s.type('hello');
   expect(s.live()).toContain('hello');
 
   // Esc on the row goes back to the input and does not reach the agent; a typed letter does too, and is typed.
   s.type('\x7f'.repeat(5));
   s.type('\x1b[B');
-  expect(last()).toContain('Left/Right move');
+  expect(last()).toContain('←→  move');
   s.type('x');
-  expect(last()).toContain('Down selects');
+  expect(last()).toContain('↓  actions');
   expect(s.live()).toContain('x');
 });
 
@@ -1625,12 +1628,12 @@ test('an action that holds something for the owner says so, and Down goes onto i
   mkdirSync(join(s.p.root, '.teneral'), { recursive: true });
   writeFileSync(join(s.p.root, '.teneral', 'approval.json'), JSON.stringify({ asked: 'e5f6a7b'.padEnd(40, '0') }));
   s.clock.at = 60_000;
-  expect(s.live().split('\n').at(-1)).toContain('mutate e5f6a7b');
+  expect(s.live().split('\n').at(-1)).toMatch(/mutate +e5f6a7b/);
   s.type('\x1b[B');
   s.type('\r');
   expect(s.live()).toContain('approve e5f6a7b');
   expect(s.live()).toContain('let the waiting mutation through');
   s.type('\x1b');
   s.app.settleKeys();
-  expect(s.live().split('\n').at(-1)).toContain('Left/Right move');
+  expect(s.live().split('\n').at(-1)).toContain('←→  move');
 });

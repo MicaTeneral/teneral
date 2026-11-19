@@ -48,6 +48,9 @@ interface Options {
   block?: boolean;
   on?: { message: () => void; edited: (ids: number[]) => void; deleted: (ids: number[]) => void; joined?: (streams: { id: string; name: string }[]) => void };
   now?: () => number;
+  /** Test seam only: how long a poll pass may hold the busy latch before it is force-released.
+   * Never set in production. */
+  pollDeadlineMs?: number;
 }
 
 /** The uploads a message links to, as Zulip names them, at most six. */
@@ -68,16 +71,22 @@ export { namedIn } from './chat';
 const MAX_ATTACHMENTS = 4;
 /** Uploaded image references from Zulip's HTML, never arbitrary links in the message text. */
 function imagePaths(content: string): string[] {
-  return [...content.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)]
-    .map(m => m[2]!.replaceAll('&amp;', '&'))
-    .concat([...content.matchAll(/<a\b[^>]*\bhref=(["'])([^"']+)\1/gi)].map(m => m[2]!.replaceAll('&amp;', '&')))
+  // Zulip renders an inline image as <img src="/user_uploads/thumbnail/..."><br> with the
+  // full-resolution original in data-original-src; the inline src is often a downscaled
+  // thumbnail that the download filter would discard. Read both attributes.
+  const imgSrc = [...content.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  const imgOriginal = [...content.matchAll(/<img\b[^>]*\bdata-original-src=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  const anchors = [...content.matchAll(/<a\b[^>]*\bhref=(["'])([^"']+)\1/gi)].map(m => m[2]!);
+  return [...imgOriginal, ...imgSrc, ...anchors]
+    .map(p => p.replaceAll('&amp;', '&'))
     .filter(path => path.startsWith('/user_uploads/') && !path.startsWith('/user_uploads/thumbnail/') && !path.startsWith('//'))
     .slice(0, MAX_ATTACHMENTS);
 }
 async function renderedMessage(c: Credentials, id: number, content: string, send: typeof fetch): Promise<string> {
-  // Zulip omits attachment HTML when apply_markdown=false. Render only this verified owner's
-  // current message by its API id, never a sender- or content-supplied identifier.
-  if (!/\/user_uploads\//.test(content)) return '';
+  // Zulip omits attachment HTML when apply_markdown=false, so the rendered form (not the raw
+  // markdown) is authoritative for attachment URLs. Fetch it for any verified-owner message
+  // the caller asked us to scan; imagePaths() decides whether the result references uploads.
+  // The id is this authenticated owner's own message id, never a sender- or content-supplied one.
   const rendered = await send(new URL(`/api/v1/messages/${id}`, c.site), {
     headers: { Authorization: 'Basic ' + Buffer.from(c.email + ':' + c.api_key).toString('base64') },
     redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -180,7 +189,12 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       }),
       // Untrusted senders never trigger downloads: their image paths and bytes stay out of the
       // owner's trusted image pipeline. Every upload is bounded before it reaches that store.
-      ...(owner && o.keepImage ? { more: async () => attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch) } : {}),
+      // An upload that is not a showable image (a .md, say) must not throw from here: it would end
+      // the whole pass and every message waiting behind it. It becomes a note in the text.
+      ...(owner && o.keepImage ? { more: async () => {
+        try { return await attachments(c, await renderedMessage(c, m.id, text(m.content, 100_000), o.send ?? fetch), o.keepImage, o.send ?? fetch); }
+        catch { return ['[Zulip attachment could not be shown]']; }
+      } } : {}),
     };
   }
   /** What the event queue told of since the last poll: messages changed by their senders, and messages taken back. */
@@ -211,12 +225,23 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       changed.delete(id);
     }
   }
+  // The poll body can await an emit that wakes a long turn. Every HTTP call is bounded by an
+  // AbortSignal, but the overall pass still gets a generous deadline so that if any await never
+  // resolves, `busy` cannot stay latched and silently stop the sensor: the next interval retries.
+  const POLL_DEADLINE_MS = o.pollDeadlineMs ?? 120_000;
   async function poll() {
     if (stopped) return;
     // A queue bell during an active fetch is work still to do, not a reason to overlap requests.
     // One pending bit coalesces any number of bells; without it a DM could wait for the 30 s fallback.
     if (busy) { again = true; return; }
     busy = true;
+    let finished = false;
+    const watchdog = setTimeout(() => {
+      if (!finished && !stopped) {
+        console.error('[zulip] DM poll exceeded its deadline; releasing the busy latch so the sensor retries.');
+        busy = false;
+      }
+    }, POLL_DEADLINE_MS);
     try {
       const c = o.credentials();
       if (!c) return;
@@ -311,6 +336,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       if (failures === 0) downSince = now();
       failures += 1;
     } finally {
+      finished = true;
+      clearTimeout(watchdog);
       busy = false;
       if (again) {
         again = false;
