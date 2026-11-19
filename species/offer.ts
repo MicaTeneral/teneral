@@ -606,7 +606,7 @@ function footer(i: Install, r: Report, key: Key): string {
     + 'These are one install\'s results: evidence for the maintainer, not a verdict.'].join('\n');
 }
 
-export interface NetOptions { send?: typeof fetch }
+export interface NetOptions { send?: typeof fetch; progress?: (line: string) => void }
 
 /**
  * `publish <branch>`: push the checked and approved commit to `contrib/<individual>/<name>` on the
@@ -633,8 +633,9 @@ export async function publish(i: Install, branch: string, o: NetOptions = {}): P
   const key = ensureKey(i.auth, i.id);
 
   // The species as it stands at its home, now: an offer built on an older head is one the maintainer would have to mend.
+  o.progress?.('Checking the species head (up to 15 seconds)');
   const heads = gitRemote(i.root, i.auth, ['ls-remote', hub.url, `refs/heads/${hub.branch}`]);
-  if (heads.code !== 0) return { status: 1, text: remoteFailure(hub, 'Asking for the species\' head', heads) };
+  if (heads.code !== 0) return { status: 1, text: `${remoteFailure(hub, 'Asking for the species\' head', heads)}\nNothing was published.` };
   const theirs = heads.stdout.toString().split(/\s+/)[0] ?? '';
   if (!COMMIT.test(theirs)) return { status: 1, text: `${hub.url} has no branch ${hub.branch}.` };
   if (!gitOk(i.root, 'merge-base', '--is-ancestor', theirs, commit)) {
@@ -652,6 +653,7 @@ export async function publish(i: Install, branch: string, o: NetOptions = {}): P
   // As GitHub names a branch of another repository: `<owner>:<branch>`.
   const head = out.fork ? `${out.owner}:${target}` : target;
   // Forced: the branch is this individual's own, and a mended offer replaces the one before it.
+  o.progress?.(`Pushing ${target} (up to 15 seconds)`);
   const pushed = gitRemote(i.root, i.auth, ['push', '--quiet', out.url, `+${commit}:refs/heads/${target}`]);
   if (pushed.code !== 0) return { status: 1, text: `${remoteFailure(there, `Pushing ${target}`, pushed)}\nNothing was published. Run this again once that is mended; the approval still stands.` };
 
@@ -980,7 +982,7 @@ export async function main(
         return say(sign(i, rest[0]!));
       case 'publish':
         if (rest.length !== 1) break;
-        return say(await publish(i, rest[0]!));
+        return say(await publish(i, rest[0]!, { progress: out }));
       case 'witness': {
         const pr = Number(rest[0]);
         const also = rest[1] === '--also' && rest.length === 3 ? rest[2]! : null;

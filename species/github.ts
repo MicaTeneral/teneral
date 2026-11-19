@@ -152,17 +152,17 @@ export async function api(
  * path, never the token. Credential helpers the machine has configured are switched off for the
  * command, so none of them is handed the token to keep.
  */
-export function gitRemote(dir: string, auth: string, args: string[]): Ran {
+export function gitRemote(dir: string, auth: string, args: string[], timeoutMs = 15_000): Ran {
   const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   delete env.SSH_ASKPASS;
   const quiet = ['-c', 'credential.helper=', '-c', 'core.askPass='];
-  if (!hasToken(auth)) return run(['git', ...quiet, ...args], { cwd: dir, env: { ...env, GIT_ASKPASS: 'false' } });
+  if (!hasToken(auth)) return run(['git', ...quiet, ...args], { cwd: dir, env: { ...env, GIT_ASKPASS: 'false' }, timeoutMs });
   const aside = mkdtempSync(join(tmpdir(), 'teneral-askpass-'));
   try {
     const script = join(aside, 'askpass');
     writeFileSync(script, '#!/bin/sh\ncase "$1" in\n  [Uu]sername*) echo x-access-token ;;\n  *) cat "$TENERAL_ASKPASS_FILE" ;;\nesac\n', { mode: 0o700 });
     chmodSync(script, 0o700);
-    return run(['git', ...quiet, ...args], { cwd: dir, env: { ...env, GIT_ASKPASS: script, TENERAL_ASKPASS_FILE: join(auth, TOKEN_FILE) } });
+    return run(['git', ...quiet, ...args], { cwd: dir, env: { ...env, GIT_ASKPASS: script, TENERAL_ASKPASS_FILE: join(auth, TOKEN_FILE) }, timeoutMs });
   } finally {
     rmSync(aside, { recursive: true, force: true });
   }
@@ -170,6 +170,7 @@ export function gitRemote(dir: string, auth: string, args: string[]): Ran {
 
 /** What git said when a command against the remote failed, in a form that names what to do. */
 export function remoteFailure(hub: Hub, what: string, r: Ran): string {
+  if (r.timedOut) return `${what} at ${hub.url} timed out; check the network and run the command again.`;
   const said = (r.stderr || r.stdout.toString()).trim().slice(-800);
   const hint = /authentication failed|could not read (username|password)|terminal prompts disabled|\b40[13]\b/i.test(said)
     ? ` The token was not accepted for it: it needs ${TOKEN_NEEDS}; your owner stores one with ./one offer token.`
