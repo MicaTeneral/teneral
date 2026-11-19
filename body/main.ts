@@ -6,7 +6,7 @@ import { rayboard, rayboardCa, rayboardOwnerId, rayboardToken } from './rayboard
 import { workspace as workspaceSensor, WORKSPACE_CURSOR_KIND, type WorkspaceCursor } from './workspace';
 import { hasToken } from '../species/github';
 import { speciesRef } from '../species/species';
-import { githubRemote } from '../species/github';
+import { githubRemote, gitRemote } from '../species/github';
 import { install as speciesInstall, retireStale, retiredText } from '../species/offer';
 import { repoRoot } from '../immune/gates';
 import { git } from '../immune/gates';
@@ -264,14 +264,19 @@ function settleWords(): void {
 }
 
 /**
- * The agent's own offers, looked over now and then: one the species has moved past can no longer
+ * The species, heard from now and then, and the agent's own offers looked over against it: one the species has moved past can no longer
  * go out, so it is retired here and the agent is told, to make again what is still wanted. The
  * owner is asked nothing and sees only offers that can go out.
  */
 const staleOffers: Sensor = (emit) => {
   const look = (): void => {
     try {
-      const gone = retireStale(speciesInstall(repoRoot(import.meta.dir)));
+      const install = speciesInstall(repoRoot(import.meta.dir));
+      // Hear where the species stands: the owner's screen says what it brings (/update) from this, and
+      // an offer is stale against this. A fetch only moves the remote's own refs; nothing is merged.
+      const species = speciesRef(workspace, process.env.TENERAL_UPSTREAM);
+      if (!('problem' in species) && species.remote) gitRemote(install.root, install.auth, ['fetch', '--quiet', species.remote.name, species.remote.branch]);
+      const gone = retireStale(install);
       if (gone.length > 0) emit({ source: 'species', text: retiredText(gone) });
     } catch { /* no install around this body, or no species known here: nothing to retire */ }
   };

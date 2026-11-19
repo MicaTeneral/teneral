@@ -34,6 +34,8 @@ export const COMMANDS: readonly Command[] = [
   { name: '/reasoning', hint: '', about: 'print in full what the model last thought', also: 'Ctrl-R', plain: false },
   // Answered by `ownerCommand` in species/offer.ts.
   { name: '/publish', hint: '[commit]', about: 'how the agent\'s work goes out to the species; with a commit, let that offer go', plain: true },
+  // Answered by `ownerCommand` in species/offer.ts.
+  { name: '/update', hint: '[take]', about: 'what the species brings that the agent has not taken; take has it merged', plain: true },
   { name: '/quit', hint: '', about: 'leave', also: 'Ctrl-D on an empty line, and Ctrl-C', plain: true },
 ];
 
