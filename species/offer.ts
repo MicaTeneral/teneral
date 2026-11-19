@@ -979,6 +979,68 @@ function publishPage(i: Install): string[] {
   return lines;
 }
 
+// --- what the species brings: a mutation proposed from outside, as the agent's own are from inside ---
+
+/** How many of the newest changes `/update` names. */
+const UPDATE_SHOWN = 8;
+
+export interface SpeciesUpdate {
+  /** The species as the owner names it, and where it stands as this install last heard. */
+  name: string;
+  head: string;
+  /** Commits the species has that the lineage does not; 0 when the lineage holds all of it. */
+  ahead: number;
+  /** The newest of them along the species' own line, as `<short> <subject>`. */
+  changes: string[];
+}
+
+/**
+ * What the species has that this individual's lineage has not taken yet, as this install last
+ * heard of it (the body fetches now and then; nothing is asked of the network here). Null when
+ * there is no lineage or no species to compare.
+ */
+export function speciesUpdate(i: Install): SpeciesUpdate | null {
+  try {
+    const candidate = join(i.root, '.teneral', 'candidate');
+    const species = resolveSpecies(candidate, i.s.TENERAL_UPSTREAM);
+    if ('problem' in species) return null;
+    const head = git(candidate, 'rev-parse', '--verify', '--quiet', `${species.ref}^{commit}`).trim();
+    const ahead = Number(git(candidate, 'rev-list', '--count', `HEAD..${species.ref}`).trim());
+    if (!COMMIT.test(head) || !Number.isSafeInteger(ahead)) return null;
+    const changes = ahead === 0 ? [] : git(candidate, 'log', '--first-parent', '--no-decorate', `--max-count=${UPDATE_SHOWN}`, '--format=%h %s', `HEAD..${species.ref}`).trim().split('\n').filter(Boolean);
+    return { name: species.name, head, ahead, changes };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `/update`: what the species brings that the agent has not taken. `/update take`: the owner's
+ * word to take it. The agent merges it into its lineage, tests it and asks to mutate, as it does
+ * for a change of its own; whatever of it lies outside the body still waits for `/approve`.
+ */
+function updateCommand(i: Install, arg: string): string[] {
+  if (arg !== '' && arg !== 'take') return ['/update shows what the species brings; /update take has the agent take it.'];
+  const u = speciesUpdate(i);
+  if (u === null) return ['What the species has cannot be told here: there is no lineage yet, or nothing says which ref is the species (TENERAL_UPSTREAM in .env).'];
+  if (u.ahead === 0) return [`Nothing new: the agent's lineage holds all of ${u.name}, which stands at ${short(u.head)} as this install last heard.`];
+  if (arg === 'take') {
+    tell(i.owner, `Take the species update: merge ${u.name} at ${short(u.head)} into your lineage. Where it meets your own changes keep both if you can, and tell me what you gave up if you cannot. Run the tests, then ask to mutate. `
+      + 'What it changes outside your body the stem will ask me to approve, as always.');
+    return [`The agent was told to take ${u.name} at ${short(u.head)} (${u.ahead} ${u.ahead === 1 ? 'commit' : 'commits'}). It merges and tests it, then asks to mutate; what lies outside its body will wait for your /approve.`];
+  }
+  return [
+    `The species (${u.name}) has ${u.ahead} ${u.ahead === 1 ? 'commit' : 'commits'} your agent has not taken. It stands at ${short(u.head)}, as this install last heard.`,
+    '',
+    ...u.changes.map((line) => `  ${line}`),
+    ...(u.ahead > u.changes.length ? [`  and ${u.ahead - u.changes.length} more`] : []),
+    '',
+    '  /update take   has the agent merge it into its lineage, test it and ask to mutate',
+    '',
+    'Nothing is taken by itself. A mutation that brings it changes the stem as well as the body, so it will wait for your /approve like any other.',
+  ];
+}
+
 /** `/publish <commit>`: let a waiting offer go out, or tell the agent again about one that has the owner's yes and was not sent. */
 function publishCommand(i: Install, arg: string): string[] {
   if (arg === '') return publishPage(i);
@@ -998,12 +1060,13 @@ function publishCommand(i: Install, arg: string): string[] {
   return [`No offer that starts with ${arg} waits for you or is unsent. /publish lists what does.`];
 }
 
-/** `/offers`, `/publish [commit]`, `/publish withdraw <commit>` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is none of them. */
+/** `/offers`, `/publish [commit]`, `/publish withdraw <commit>`, `/update [take]` and `/approve [commit]` in the talk clients: the lines to show, or null for a line that is none of them. */
 export function ownerCommand(root: string, line: string): string[] | null {
   const [name = '', arg = '', ...more] = line.trim().split(/\s+/);
-  if (name !== '/offers' && name !== '/approve' && name !== '/publish') return null;
+  if (name !== '/offers' && name !== '/approve' && name !== '/publish' && name !== '/update') return null;
   try {
     const i = install(root);
+    if (name === '/update') return more.length > 0 ? ['/update, or /update take.'] : updateCommand(i, arg);
     // `/publish withdraw <commit>`: the owner takes an offer back.
     if (name === '/publish' && arg === 'withdraw') return more.length !== 1 ? ['/publish withdraw <commit>: the first seven or more characters of an offer, as /publish lists it.'] : withdrawOffer(i, more[0]!).text.split('\n');
     if (name === '/publish') return more.length > 0 ? ['/publish, or /publish <commit>.'] : publishCommand(i, arg);

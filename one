@@ -25,6 +25,12 @@ usage: ./one <command>
                   approve the mutation the agent asked for that changes something outside its
                   body, its stem included, or the commit named. /approve in talk does the same
   logs            follow what the stem and the agent print
+  reset [--yes]   begin again here as a newborn: the journal, the memory, the soul and the lineage
+                  are moved aside into .teneral/past/<time>/ (nothing is deleted), the code
+                  becomes the species' newest, and the next ./one up is a birth. Kept: .env,
+                  the sign-ins and tokens in .teneral/auth, this install's id and signing key,
+                  and the credentials the agent kept for its services. --keep-code leaves the
+                  code as it is
   offer <command> what the agent offers to the species: `offer list` shows what was checked and
                   what waits for you, `offer approve <commit>` lets exactly that commit go out,
                   `offer token` stores the GitHub token publishing needs, `offer key` prints
@@ -583,6 +589,113 @@ case "$command" in
     prepare
     exec docker run --rm --interactive ${tty[@]+"${tty[@]}"} \
       "${cage[@]}" ${extra[@]+"${extra[@]}"} teneral bun species/offer.ts "$@"
+    ;;
+
+  reset)
+    # Begin again in this directory. Everything a life made is moved aside, never deleted; what the
+    # owner gave it to work with (the provider, the sign-ins, the tokens) stays. Nothing here
+    # needs the container: the next `./one up` makes the worktrees and is a birth.
+    sure=0
+    keep_code=0
+    for arg in "$@"; do
+      case "$arg" in
+        --yes) sure=1 ;;
+        --keep-code) keep_code=1 ;;
+        *) echo "usage: ./one reset [--yes] [--keep-code]" >&2; exit 2 ;;
+      esac
+    done
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+      echo "This directory is not a git checkout, so there is no species to begin again from." >&2
+      exit 1
+    fi
+    # Which ref is the species: TENERAL_UPSTREAM in .env, else origin/main (species/species.ts).
+    upstream=""
+    if [ -f .env ]; then upstream="$(sed -n 's/^TENERAL_UPSTREAM=//p' .env | tail -n 1 | tr -d "\"' \r")"; fi
+    upstream="${upstream:-origin/main}"
+    remote="${upstream%%/*}"
+    if [ "$remote" != "$upstream" ] && git remote | grep -qx "$remote"; then
+      species="refs/remotes/$upstream"
+    else
+      remote=""
+      species="refs/heads/$upstream"
+    fi
+    # Everything that could refuse is asked before anything is moved.
+    if [ "$keep_code" -eq 0 ]; then
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "This checkout has changes that are not committed (git status shows them), so its code cannot be" >&2
+        echo "replaced by the species' newest. Commit or discard them, or pass --keep-code. Nothing was changed." >&2
+        exit 1
+      fi
+      if [ -n "$remote" ] && ! git fetch --quiet "$remote"; then
+        echo "The species could not be fetched from $remote, so there is no newest code to begin from." >&2
+        echo "Try again when it can be reached, or pass --keep-code. Nothing was changed." >&2
+        exit 1
+      fi
+      if ! git rev-parse --verify --quiet "$species^{commit}" >/dev/null; then
+        echo "There is no $upstream here to take the code from. Set TENERAL_UPSTREAM in .env, or pass --keep-code. Nothing was changed." >&2
+        exit 1
+      fi
+      if ! git merge-base --is-ancestor HEAD "$species"; then
+        echo "This checkout holds commits that $upstream does not, so it cannot simply move up to it." >&2
+        echo "Put it on the species by hand (git status, git log), or pass --keep-code. Nothing was changed." >&2
+        exit 1
+      fi
+    fi
+    echo "This ends the life that was lived in $(basename "$PWD") and makes room for a new one."
+    echo "  moved aside, into .teneral/past/: the journal and the memory, the soul, the inbox, the lineage"
+    echo "    and everything else the agent made here. Nothing is deleted"
+    echo "  kept: .env, the sign-ins and tokens in .teneral/auth, the install's id and signing key,"
+    echo "    and the credentials the agent kept for its services"
+    if [ "$keep_code" -eq 0 ]; then
+      echo "  the code becomes $upstream, at $(git rev-parse --short "$species")"
+    else
+      echo "  the code stays as it is, at $(git rev-parse --short HEAD)"
+    fi
+    if [ "$sure" -eq 0 ]; then
+      if [ ! -t 0 ]; then
+        echo "This is not a terminal, so it cannot be asked: ./one reset --yes does it without asking. Nothing was changed." >&2
+        exit 1
+      fi
+      printf 'Type reset to do it, anything else to leave everything as it is: '
+      read -r answer || answer=""
+      if [ "$answer" != reset ]; then
+        echo "Left as it was."
+        exit 1
+      fi
+    fi
+    if alive; then stop; fi
+    if [ -n "$(state)" ]; then docker rm "$name" >/dev/null; fi
+
+    past=".teneral/past/$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p "$past/teneral"
+    # What the agent kept for its services sits in its workspace, in files only the owner can read
+    # (a Zulip key, a board's token). They are set where the stem puts them back into the new
+    # workspace when it makes one (stem/supervisor.ts); everything else there goes with the past.
+    if [ -d .teneral/candidate/.teneral ]; then
+      mkdir -p .teneral/kept
+      chmod 700 .teneral/kept
+      find .teneral/candidate/.teneral -maxdepth 1 -type f ! -perm -g=r ! -perm -o=r -size -256k -exec cp -p {} .teneral/kept/ \;
+      rmdir .teneral/kept 2>/dev/null || true
+    fi
+    for made in memory soul inbox; do
+      if [ -e "$made" ]; then mv "$made" "$past/$made"; fi
+    done
+    for made in .teneral/* .teneral/.[!.]*; do
+      [ -e "$made" ] || continue
+      case "$(basename "$made")" in
+        auth | id | organs | past | kept) ;;
+        *) mv "$made" "$past/teneral/" ;;
+      esac
+    done
+    # The worktrees are gone from where git knew them, so it forgets them; the lineage's commits
+    # stay reachable under a name of their own.
+    git worktree prune
+    if git show-ref --verify --quiet refs/heads/lineage/local; then
+      git branch -m lineage/local "past/$(basename "$past")"
+    fi
+    if [ "$keep_code" -eq 0 ]; then git merge --quiet --ff-only "$species"; fi
+    echo "Done. The past is in $past, and its lineage is the branch past/$(basename "$past")."
+    echo "The code is at $(git rev-parse --short HEAD). ./one up begins the new life."
     ;;
 
   down)
