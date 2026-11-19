@@ -360,6 +360,8 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
       }
       failures = 0;
     } catch {
+      // An expired pass cannot report a new outage over the recovery's connection state.
+      if (!current()) return;
       if (!failed && !stopped) console.error('[zulip] DM poll failed; will retry (credentials and response omitted).');
       failed = true;
       if (failures === 0) downSince = now();
@@ -367,11 +369,15 @@ export function zulipPoller(o: Options, emit: (s: Stimulus) => void) {
     } finally {
       finished = true;
       clearTimeout(watchdog);
-      busy = false;
-      if (again) {
-        again = false;
-        // Schedule after the current turn, so an active queue callback is never re-entered inline.
-        queueMicrotask(() => { if (!stopped) void poll(); });
+      // Only the live pass owns the latch and its pending bell. The watchdog already released an
+      // expired pass; its late completion must not free the recovery's latch or start a third pass.
+      if (generation === pass) {
+        busy = false;
+        if (again) {
+          again = false;
+          // Schedule after the current turn, so an active queue callback is never re-entered inline.
+          queueMicrotask(() => { if (!stopped) void poll(); });
+        }
       }
     }
   }

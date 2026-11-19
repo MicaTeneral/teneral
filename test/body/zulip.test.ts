@@ -905,3 +905,33 @@ test('a watchdog-expired pass cannot deliver an owner DM a second time after its
   expect(r.anchors).toEqual(['newest', 'newest']);
   expect(r.delivered).toEqual(['Zulip private 7']);
 });
+
+test('a stale pass finishing does not release the latch under the running recovery', async () => {
+  const got: Stimulus[] = [];
+  let page = 0;
+  let releaseFirst!: () => void, releaseSecond!: () => void;
+  const first = new Promise<void>(r => { releaseFirst = r; });
+  const second = new Promise<void>(r => { releaseSecond = r; });
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/messages') {
+      page++;
+      if (page === 1) await first; else if (page === 2) await second;
+      return new Response(JSON.stringify({ messages: [] }));
+    }
+    throw Error(`unexpected ${url.pathname}`);
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, ownerId: 100, keepImage: () => '', pollDeadlineMs: 60 }, s => got.push(s));
+  const pass1 = p.poll();
+  for (let n = 0; n < 200 && page < 1; n++) await Bun.sleep(1);
+  await Bun.sleep(90);              // the watchdog expires pass 1
+  const pass2 = p.poll();           // the recovery starts and stalls
+  for (let n = 0; n < 200 && page < 2; n++) await Bun.sleep(1);
+  releaseFirst(); await pass1;      // the stale pass finishes while the recovery runs
+  const pass3 = p.poll();           // must coalesce into the recovery
+  await Bun.sleep(5);
+  const pages = page;
+  releaseSecond(); await pass2; await pass3; await Bun.sleep(10);
+  p.stop();
+  expect(pages).toBe(2);
+});
