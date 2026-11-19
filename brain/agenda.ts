@@ -1,4 +1,4 @@
-import { appendEvent, type JournalEvent, type Usage } from './journal';
+import { appendEvent, type EventBody, type JournalEvent, type Usage } from './journal';
 import { DONE_KIND, INTENTION_KIND, WORK_KIND, agenda, known, type Intention, type IntentionData, type Known, type WorkState } from './known';
 import { MEMORY_MARK } from './logbook';
 import { DEFAULT_BUDGET, buildMessages } from './memory';
@@ -26,6 +26,12 @@ import type { SleepDeps, Slept } from './sleep';
 //
 // It is asked rarely, after several new memories, and with the request a turn would send, so that
 // most of it is still in the provider's cache. An answer that is not in form sets down nothing.
+
+/** Journals what a request of the agent's own formed: at once, or through the body when the request goes on beside a turn (`append` in brain/sleep.ts). */
+export function put(d: Pick<SleepDeps, 'journal' | 'gen' | 'append'>, body: EventBody): void {
+  if (d.append) d.append(body);
+  else appendEvent(d.journal, d.gen, body);
+}
 
 export const REFLECTION_KIND = 'memory.reflection.v1';
 /** The agent looks over what it is doing once this many memories of episodes have been formed since it last did. */
@@ -288,17 +294,17 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
       const own = looked.own.filter((i) => fresh(i.text));
       const unsure = looked.unsure.filter(fresh);
       const asks = looked.asks.filter((ask) => fresh(ask.text));
-      for (const i of own) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...i, origin: 'own' } satisfies IntentionData });
-      for (const text of unsure) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { text, origin: 'own', unsure: true } satisfies IntentionData });
-      for (const ask of asks) appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...ask, origin: 'ask' } satisfies IntentionData });
+      for (const i of own) put(d, { type: 'note', kind: INTENTION_KIND, data: { ...i, origin: 'own' } satisfies IntentionData });
+      for (const text of unsure) put(d, { type: 'note', kind: INTENTION_KIND, data: { text, origin: 'own', unsure: true } satisfies IntentionData });
+      for (const ask of asks) put(d, { type: 'note', kind: INTENTION_KIND, data: { ...ask, origin: 'ask' } satisfies IntentionData });
       let closed = 0;
       for (const settled of looked.done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);
         if (open === undefined) continue;
-        appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
+        put(d, { type: 'note', kind: DONE_KIND, data: { intention: open.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
         closed += 1;
       }
-      appendEvent(d.journal, d.gen, { type: 'note', kind: REFLECTION_KIND, data: { own: own.length, unsure: unsure.length, asks: asks.length, closed, ...(usage ? { usage } : {}) } });
+      put(d, { type: 'note', kind: REFLECTION_KIND, data: { own: own.length, unsure: unsure.length, asks: asks.length, closed, ...(usage ? { usage } : {}) } });
       return 'reflected';
     }
     messages = [
@@ -307,7 +313,7 @@ export async function reflect(d: SleepDeps, events: JournalEvent[], now = false)
       { role: 'user', content: `${MEMORY_MARK} That cannot be kept: ${looked.problem}. Reply again in exactly the form asked for, and call no tool.` },
     ];
   }
-  appendEvent(d.journal, d.gen, { type: 'note', kind: REFLECTION_KIND, data: { own: 0, unsure: 0, asks: 0, closed: 0, failed: true, ...(usage ? { usage } : {}) } });
+  put(d, { type: 'note', kind: REFLECTION_KIND, data: { own: 0, unsure: 0, asks: 0, closed: 0, failed: true, ...(usage ? { usage } : {}) } });
   return 'reflected';
 }
 
@@ -621,8 +627,8 @@ export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.no
         const work: WorkState = { ...kept, status, next: item.step, attempts, resumeAt: now, ...(status === 'waiting' && minutes !== undefined ? { checkAt: now + minutes * 60_000 } : {}) };
         if (old === undefined) {
           said.add(item.text);
-          appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { text: item.text, work } });
-        } else appendEvent(d.journal, d.gen, { type: 'note', kind: WORK_KIND, data: { intention: old.id, work } });
+          put(d, { type: 'note', kind: INTENTION_KIND, data: { text: item.text, work } });
+        } else put(d, { type: 'note', kind: WORK_KIND, data: { intention: old.id, work } });
         return true;
       };
       let closed = 0;
@@ -632,13 +638,13 @@ export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.no
         const item = held.intentions.find((i) => i.mark === settled.mark);
         if (item === undefined || ended.has(item.id)) continue;
         ended.add(item.id);
-        appendEvent(d.journal, d.gen, { type: 'note', kind: DONE_KIND, data: { intention: item.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
+        put(d, { type: 'note', kind: DONE_KIND, data: { intention: item.id, how: settled.how, ...(settled.ended === undefined ? {} : { ended: settled.ended }) } });
         closed += 1;
       }
       const live = <T extends { mark?: string }>(items: T[]): T[] => items.filter((item) => !ended.has(open(item.mark)?.id ?? ''));
       const next = live(left.next).filter((item) => record(item, 'queued')).length;
       const waiting = live(left.waiting).filter((item) => record(item, 'waiting', item.minutes)).length;
-      appendEvent(d.journal, d.gen, { type: 'note', kind: SETTLE_KIND, data: { next, waiting, closed, ...(usage ? { usage } : {}) } });
+      put(d, { type: 'note', kind: SETTLE_KIND, data: { next, waiting, closed, ...(usage ? { usage } : {}) } });
       return 'reflected';
     }
     messages = [
@@ -647,6 +653,6 @@ export async function settle(d: SleepDeps, events: JournalEvent[], now = Date.no
       { role: 'user', content: `${MEMORY_MARK} That cannot be kept: ${left.problem}. Reply again in exactly the form asked for, and call no tool.` },
     ];
   }
-  appendEvent(d.journal, d.gen, { type: 'note', kind: SETTLE_KIND, data: { next: 0, waiting: 0, closed: 0, failed: true, ...(usage ? { usage } : {}) } });
+  put(d, { type: 'note', kind: SETTLE_KIND, data: { next: 0, waiting: 0, closed: 0, failed: true, ...(usage ? { usage } : {}) } });
   return 'reflected';
 }

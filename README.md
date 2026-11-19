@@ -358,6 +358,7 @@ Settings, in `.env`:
 | `TENERAL_MODEL` | The model's name. Required. It must support tool calls. |
 | `TENERAL_HEARTBEAT_MINUTES` | Minutes between clock stimuli. Default 30; 0 turns the clock off. A tick is given only while the agent is at rest and its agenda holds something it can act on. |
 | `TENERAL_REST_MINUTES` | Minutes of your silence after which the agent is at rest: it then forms its memories, looks ahead and gets its ticks. While you are talking with it none of that runs. Default 10; 0 means always at rest. |
+| `TENERAL_BACKGROUND` | `serial`: a memory being formed is cancelled when something arrives, and formed again later. Unset: it goes on beside the turn that answers, and is journaled when that turn is over. Set it for a provider that refuses two requests at once. |
 | `TENERAL_ZULIP_AMBIENT` | `0`: talk in a Zulip channel that does not mention the agent never wakes it. Unset: it is woken once such talk has paused, and may join in or stay silent. |
 | `TENERAL_CONTEXT_CHARS` | Characters of context sent per request at most. Default 250000. Lower it when the agent reports that the conversation no longer fits the model. |
 | `TENERAL_TAIL_CHARS` | Characters of the conversation shown to the model word for word; what is older is shown as the agent's memories of it, which take a few lines an episode. Default 100000. Everything in a request is read again at each step of a turn, so this number is most of what a step costs and how long the first reply after a pause takes. |

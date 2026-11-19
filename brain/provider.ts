@@ -121,6 +121,11 @@ export interface ProviderCallOptions {
   signal?: AbortSignal;
   maxOutputTokens?: number;
   onCacheProbe?: (data: CacheProbe) => void;
+  /**
+   * Asked before this request says anything in the pulse file, and before it clears it. A request
+   * that goes on beside a turn answers false while the turn runs: the pulse is the turn's to write.
+   */
+  mayPulse?: () => boolean;
   onTiming?: (timing: RequestTiming) => void;
   /** Internal Responses-stream hook installed by timedProvider; called for the first body chunk. */
   onFirstByte?: () => void;
@@ -446,6 +451,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
     // Cancelled before it began, or between the two tries below: no token is asked for and nothing is sent.
     if (options?.signal?.aborted) throw cancelled();
     const limit = outputLimit(options);
+    const tell = (pulse: Omit<Pulse, 'at'> | null): void => { if (options?.mayPulse?.() !== false) say(pulse); };
     const { instructions, input } = toResponsesInput(messages, cfg.namespace);
     const body: Record<string, unknown> = { model: cfg.model, input, store: false, stream: true };
     if (limit !== undefined) body.max_output_tokens = limit;
@@ -462,7 +468,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         // Cancelled while the token was fetched or renewed: the request is not made.
         if (options?.signal?.aborted) throw cancelled();
         if (options?.onCacheProbe) options.onCacheProbe(probe(body));
-        say({ asked, step: 'asked', received: 0 });
+        tell({ asked, step: 'asked', received: 0 });
         const res = await send(`${cfg.baseUrl().replace(/\/+$/, '')}/responses`, {
           method: 'POST',
           // The user agent is teneral's own name and version (brain/providers.ts): the truth about who is asking.
@@ -472,7 +478,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         });
         // The stream is read to its end; the reply is put together afterwards. On the way, the owner's terminal is told where it stands.
         if (!res.ok || res.body === null) return { res, text: await res.text() };
-        const feed = follower(asked, say);
+        const feed = follower(asked, tell);
         const decoder = new TextDecoder();
         let text = '';
         for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
@@ -488,7 +494,7 @@ export function responsesProvider(cfg: ResponsesConfig): Provider {
         if (signal.aborted) throw new ProviderError(`provider timed out after ${timeoutMs / 1000}s`, null);
         throw new ProviderError(`provider could not be reached: ${err instanceof Error ? err.message : String(err)}`, null);
       } finally {
-        say(null);
+        tell(null);
       }
     };
     let bearer = await token();

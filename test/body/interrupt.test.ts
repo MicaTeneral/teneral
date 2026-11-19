@@ -81,6 +81,7 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
       TENERAL_GEN: commit, TENERAL_JOURNAL: journal, TENERAL_WORKSPACE: workspace, TENERAL_SOUL: join(dir, 'soul'), TENERAL_PEERS: join(dir, 'soul', 'peers.json'),
       TENERAL_INBOX: join(dir, 'inbox'), TENERAL_OWNER: owner, TENERAL_ID: 'test', TENERAL_HEARTBEAT_MINUTES: '0',
       ...(lookAfterEveryTurn ? { TENERAL_REFLECT_AFTER_TURN: '1' } : { TENERAL_REFLECT_AFTER_TURN: '0' }),
+      ...(process.env.TEST_TENERAL_BACKGROUND ? { TENERAL_BACKGROUND: process.env.TEST_TENERAL_BACKGROUND } : {}),
       TENERAL_BASE_URL: `http://127.0.0.1:${server.port}/v1`, TENERAL_API_KEY: 'none', TENERAL_MODEL: 'none',
       // This test is about interruption, not trimming. Keep enough room after the real composed
       // prompt and tool specifications to show the interrupted exchange on the next request.
@@ -108,6 +109,61 @@ function life(answer: Answer, seedOrLook?: ((journal: string, owner: string) => 
   };
   return { dir, journal, owner, workspace, asked, body, events, types, until, lookAfterEveryTurn, stderr: () => stderr };
 }
+
+/** A journal in which one stretch is over and has no memory yet: the owner spoke long ago, so the agent is at rest. */
+const anOldStretch = (journal: string): void => {
+  const lines = readFileSync(journal, 'utf8').trim().split('\n').map(line => JSON.parse(line) as JournalEvent);
+  const gen = lines[0]!.gen;
+  const at = (ms: number): string => new Date(Date.now() - ms).toISOString();
+  const more = [
+    { type: 'stimulus', source: 'terminal', text: 'please set up the mail, use the work address', ts: at(30 * 3_600_000) },
+    { type: 'assistant', text: 'It is set up and a test message arrived.', toolCalls: [], ts: at(30 * 3_600_000 - 1000) },
+    { type: 'stimulus', source: 'terminal', text: 'thanks', ts: at(3_600_000) },
+    { type: 'assistant', text: 'Any time.', toolCalls: [], ts: at(3_600_000 - 1000) },
+  ].map((e, i) => ({ ...e, v: 1, id: `old-${i}`, gen }));
+  writeFileSync(journal, [...lines.map(l => ({ ...l, ts: at(40 * 3_600_000) })), ...more].map(e => `${JSON.stringify(e)}\n`).join(''));
+};
+const MEMORY = 'Title: Setting up the mail\nOutcome: done\n\nMy owner asked me to set up the mail and said "use the work address". I did, and a test message arrived.';
+const memoryAsked = (entry: Asked): boolean => String(entry.messages.at(-1)?.content ?? '').includes('It is time to form a memory');
+
+test('a memory being formed goes on beside the turn that answers what arrived, and is journaled when that turn is over', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let memoryDone = false;
+  const l = life(async (_n, entry) => {
+    if (memoryAsked(entry)) { await hold; memoryDone = true; return reply({ content: MEMORY }); }
+    // The turn calls a tool, so it is still running when the memory comes back.
+    if (entry.messages.some(m => m.role === 'tool')) { await Bun.sleep(400); return says('The file is there.'); }
+    return reply({ content: '', tool_calls: [tool('b1', 'bash', { command: 'true' })] });
+  }, anOldStretch);
+  ends.push(release);
+  await l.until('ready', () => l.types().includes('generation.ready'));
+  await l.until('the memory is asked for at rest', () => l.asked.some(memoryAsked));
+  tell(l.owner, 'is the file there?');
+  await l.until('the turn begins beside it', () => l.events().some(e => e.type === 'tool.intent'));
+  // The memory request was not thrown away for the owner's line.
+  expect(l.asked.find(memoryAsked)!.aborted).toBe(false);
+  release();
+  await l.until('the memory has come back', () => memoryDone);
+  await l.until('the owner is answered', () => l.events().some(e => e.type === 'assistant' && e.text === 'The file is there.'));
+  const titled = (e: JournalEvent): boolean => e.type === 'note' && e.kind === 'memory.episode.v1' && (e.data as { title?: unknown }).title === 'Setting up the mail';
+  await l.until('the memory is journaled', () => l.events().some(titled));
+  // Written after the turn's last word, never into the middle of it.
+  expect(l.events().findIndex(titled)).toBeGreaterThan(l.events().findIndex(e => e.type === 'assistant' && e.text === 'The file is there.'));
+  expect(l.asked.filter(memoryAsked)).toHaveLength(1);
+}, 15_000);
+
+test('with TENERAL_BACKGROUND=serial whatever arrives cancels the memory request, as it used to', async () => {
+  process.env.TEST_TENERAL_BACKGROUND = 'serial';
+  try {
+    const l = life(async (_n, entry) => memoryAsked(entry) ? never() : says('Here.'), anOldStretch);
+    await l.until('ready', () => l.types().includes('generation.ready'));
+    await l.until('the memory is asked for at rest', () => l.asked.some(memoryAsked));
+    tell(l.owner, 'are you there?');
+    await l.until('the owner is answered', () => l.events().some(e => e.type === 'assistant' && e.text === 'Here.'));
+    expect(l.asked.find(memoryAsked)!.aborted).toBe(true);
+  } finally { delete process.env.TEST_TENERAL_BACKGROUND; }
+}, 15_000);
 
 const alive = (pid: number): boolean => {
   try {
