@@ -123,3 +123,22 @@ test('what the agent should know with its next wake is said once', async () => {
   await r.c.take(r.said('again', { kind: 'direct', place: 'dm/7' }));
   expect(r.got[1]!.text).not.toContain('was down');
 });
+
+test('a channel is listened to as the agent chose: muted talk is not kept, mentions-only talk is context, and a mention reaches it in any of them', async () => {
+  const modes: Record<string, 'ambient' | 'mentions' | 'muted'> = { '1': 'ambient', '2': 'mentions', '3': 'muted' };
+  const r = room({ mode: (channel) => modes[channel.id]! });
+  const inRoom = (id: string, text: string, extra: Partial<ChatMessage> = {}): ChatMessage => r.said(text, { place: `room${id}`, channel: { id, name: `#room${id}` }, ...extra });
+  await r.c.take(inRoom('2', 'context only'));
+  await r.c.take(inRoom('3', 'never kept'));
+  r.after(600_000);
+  expect(r.got).toHaveLength(0);
+  await r.c.take(inRoom('1', 'shall we ship?'));
+  r.after(60_000);
+  expect(r.got).toHaveLength(1);
+  // The ambient wake names its channel, which is what its outcomes are counted by.
+  expect(r.got[0]!.text).toContain('this is talk in a channel you are a member of (#room1), shown once it paused');
+  await r.c.take(inRoom('3', 'mica, are you there?', { mentioned: true }));
+  expect(r.got).toHaveLength(2);
+  expect(r.got[1]!.text).toContain('context only');
+  expect(r.got[1]!.text).not.toContain('never kept');
+});

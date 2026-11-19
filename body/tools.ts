@@ -1,8 +1,8 @@
 import { work } from './work';
 import { lsp as runLsp, readProfiles, type LspProfile } from './lsp';
 import { zulipReply, zulipHistory } from './zulip-tools';
-import { rayboardReply } from './rayboard';
 import { CHAT_TOOLS } from './chat-tools';
+import { rayboardReply } from './rayboard-tools';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { readPeers } from './peers';

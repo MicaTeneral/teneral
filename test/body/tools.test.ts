@@ -25,7 +25,7 @@ function context(workspace: string, gen = 'gen'): ToolContext {
 }
 
 test('the seed tools exist', () => {
-  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'chat_edit', 'chat_history', 'chat_places', 'chat_react', 'chat_reply', 'chat_send', 'contact', 'done', 'edit', 'forget', 'intend', 'jobs', 'know', 'lesson', 'look', 'lsp', 'mutate', 'open', 'rayboard_reply', 'read', 'recall', 'send', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
+  expect(TOOLS.map((t) => t.spec.name).sort()).toEqual(['allowed', 'bash', 'chat_attention', 'chat_edit', 'chat_fetch', 'chat_history', 'chat_places', 'chat_react', 'chat_reply', 'chat_send', 'contact', 'done', 'edit', 'forget', 'intend', 'jobs', 'know', 'lesson', 'look', 'lsp', 'mutate', 'open', 'rayboard_reply', 'read', 'recall', 'send', 'timeline', 'work', 'write', 'zulip_history', 'zulip_reply']);
 });
 
 test('write creates parent directories and read returns the content', async () => {

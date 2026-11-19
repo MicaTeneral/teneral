@@ -37,10 +37,9 @@ import { TOOLS, type ToolContext } from './tools';
 import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { enter, meet, whoLines } from './participants';
-import type { Speaker } from './chat';
-import { typingFor } from './chat-tools';
+import type { Mode, Speaker } from './chat';
+import { QUIET_RUN, modeOf, typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
-import { rayboardTypingScope } from './rayboard-typing';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -163,6 +162,22 @@ let handoff: string | null = null;
 const terminalPrompt = foregroundPrompt(text => process.stdout.write(text));
 
 /**
+ * How the agent listens in a channel, for any service: what it chose, or what its own silence
+ * there shows (body/chat-tools.ts). Asked for every message of a busy channel, so the answer is
+ * kept for a minute rather than worked out from the whole journal each time.
+ */
+const listened = new Map<string, { at: number; mode: Mode }>();
+function listening(service: string, channel: { id: string; name: string }): Mode {
+  const key = `${service}:${channel.id}`;
+  const kept = listened.get(key);
+  if (kept !== undefined && Date.now() - kept.at < 60_000) return kept.mode;
+  const now = modeOf(readEvents(journal), service, channel);
+  if (now.why === 'quiet' && kept?.mode !== 'mentions') console.error(`[chat] ${channel.name} on ${service}: woken ${QUIET_RUN} times running with nothing to say; listening for mentions only`);
+  listened.set(key, { at: Date.now(), mode: now.mode });
+  return now.mode;
+}
+
+/**
  * Who speaks in what a chat sensor is about to show: everyone not met before is recorded, and each
  * is shown with what the agent knows of them. For any service: only its name differs.
  */
@@ -270,6 +285,8 @@ const sensors: Sensor[] = [
     url: process.env.TENERAL_RAYBOARD_URL,
     // No implicit binding: the owner chooses which API-verified account can speak for them.
     ownerId: rayboardOwnerId(process.env.TENERAL_RAYBOARD_OWNER_ID),
+    // Talk on the board is chat like any other: the same attention, the same hands, the same record of who is there.
+    chat: true, ambient: process.env.TENERAL_RAYBOARD_AMBIENT !== '0', who: (speakers) => whoSpeaks('rayboard', speakers), mode: (channel) => listening('rayboard', channel),
     token: () => rayboardToken(process.env.TENERAL_RAYBOARD_TOKEN_FILE),
     ca: process.env.TENERAL_RAYBOARD_CA_FILE ? rayboardCa(process.env.TENERAL_RAYBOARD_CA_FILE) : undefined,
     events: () => readEvents(journal),
@@ -312,6 +329,7 @@ const sensors: Sensor[] = [
     conversations: true, ambient: process.env.TENERAL_ZULIP_AMBIENT !== '0', credentials: () => zulipCredentials(zulipCredentialPath), events: () => readEvents(journal),
     ownerId: confirmedZulipOwnerId(readEvents(journal), zulipOwnerId), keepImage: keepZulipImage,
     who: (speakers) => whoSpeaks('zulip', speakers),
+    mode: (stream) => listening('zulip', stream),
     entered: (stream, members) => enter(journal, gen, readEvents(journal), 'zulip', stream, members === null ? null : members.map((m) => ({ service: 'zulip', ...m }))),
     // Checkpointed only after delivery: a reaction is told of once across restarts.
     checkpoint: (cursor: ZulipQueueCursor) => {
@@ -343,8 +361,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
-      // Generic chat services own Zulip typing; the lineage's Rayboard adapter remains composed beside it.
-      onTyping: (stimulus) => { const chat = genericTyping(stimulus), rayboard = rayboardTypingScope(stimulus); return active => { chat(active); rayboard(active); }; },
+      // The chat adapter shows composition only for the exact stimulus that warrants it.
+      onTyping: genericTyping,
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;
