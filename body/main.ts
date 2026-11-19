@@ -38,6 +38,7 @@ import { stopCurrentJobs, stopPreviousJobs } from './jobs';
 import { foregroundPrompt } from './prompt';
 import { enter, meet, whoLines } from './participants';
 import type { Speaker } from './chat';
+import { typingFor } from './chat-tools';
 import { Heart, REST_MINUTES, agendaFor, heartCommand, restIn } from '../heart/coordinator';
 
 function env(name: string): string {
@@ -340,6 +341,8 @@ async function turn(): Promise<{ error: unknown } | null> {
       onText: (t) => { console.log(`\n${t}\n`); terminalPrompt.answered(); },
       onDelta: (t) => { if (!quietTick) console.log(t); },
       onTool: (name) => console.error(`[tool] ${name}`),
+      // In the chat the turn was woken from, and nowhere else: a turn of its own shows nothing.
+      onTyping: typingFor(workspace),
       signal: current.signal,
     });
     if (outcome === 'mutation') handoff = ctx.mutationCommit;
