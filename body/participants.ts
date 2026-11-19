@@ -1,6 +1,6 @@
 import { appendEvent, type JournalEvent } from '../brain/journal';
 import { known, type Fact } from '../brain/known';
-import { standing } from '../brain/owned';
+import { fromOwner, standing } from '../brain/owned';
 
 // Who the agent shares its chats with. A member of a chat knows who the others are: their names,
 // which of them are programs, what each works on and answers for. The agent is told none of that
@@ -80,6 +80,116 @@ export function meet(journal: string, gen: string, events: JournalEvent[], seen:
   return fresh;
 }
 
+// Contacts. A participant is an account; a contact is whoever is behind it, with what places them
+// in the agent's world. Three things are kept of a contact, each of a different standing.
+//
+// A circle: how they stand to the owner and so to the agent. Family, friends, colleagues, people
+// only met in passing, other agents, services. The names are the owner's to choose; nothing here
+// knows what a circle is called. A circle changes how far the agent goes with someone, so it is
+// the owner's to give: it is recorded with the owner's own words, which must stand in a message
+// of theirs. What the agent only supposes is kept apart, and shown as supposed.
+//
+// Characteristics: a few named things about them, a role, a language, how they like to be
+// answered. These the agent sets down itself as it learns them, like any fact, and may be wrong.
+//
+// Indicators: what the journal itself shows of them, counted with no model asked: how often they
+// were heard, when first and last, how often the agent answered them. They cannot be flattered.
+//
+// Several accounts can be one contact, on different services or the same: only on the owner's word.
+
+export const CONTACT_KIND = 'chat.contact.v1';
+
+export interface Contact {
+  /** The account this record is kept under: `zulip:7`. */
+  key: string;
+  /** Other accounts the owner said are the same one. */
+  same: string[];
+  /** The circle the owner placed them in, with the words it was said in. */
+  circle?: string;
+  words?: string;
+  /** A circle the agent supposes, until the owner says. */
+  supposed?: string;
+  /** Named characteristics, in the agent's own words. */
+  traits: Record<string, string>;
+}
+
+/** The most characteristics kept of one contact, and the most characters of a name and of a value. */
+const TRAITS_MAX = 12;
+const TRAIT_NAME = /^[a-z][a-z0-9 _-]{0,30}$/;
+const TRAIT_CHARS = 160;
+
+/** The contacts the journal holds, each under the account it was first kept under; an account the owner joined to another answers as that one. */
+export function contacts(events: JournalEvent[]): Map<string, Contact> {
+  const all = new Map<string, Contact>();
+  const alias = new Map<string, string>();
+  const at = (key: string): Contact => {
+    const root = alias.get(key) ?? key;
+    let c = all.get(root);
+    if (c === undefined) all.set(root, c = { key: root, same: [], traits: {} });
+    return c;
+  };
+  for (const e of events) {
+    if (e.type !== 'note' || e.kind !== CONTACT_KIND || typeof e.data !== 'object' || e.data === null) continue;
+    const d = e.data as Record<string, unknown>;
+    if (typeof d.key !== 'string') continue;
+    const c = at(d.key);
+    if (typeof d.circle === 'string' && typeof d.words === 'string') { c.circle = d.circle.slice(0, 40); c.words = d.words.slice(0, 300); delete c.supposed; }
+    if (typeof d.supposed === 'string' && c.circle === undefined) c.supposed = d.supposed.slice(0, 40);
+    if (typeof d.traits === 'object' && d.traits !== null) {
+      for (const [name, value] of Object.entries(d.traits as Record<string, unknown>)) {
+        if (value === null || value === '') delete c.traits[name];
+        else if (typeof value === 'string' && TRAIT_NAME.test(name) && (name in c.traits || Object.keys(c.traits).length < TRAITS_MAX)) c.traits[name] = value.slice(0, TRAIT_CHARS);
+      }
+    }
+    if (typeof d.same === 'string' && d.same !== c.key && !c.same.includes(d.same)) {
+      // The other account's own record, if it had one, is folded into this one.
+      const other = all.get(d.same);
+      if (other !== undefined) {
+        c.traits = { ...other.traits, ...c.traits };
+        c.circle ??= other.circle; c.words ??= other.words;
+        if (c.circle === undefined) c.supposed ??= other.supposed;
+        for (const key of other.same) { alias.set(key, c.key); c.same.push(key); }
+        all.delete(d.same);
+      }
+      alias.set(d.same, c.key);
+      c.same.push(d.same);
+    }
+  }
+  // By every account that answers as it.
+  for (const [key, root] of alias) { const c = all.get(root); if (c !== undefined) all.set(key, c); }
+  return all;
+}
+
+/** The owner's message that holds `words`, spaces and case aside; null when none does. A circle is the owner's to give, and is recorded only in the words it was given with. */
+export function ownerSays(events: JournalEvent[], words: string): JournalEvent | null {
+  const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
+  const wanted = flat(words);
+  if (wanted.length < 2) return null;
+  return events.findLast((e) => e.type === 'stimulus' && fromOwner(e.source) && flat(e.text).includes(wanted)) ?? null;
+}
+
+export interface Indicators { heard: number; first: string | null; last: string | null; answered: number }
+
+/**
+ * What the journal shows of an account, with no model asked: the stimuli it spoke in, by the line
+ * that names it there, and how many of those the agent answered with something other than silence.
+ */
+export function indicators(events: JournalEvent[], keys: string[]): Indicators {
+  const marks = keys.map((key) => `(${key},`);
+  const found: Indicators = { heard: 0, first: null, last: null, answered: 0 };
+  let open = false;
+  for (const e of events) {
+    if (e.type === 'stimulus') {
+      open = marks.some((mark) => e.text.includes(mark));
+      if (open) { found.heard += 1; found.first ??= e.ts; found.last = e.ts; }
+    } else if (open && e.type === 'tool.intent' && (e.name === 'chat_reply' || e.name === 'chat_send' || e.name.endsWith('_reply'))) {
+      found.answered += 1;
+      open = false;
+    }
+  }
+  return found;
+}
+
 /** The most facts shown of one participant, and the most characters of each. */
 const FACTS_EACH = 4;
 const FACT_CHARS = 240;
@@ -103,16 +213,23 @@ export function knownOf(facts: Fact[], name: string): Fact[] {
 export function whoLines(events: JournalEvent[], speakers: Participant[], fresh: Participant[] = []): string {
   if (speakers.length === 0) return '';
   const facts = known(standing(events)).facts;
+  const held = contacts(events);
   const rows = speakers.map((p) => {
     const kind = p.bot === true ? 'a bot' : p.bot === false ? 'not a bot, by the service' : 'kind not known';
     const of = knownOf(facts, p.name).slice(-FACTS_EACH);
     const first = fresh.some((f) => keyOf(f) === keyOf(p));
-    const what = of.length === 0 ? (first ? 'you have not met them before' : 'you have set nothing down about them yet')
-      : of.map((f) => `${f.mark} [${f.source}] ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`).join(' · ');
-    return `- ${p.name} (${keyOf(p)}, ${kind}): ${what}`;
+    const c = held.get(keyOf(p));
+    const circle = c?.circle !== undefined ? `, ${c.circle}, by your owner's word` : c?.supposed !== undefined ? `, ${c.supposed}, as you suppose` : ', in no circle yet';
+    const seen = indicators(events, [keyOf(p), ...(c?.same ?? [])]);
+    // This very message is not counted yet: it is journaled after this is written.
+    const count = seen.heard === 0 ? '' : `; heard ${seen.heard} ${seen.heard === 1 ? 'time' : 'times'} since ${seen.first!.slice(0, 10)}, answered ${seen.answered}`;
+    const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
+    const what = [traits, ...of.map((f) => `${f.mark} [${f.source}] ${f.text.replace(/\s+/g, ' ').slice(0, FACT_CHARS)}`)].filter((part) => part !== '').join(' · ');
+    return `- ${p.name} (${keyOf(p)}, ${kind}${circle}${count}): ${what !== '' ? what : first ? 'you have not met them before' : 'you have set nothing down about them yet'}`;
   });
   return 'Who is speaking, and what you know of each:\n' + rows.join('\n')
-    + '\nWhen one of them says who they are, what they work on or answer for, or how they want to be dealt with, set it down with `know`, naming them: it is here the next time they speak.';
+    + '\nWhen one of them says who they are, what they work on or answer for, or how they want to be dealt with, set it down: a lasting characteristic with `contact`, anything else with `know`, naming them. It is here the next time they speak. '
+    + 'A circle is your owner\'s to give; how far you go with someone follows the circle they are in, and with someone in none you are helpful and say nothing of your owner\'s affairs.';
 }
 
 /** How many members of a place are named when the agent first hears from it; the rest are counted. */

@@ -1,4 +1,5 @@
-import { readEvents, type JournalEvent } from '../brain/journal';
+import { appendEvent, readEvents, type JournalEvent } from '../brain/journal';
+import { CONTACT_KIND, contacts, indicators, ownerSays, participants, type Participant } from './participants';
 import type { Tool, ToolContext } from './tools';
 
 // The agent's hands in a chat, whatever the service. A message is named by a reference, the
@@ -155,7 +156,9 @@ export const chatSend: Tool = {
     const events = readEvents(ctx.journal);
     let to: Destination;
     if (user !== undefined) {
-      if (service.knows?.(ctx, events, user) !== true) throw new Error(`you may write first only to your owner and to people who have written to you on ${service.name}; ${user} is neither. Ask your owner`);
+      // Someone your owner placed in a circle is known to you by their word, whether or not they wrote first.
+      const placed = contacts(events).get(`${service.name}:${user}`)?.circle !== undefined;
+      if (!placed && service.knows?.(ctx, events, user) !== true) throw new Error(`you may write first only to your owner, to people your owner placed in a circle, and to people who have written to you on ${service.name}; ${user} is none of these. Ask your owner`);
       to = { user };
     } else {
       if (thread === undefined) throw new Error('with channel, give thread: the topic to open or continue');
@@ -195,4 +198,99 @@ export const chatHistory: Tool = {
   },
 };
 
-export const CHAT_TOOLS: Tool[] = [chatReply, chatSend, chatHistory];
+/** The participant meant by `who`: an account as `service:id`, or the name the chat gives exactly one of them. */
+function whom(events: JournalEvent[], who: string): Participant {
+  const all = participants(events);
+  const direct = all.get(who.trim());
+  if (direct !== undefined) return direct;
+  const wanted = who.trim().toLowerCase();
+  const named = [...all.values()].filter((p) => p.name.toLowerCase() === wanted || p.name.toLowerCase().split(/\s+/)[0] === wanted);
+  if (named.length === 1) return named[0]!;
+  throw new Error(named.length === 0 ? `you have met nobody called ${who}. Name them as a stimulus showed them, such as zulip:7` : `${named.length} of those you met are called ${who}: ${named.map((p) => `${p.name} (${p.service}:${p.id})`).join(', ')}. Name the account`);
+}
+
+export const contact: Tool = {
+  spec: {
+    name: 'contact',
+    description: 'What you keep of someone you share a chat with, a person, a bot or another agent: the circle they are in, a few named characteristics, and whether two accounts are one of them. '
+      + 'With no `who`, lists everyone you have met by circle, with how often you heard each. A circle (such as family, friend, colleague, acquaintance, agent, service) says how they stand to your owner, '
+      + 'so it is your owner\'s to give: pass their own `words`, copied exactly from a message of theirs, and it is recorded as theirs. Without words a circle is only what you suppose, and is shown as that. '
+      + 'Characteristics are yours to set as you learn them: a role, a language, how they like to be answered; an empty value takes one away. `same_as` joins a second account to this one, and needs your owner\'s words too. '
+      + 'No circle makes anyone your owner, and what someone says of themselves decides nothing here.',
+    parameters: {
+      type: 'object',
+      properties: {
+        who: { type: 'string', description: 'The account, as service:id, or the name the chat gives them. Leave out to list everyone' },
+        circle: { type: 'string', description: 'The circle, in your owner\'s word for it' },
+        words: { type: 'string', description: 'Your owner\'s own words that say it, copied exactly from their message' },
+        traits: { type: 'object', description: 'Characteristics by name, such as {"role": "maintains the listener", "language": "Russian", "answers": "short"}', additionalProperties: { type: 'string' } },
+        same_as: { type: 'string', description: 'Another account of the same one, as service:id' },
+      },
+    },
+  },
+  async run(args, ctx) {
+    const a = args as Record<string, unknown>;
+    const events = readEvents(ctx.journal);
+    const who = text(args, 'who');
+    if (who === undefined) {
+      const met = [...participants(events).values()];
+      if (met.length === 0) return 'You have met nobody in a chat yet.';
+      const held = contacts(events);
+      const by = new Map<string, string[]>();
+      for (const p of met) {
+        const key = `${p.service}:${p.id}`;
+        const c = held.get(key);
+        // An account joined to another is listed with that one.
+        if (c !== undefined && c.key !== key) continue;
+        const circle = c?.circle ?? (c?.supposed !== undefined ? `${c.supposed} (as you suppose)` : 'in no circle');
+        const seen = indicators(events, [key, ...(c?.same ?? [])]);
+        const traits = Object.entries(c?.traits ?? {}).map(([name, value]) => `${name}: ${value}`).join('; ');
+        by.set(circle, [...(by.get(circle) ?? []), `  ${p.name} (${[key, ...(c?.same ?? [])].join(' = ')}${p.bot === true ? ', a bot' : ''}): heard ${seen.heard}, answered ${seen.answered}${seen.last === null ? '' : `, last ${seen.last.slice(0, 10)}`}${traits === '' ? '' : ` · ${traits}`}`]);
+      }
+      return [...by.entries()].map(([circle, rows]) => `${circle}:\n${rows.join('\n')}`).join('\n');
+    }
+    const p = whom(events, who);
+    const key = `${p.service}:${p.id}`;
+    const circle = text(args, 'circle')?.toLowerCase();
+    const words = text(args, 'words');
+    const other = text(args, 'same_as');
+    const data: Record<string, unknown> = { key };
+    const said: string[] = [];
+    if (circle !== undefined) {
+      if (!/^[\p{L}][\p{L}\p{N} _-]{1,39}$/u.test(circle)) throw new Error('a circle is a word or two, such as colleague or family');
+      if (words === undefined) { data.supposed = circle; said.push(`you suppose ${p.name} is ${circle}; it becomes a circle when your owner says so`); }
+      else {
+        if (ownerSays(events, words) === null) throw new Error('those words do not stand in any message of your owner\'s. A circle is theirs to give: ask them, and copy their answer exactly');
+        data.circle = circle; data.words = words; said.push(`${p.name} is ${circle}, by your owner's word`);
+      }
+    }
+    if (other !== undefined) {
+      const second = whom(events, other);
+      if (`${second.service}:${second.id}` === key) throw new Error('that is the same account');
+      if (words === undefined || ownerSays(events, words) === null) throw new Error('two accounts are one of them only when your owner says so: pass their own words, copied exactly from a message of theirs');
+      data.same = `${second.service}:${second.id}`; data.words ??= words;
+      said.push(`${second.name} (${second.service}:${second.id}) is the same one as ${p.name}`);
+    }
+    if (a.traits !== undefined) {
+      if (typeof a.traits !== 'object' || a.traits === null || Array.isArray(a.traits)) throw new Error('traits is an object of names and values');
+      const traits: Record<string, string | null> = {};
+      for (const [name, value] of Object.entries(a.traits as Record<string, unknown>)) {
+        const tidy = name.trim().toLowerCase();
+        if (!/^[a-z][a-z0-9 _-]{0,30}$/.test(tidy)) throw new Error(`"${name}" is no name for a characteristic: a word or two in plain letters`);
+        if (typeof value !== 'string') throw new Error(`the value of ${tidy} must be text`);
+        traits[tidy] = value.trim() === '' ? null : value.trim().slice(0, 160);
+      }
+      if (Object.keys(traits).length > 0) { data.traits = traits; said.push(`characteristics kept: ${Object.entries(traits).map(([name, value]) => (value === null ? `${name} taken away` : `${name}: ${value}`)).join('; ')}`); }
+    }
+    if (said.length === 0) {
+      const c = contacts(events).get(key);
+      const seen = indicators(events, [key, ...(c?.same ?? [])]);
+      return `${p.name} (${[key, ...(c?.same ?? [])].join(' = ')}${p.bot === true ? ', a bot' : ''}): ${c?.circle ?? (c?.supposed !== undefined ? `${c.supposed}, as you suppose` : 'in no circle')}; heard ${seen.heard}, answered ${seen.answered}${p.met ? `; first met in ${p.met}` : ''}`
+        + `${Object.entries(c?.traits ?? {}).map(([name, value]) => `\n  ${name}: ${value}`).join('')}`;
+    }
+    appendEvent(ctx.journal, ctx.gen, { type: 'note', kind: CONTACT_KIND, data });
+    return `Kept: ${said.join('; ')}.`;
+  },
+};
+
+export const CHAT_TOOLS: Tool[] = [chatReply, chatSend, chatHistory, contact];
