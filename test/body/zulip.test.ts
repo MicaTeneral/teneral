@@ -153,7 +153,7 @@ test('identity failures preserve cursor; cache is reused and invalidated on cred
  key='second';await p.poll();expect(lookups).toBe(3);expect(notices).toHaveLength(0);
 });
 
-import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND } from '../../body/zulip';
+import { zulipReactionPoller, ZULIP_REACTION_SOURCE, ZULIP_QUEUE_CURSOR_KIND, type ZulipQueueCursor } from '../../body/zulip';
 
 test('Zulip reaction queue baselines history, emits add/remove, and checkpoints after delivery', async () => {
   const notices: Stimulus[] = [];
@@ -582,4 +582,51 @@ test('a connection that was down for a while is said to the agent once, with its
   await p.poll();
   expect(got[2]!.text).not.toContain('was down');
   expect(c.got).toHaveLength(0);
+});
+
+test('the first message from a stream brings its roster with it, once, and a roster that cannot be had holds nothing up', async () => {
+  const got: Stimulus[] = [];
+  const heard: string[] = [];
+  const pages: unknown[][] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99, full_name: 'Mica' }));
+    if (url.pathname === '/api/v1/users') return new Response(JSON.stringify({ members: [{ user_id: 7, full_name: 'Ann Lee', is_bot: false }, { user_id: 50, full_name: 'CI', is_bot: true }, { user_id: 99, full_name: 'Mica', is_bot: false }] }));
+    if (url.pathname === '/api/v1/streams/5/members') return new Response(JSON.stringify({ subscribers: [7, 50, 99, 1234] }));
+    if (url.pathname === '/api/v1/streams/6/members') return new Response('{}', { status: 403 });
+    if (url.pathname === '/api/v1/messages') return new Response(JSON.stringify({ messages: pages.shift() ?? [] }));
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  const p = zulipPoller({ baseline: false, credentials, events: () => [], send, conversations: true,
+    entered: (stream, members) => { heard.push(`${stream.name} ${JSON.stringify(members)}`); return members === null ? '' : `This is the first you hear from ${stream.name}.`; } }, s => got.push(s));
+  const msg = (id: number, stream_id: number, name: string) => ({ id, sender_id: 7, sender_full_name: 'Ann Lee', type: 'stream', stream_id, display_recipient: name, subject: 't', content: '@**Mica** hello', flags: ['mentioned'] });
+  pages.push([msg(1, 5, 'engineering'), msg(2, 5, 'engineering'), msg(3, 6, 'private-ish')]);
+  await p.poll();
+  // The agent itself is not among those it shares the stream with; someone the directory does not list is named by id.
+  expect(heard).toEqual(['#engineering [{"id":"7","name":"Ann Lee","bot":false},{"id":"50","name":"CI","bot":true},{"id":"1234","name":"user 1234"}]', '#private-ish null']);
+  expect(got).toHaveLength(3);
+  expect(got[0]!.text).toContain('This is the first you hear from #engineering.');
+  expect(got[1]!.text).not.toContain('first you hear');
+  expect(got[2]!.text).toContain('@**Mica** hello');
+});
+
+test('a queue registered for reactions alone is not taken up as the bell: after such a restart a new one is registered', async () => {
+  const narrow = { type: 'note', kind: ZULIP_QUEUE_CURSOR_KIND, data: { queueId: 'old', eventId: 4, site: 'https://example.test', email: 'mica@test' } } as JournalEvent;
+  const registered: string[] = [];
+  const send = (async (url: URL) => {
+    if (url.pathname === '/api/v1/users/me') return new Response(JSON.stringify({ user_id: 99 }));
+    if (url.pathname === '/api/v1/register') { registered.push('new'); return new Response(JSON.stringify({ queue_id: 'new', last_event_id: -1 })); }
+    return new Response(JSON.stringify({ events: [] }));
+  }) as unknown as typeof fetch;
+  const kept: ZulipQueueCursor[] = [];
+  const wide = zulipReactionPoller({ credentials, events: () => [narrow], send, wide: true, checkpoint: c => { kept.push(c); } }, () => {});
+  await wide.poll();
+  expect(registered).toEqual(['new']);
+  expect(kept[0]).toMatchObject({ queueId: 'new', wide: true });
+  // And the other way round: one that carries only reactions goes on with its own queue, and a wide one with a wide one.
+  const again = zulipReactionPoller({ credentials, events: () => [narrow], send }, () => {});
+  await again.poll();
+  expect(registered).toEqual(['new']);
+  const resumed = zulipReactionPoller({ credentials, events: () => [{ ...narrow, data: kept[0] } as JournalEvent], send, wide: true }, () => {});
+  await resumed.poll();
+  expect(registered).toEqual(['new']);
 });
