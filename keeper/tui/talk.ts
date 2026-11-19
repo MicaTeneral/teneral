@@ -26,7 +26,7 @@ import { Inline, Lifeline, terminal, type Term } from './screen';
 import { complete, entered, offer, type Typed } from './slash';
 import { clean, type Line, type Span } from './text';
 import { SPIN_MS, glyphs, type Glyphs } from './theme';
-import { beatOf, beatWords, cacheUse, contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type Look, type Offered } from './view';
+import { beatOf, beatWords, cacheUse, contextUse, elapsed, entryRows, gap, liveRows, shortDir, status, welcome, type BarAction, type Look, type Offered } from './view';
 
 // The talk client: `./one talk` at a terminal. The owner's lines go out through the owner channel
 // (keeper/owner.ts) and everything shown is read back from the journal, exactly as the plain
@@ -58,7 +58,7 @@ const MEMORY_BADGE_MS = 30_000;
 /** One thing a menu offers: what it is called, what it does, and the command line it stands for; null for a line that only says something. */
 interface MenuItem { name: string; about: string; run: string | null }
 /** One of the actions under the footer, with the menu it opens. */
-interface Action { label: string; note: string; hot: boolean; items: () => MenuItem[] }
+interface Action extends BarAction { items: () => MenuItem[] }
 const PENDING_SHOWN = 12;
 /** How many lines of a held-back turn of the agent's own are shown while it goes on. */
 const OWN_SHOWN = 4;
@@ -681,7 +681,7 @@ export class TalkScreen {
     const waits = this.mutationWaiting;
     return [
       {
-        label: 'mutate', note: waits === '' ? '' : waits.slice(0, 7), hot: waits !== '',
+        label: 'mutate', icon: 'mutate', tone: 'amber', note: waits === '' ? '' : waits.slice(0, 7), hot: waits !== '',
         items: () => [
           waits === '' ? { name: 'nothing waits', about: 'no mutation is waiting for your approval', run: null }
             : { name: `approve ${waits.slice(0, 7)}`, about: 'let the waiting mutation through; the agent is told to ask again', run: `/approve ${waits}` },
@@ -689,7 +689,7 @@ export class TalkScreen {
         ],
       },
       {
-        label: 'publish', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : '', hot: this.offersWaiting + this.offersUnsent > 0,
+        label: 'publish', icon: 'publish', tone: 'brand', note: this.offersWaiting > 0 ? `${this.offersWaiting} waiting` : this.offersUnsent > 0 ? `${this.offersUnsent} unsent` : '', hot: this.offersWaiting + this.offersUnsent > 0,
         items: () => {
           let standing: ReturnType<typeof publishing> = { waits: [], approved: [], sent: [], failed: 0 };
           try { standing = publishing(install(this.o.paths.root)); } catch { /* nothing to list */ }
@@ -702,9 +702,9 @@ export class TalkScreen {
           ];
         },
       },
-      { label: 'memory', note: '', hot: false, items: () => [{ name: 'memory', about: 'the agent\'s memory, and your hand on it', run: '/memory' }, { name: 'usage', about: 'what the requests to the model cost', run: '/usage' }] },
+      { label: 'memory', icon: 'memory', tone: 'accent', note: '', hot: false, items: () => [{ name: 'memory', about: 'the agent\'s memory, and your hand on it', run: '/memory' }, { name: 'usage', about: 'what the requests to the model cost', run: '/usage' }] },
       {
-        label: 'more', note: '', hot: false,
+        label: 'more', icon: 'more', tone: 'deep', note: '', hot: false,
         items: () => [
           { name: 'history', about: 'the earlier conversation that was read from the journal', run: '/history' },
           { name: 'tools', about: 'show or hide what each tool call returned', run: '/tools' },
@@ -744,7 +744,9 @@ export class TalkScreen {
       if (plain && key.kind === 'key' && (key.name === 'left' || key.name === 'right')) { this.bar = (this.bar + (key.name === 'left' ? -1 : 1) + actions.length) % actions.length; return; }
       if (plain && key.kind === 'key' && (key.name === 'enter' || key.name === 'down')) {
         const action = actions[this.bar]!;
-        this.menu = { title: action.label, items: action.items(), chosen: 0 };
+        const items = action.items();
+        // The keys begin on the first thing that can be done, not on a line that only says something.
+        this.menu = { title: action.label, items, chosen: Math.max(0, items.findIndex((item) => item.run !== null)) };
         return;
       }
       // Esc and Up go back to the input; so does anything typed or pasted, which then goes where it always went.
@@ -1207,10 +1209,9 @@ export class TalkScreen {
     // While the list of commands is open, Esc closes that and interrupts nothing, so the line does not say it would.
     const offered = this.offered();
     let list: Offered | null = null;
-    if (this.menu !== null) {
-      // A menu is drawn as the commands are: its items under the box, the keys under them.
-      list = { matches: this.menu.items.map((item) => ({ name: item.name, hint: '', about: item.about, plain: false })), chosen: this.menu.chosen, keys: [this.menu.title, 'Enter does it', 'Esc back', 'Up/Down choose'] };
-    } else if (offered !== null) {
+    const actions = this.actions();
+    const opened = this.bar === null ? undefined : actions[this.bar];
+    if (this.menu === null && offered !== null) {
       const chosen = offered.matches[offered.chosen]!;
       const runs = chosen.name === offered.typed.name || takes(chosen) === 'none';
       list = { matches: offered.matches, chosen: offered.chosen, keys: ['Tab completes', runs ? 'Enter runs' : 'Enter completes', 'Esc closes', 'Up/Down choose'] };
@@ -1257,7 +1258,9 @@ export class TalkScreen {
       context,
       hint,
       list,
-      bar: { actions: this.actions().map(({ label, note, hot }) => ({ label, note, hot })), chosen: this.bar },
+      bar: { actions: actions.map(({ label, note, hot, icon, tone }) => ({ label, note, hot, icon, tone })), chosen: this.bar },
+      menu: this.menu === null || opened === undefined ? null
+        : { title: this.menu.title, icon: opened.icon, tone: opened.tone, items: this.menu.items.map((item) => ({ name: item.name, about: item.about, ...(item.run === null ? { says: true } : {}) })), chosen: this.menu.chosen },
     }));
   }
 

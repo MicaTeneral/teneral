@@ -24,4 +24,4 @@
 │ ›                                                                           │
 ╰─────────────────────────────────────────────────────────────────────────────╯
  gpt-6.1-sol  not running  …/work/teneral     /help lists the keys and commands
- ›› mutate · publish · memory · more                               Down selects
+  ↻ mutate   ↑ publish   ◉ memory   ≡ more                          ↓  actions
