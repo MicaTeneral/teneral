@@ -8,7 +8,7 @@ import { TOKEN_FILE, api, githubRemote, saveToken, GitHubError } from '../../spe
 import { readEvents } from '../../brain/journal';
 import {
   SECTIONS, WAITING, approvePending, check, checkBranch, consent, hubOf, install, main, outletOf, ownSecrets, ownerCommand, pending, publish, publishing, readReport, readWitness,
-  scan, settings, sign, slugOf, speciesHead, speciesRef, retireStale, retiredText, withdrawOffer, witness,
+  scan, settings, sign, slugOf, speciesHead, speciesRef, speciesUpdate, retireStale, retiredText, withdrawOffer, witness,
 } from '../../species/offer';
 import { KEY_FILE, commitSigner, ensureKey, readKey, signCommits } from '../../species/offerkey';
 import * as github from '../../species/github';
@@ -503,6 +503,45 @@ t('an offer the species has moved past is not put before the owner: it cannot be
   expect(await main(['list'], w.root, (line) => listed.push(line), (line) => listed.push(line))).toBe(0);
   expect(listed.find((line) => line.startsWith(commit.slice(0, 12)))).toContain('retired: the species moved past it');
   expect(git(w.bare, 'for-each-ref', 'refs/heads/contrib')).toBe('');
+}, SLOW);
+
+t('/update says what the species brings that the lineage has not taken, and /update take is the owner telling the agent to take it; nothing is merged by the command', async () => {
+  const w = await world('ask');
+  const i = install(w.root);
+  // No lineage yet: nothing can be compared, and it says so.
+  expect(speciesUpdate(i)).toBeNull();
+  expect(ownerCommand(w.root, '/update')!.join(' ')).toContain('cannot be told here');
+  mkdirSync(join(w.root, '.teneral'), { recursive: true });
+  git(w.root, 'worktree', 'add', '-q', '-b', 'lineage/local', join(w.root, '.teneral', 'candidate'), 'origin/main');
+  expect(speciesUpdate(i)).toMatchObject({ name: 'origin/main', ahead: 0, changes: [] });
+  expect(ownerCommand(w.root, '/update')!.join(' ')).toContain('Nothing new: the agent\'s lineage holds all of origin/main');
+  expect(ownerCommand(w.root, '/update take')!.join(' ')).toContain('Nothing new');
+
+  // The species moves on at its home, twice, and this install hears of it.
+  const maintainer = individual(w.base, w.hub, 'maintainer');
+  writeFiles(maintainer, { 'BACKLOG.md': '# Backlog\n\n1. more\n' });
+  commitAll(maintainer, 'species: a first change');
+  writeFiles(maintainer, { 'BACKLOG.md': '# Backlog\n\n1. more\n2. and more\n' });
+  commitAll(maintainer, 'species: a second change');
+  pushMain(maintainer, w.hub);
+  git(w.root, 'fetch', '-q', 'origin');
+  const head = git(w.root, 'rev-parse', 'origin/main');
+  const lineage = git(w.root, 'rev-parse', 'lineage/local');
+  expect(speciesUpdate(i)).toMatchObject({ head, ahead: 2 });
+  const page = ownerCommand(w.root, '/update')!.join('\n');
+  expect(page).toContain('The species (origin/main) has 2 commits your agent has not taken');
+  expect(page).toMatch(/ {2}[0-9a-f]{7,} species: a second change\n {2}[0-9a-f]{7,} species: a first change/);
+  expect(page).toContain('/update take');
+  expect(ownerCommand(w.root, '/update now')!.join(' ')).toContain('/update shows what the species brings');
+  expect(ownerCommand(w.root, '/update take now')).toEqual(['/update, or /update take.']);
+
+  const told = (): string[] => readdirSync(i.owner).filter((name) => !name.startsWith('.') && statSync(join(i.owner, name)).isFile()).map((name) => readFileSync(join(i.owner, name), 'utf8'));
+  expect(existsSync(i.owner) ? told() : []).toEqual([]);
+  expect(ownerCommand(w.root, '/update take')!.join(' ')).toContain(`The agent was told to take origin/main at ${head.slice(0, 12)} (2 commits)`);
+  expect(told()).toHaveLength(1);
+  expect(told()[0]).toStartWith(`Take the species update: merge origin/main at ${head.slice(0, 12)} into your lineage.`);
+  // The command moved nothing: the lineage is where it was.
+  expect(git(w.root, 'rev-parse', 'lineage/local')).toBe(lineage);
 }, SLOW);
 
 t('/publish says how a change goes out, where each offer stands and what to type for it; with a commit it lets that offer go, or has one sent that never was', async () => {

@@ -1,5 +1,5 @@
 import {
-  closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync,
+  chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { identity } from '../body/envelope';
@@ -181,10 +181,32 @@ export function init(root: string): State {
   }
   linkModules(root, p.live);
   linkModules(root, p.candidate);
+  restoreKept(root, p.candidate);
   if (known) return known;
   const state: State = { current: head, previous: null };
   saveState(p, state);
   return state;
+}
+
+/**
+ * After `./one reset`: the credentials the agent before kept for its services (a chat's key, a
+ * board's token) were set aside in `.teneral/kept`, because the workspace they lived in went with
+ * the past. They go into the new workspace's own `.teneral/`, where the body looks for them, and
+ * the place they waited in is removed. A file already there is never replaced.
+ */
+function restoreKept(root: string, candidate: string): void {
+  const kept = join(root, '.teneral', 'kept');
+  if (!existsSync(kept)) return;
+  const home = join(candidate, '.teneral');
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  for (const name of readdirSync(kept)) {
+    const to = join(home, name);
+    if (!existsSync(to)) {
+      copyFileSync(join(kept, name), to);
+      chmodSync(to, 0o600);
+    }
+  }
+  rmSync(kept, { recursive: true, force: true });
 }
 
 /** Make the live worktree exactly `commit`: no other checkout, no local edits, no stray files. */

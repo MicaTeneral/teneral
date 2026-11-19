@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent, readEvents } from '../../brain/journal';
@@ -291,6 +291,27 @@ test('init reuses the lineage branch when it exists without its worktree', () =>
   git(dir, 'branch', 'lineage/local', seed);
   expect(init(dir)).toEqual({ current: seed, previous: null });
   expectInstalled(dir, seed);
+});
+
+test('init puts what a reset set aside for the new life into its workspace, replaces nothing there, and clears the place it waited in', () => {
+  const { dir, seed } = makeRepo({ 'body/main.ts': 'process.exit(0);\n' });
+  const kept = join(dir, '.teneral', 'kept');
+  mkdirSync(kept, { recursive: true });
+  writeFileSync(join(kept, 'zulip.json'), '{"api_key":"kept"}\n');
+  writeFileSync(join(kept, 'board-token'), 'kept token\n');
+  expect(init(dir)).toEqual({ current: seed, previous: null });
+  expectInstalled(dir, seed);
+  const home = join(paths(dir).candidate, '.teneral');
+  expect(readFileSync(join(home, 'zulip.json'), 'utf8')).toBe('{"api_key":"kept"}\n');
+  expect(readFileSync(join(home, 'board-token'), 'utf8')).toBe('kept token\n');
+  expect(statSync(join(home, 'zulip.json')).mode & 0o777).toBe(0o600);
+  expect(existsSync(kept)).toBe(false);
+  // A second reset's leavings never replace what the new life has since been given.
+  mkdirSync(kept);
+  writeFileSync(join(kept, 'zulip.json'), '{"api_key":"older"}\n');
+  init(dir);
+  expect(readFileSync(join(home, 'zulip.json'), 'utf8')).toBe('{"api_key":"kept"}\n');
+  expect(existsSync(kept)).toBe(false);
 });
 
 test('init puts back a worktree that was deleted after a complete init', () => {

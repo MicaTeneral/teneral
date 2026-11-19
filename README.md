@@ -215,8 +215,13 @@ Requires Docker and git. On Linux, `one` warns when Docker is installed through 
     ./one approve           # approve the mutation it asked for that changes something outside its body
     ./one setup             # choose another model provider, or sign in again
     ./one offer list        # what the agent wants to offer to the species; see "Offering a change to the species"
+    ./one reset             # begin again here as a newborn, on the species' newest code, with the same tokens
 
 Commit your changes before the first start: the stem creates its worktrees from `HEAD`.
+
+**Beginning again.** `./one reset` ends the life lived in a directory and makes room for a new one. The journal and the memory, the soul, the inbox, the lineage and everything else the agent made are moved into `.teneral/past/<time>/`, and the lineage's commits stay under the branch `past/<time>`; nothing is deleted. The code becomes the species' newest (`--keep-code` leaves it). Kept where they are: `.env`, the sign-ins and tokens in `.teneral/auth`, the install's id and signing key, and the credentials the agent kept for its services, which are the files in its workspace's `.teneral/` that only you can read. The next `./one up` is a birth. It asks before it does anything, and refuses before it moves anything when the checkout has uncommitted changes or the species cannot be fetched.
+
+**What the species brings.** The agent's own mutations and the species' new commits are both proposed under `mutate` in the row of actions in `./one talk`, and by `/update`. `/update take` is your word to the agent to merge the species into its lineage, test it and ask to mutate; what that changes outside its body waits for `/approve` like any mutation.
 
 The first `./one up` finds no `.env` and runs the setup: you choose a model provider, give it what it needs, and two test requests are made, one that must be answered in words and one that must come back as a tool call. Only when both work is `.env` written, and the agent starts. At a terminal the setup is a few full-screen pages: you choose with the arrow keys or a number, a key is typed unseen, the two tests show their progress, and the last page says what was written and where. `./one setup --plain` asks the same questions as lines of text. It also installs the project's two development dependencies once, which the checks on a mutation need. From a script, with no terminal to ask at, `./one up` says what is missing and exits with status 1.
 
