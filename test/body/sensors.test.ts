@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clock, clockMayTick, inbox, owner, ownerStimulus, terminal, type Stimulus } from '../../body/sensors';
+import { clock, clockMayTick, inbox, owner, ownerStimulus, routineClock, terminal, type Stimulus } from '../../body/sensors';
 import { appendEvent, readEvents } from '../../brain/journal';
 import { deliver, ENVELOPE_VERSION } from '../../body/envelope';
 import { interrupt, tell } from '../../keeper/owner';
@@ -58,8 +58,12 @@ test('clock emits on its interval until stopped', async () => {
   expect(got[0]!.source).toBe('clock');
   expect(got[0]!.text).toMatch(/^Clock tick at \d{4}-/);
   expect(got[0]!.text).not.toMatch(/no ?one is waiting/i);
-  expect(got[0]!.text).toContain('keep waiting');
-  for (const phrase of ['Advance queued commitments first', 'without new evidence', 'standing owner permission', 'at most three candidates and one chosen outcome', 'exploration budget', 'stop quietly', 'Do not queue recursive']) expect(got[0]!.text).toContain(phrase);
+  // A tick says what it is and how to end it with nothing; it sends nobody looking for work or at what waits.
+  for (const phrase of ['time of your own', 'Do what it names and no more', 'not looked at before its time', 'nothing is to be found to do', '[teneral: no reply]']) expect(got[0]!.text).toContain(phrase);
+  for (const phrase of ['discovery', 'candidates', 'initiative']) expect(got[0]!.text).not.toContain(phrase);
+  expect(routineClock(got[0]!.text)).toBe(true);
+  expect(routineClock('Clock tick at 2026-11-19T10:13:39.847Z. Your owner has not written since their last message. One bounded follow-up')).toBe(true);
+  expect(routineClock('It is late.')).toBe(false);
   await new Promise((r) => setTimeout(r, 30));
   expect(got.length).toBe(count);
 });

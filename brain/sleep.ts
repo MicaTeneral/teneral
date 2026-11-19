@@ -3,7 +3,7 @@ import { DEFAULT_BUDGET, buildMessages } from './memory';
 import { DEFAULT_LOGBOOK_CHARS, MEMORY_MARK, entries, pinnedAmong, sizeOf, type Entry } from './logbook';
 import { episodes, thin, type Episode } from './episodes';
 import { standing } from './owned';
-import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type IntentionData, type Source } from './known';
+import { DONE_KIND, FACT_KIND, INTENTION_KIND, SOURCES, byMark, known, type FactData, type Source } from './known';
 import { EXAM_KIND } from './exam';
 import { documentOf } from './recall';
 import { EPISODE_KIND, MERGE_KIND, OUTCOMES, QUARANTINE_KIND, remembered, voicesOf, type MemoryData, type MergeData, type Outcome, type QuarantineData } from './remembered';
@@ -37,7 +37,8 @@ import { reflect } from './agenda';
 // made into one stay in the journal, and `recall` finds them.
 //
 // With the memory the agent may set down what it learned that will hold beyond the episode, and
-// what it took on to do later (brain/known.ts). Those are asked for sparingly: a fact is worth
+// close what the episode settled of what it meant to do (brain/known.ts). What it takes on is not
+// set down here but when it is taken on (brain/agenda.ts). Facts are asked for sparingly: a fact is worth
 // keeping only if it would change what the agent does some later week, and its own remarks are
 // not facts. What it sets down is checked line by line, and a line that is not in form is left
 // out; the memory itself is kept all the same.
@@ -142,7 +143,7 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     'Outcome is how the main thing asked for in this stretch stood when the stretch ended: done when it was finished, failed when it was tried and did not work, '
     + 'dropped when it was given up or set aside, open only when work on it was left unfinished and you meant to go on with it. '
     + 'Your life going on is no reason to say open: most stretches end with something done.',
-    'After the memory you may add up to four lists, each only when there is something for it.',
+    'After the memory you may add up to three lists, each only when there is something for it.',
     'Facts:\n- [owner] <one thing that holds, in a sentence that can be understood on its own>\n'
     + 'A fact is worth a line only if knowing it would change what you do some later week: who your owner is and what they want, how they want things done, '
     + 'where things are, what turned out to be true about the world you work in. What you did belongs in the memory, not here, and your own opinions are not facts. '
@@ -150,7 +151,6 @@ export function question(episode: Episode, events: JournalEvent[], chars: number
     + 'read: it stood in something from outside, such as a page or a message from someone else; inferred: you concluded it). '
     + 'When a fact takes the place of one you already hold, listed above with its mark, name that mark: - [owner] (replaces F1a2b3c4) <the fact as it holds now>\n'
     + 'When a fact is about a person, who they are, what they answer for, where they are reached, name them, so that you know later whom to ask what: - [seen] (about Ivan Petrov) <the fact>',
-    'Intentions:\n- [YYYY-MM-DD] <something you took on to do later and have not done; the day it is due>\n- [] <the same, when no day was named>',
     'Done:\n- I1a2b3c4 <how it ended>\n'
     + 'For each thing you meant to do, listed above with its mark, that this stretch shows was done or given up: its mark, and in a few words how it ended. '
     + 'An intention left open stays in front of you for good, so close every one this stretch settles.',
@@ -329,9 +329,10 @@ export async function sleep(d: SleepDeps): Promise<Slept> {
           data: { text: fact.text, source: fact.source, episode: episode.first, ...(replaces.length > 0 ? { replaces } : {}), ...(fact.about === undefined ? {} : { about: fact.about }) } satisfies FactData,
         });
       }
-      for (const intention of intentions) {
-        appendEvent(d.journal, d.gen, { type: 'note', kind: INTENTION_KIND, data: { ...intention, episode: episode.first } satisfies IntentionData });
-      }
+      // What the stretch says was taken on is not set down from here. By the time a stretch is
+      // remembered its promises are kept, or already held: they are set down when they are made
+      // (`settle` in brain/agenda.ts, and the agent's own tools). A list an older habit still writes is passed over.
+      void intentions;
       // Only an intention that was open then, named by the mark it was shown with, is closed.
       for (const settled of done) {
         const open = held.intentions.find((i) => i.mark === settled.mark);

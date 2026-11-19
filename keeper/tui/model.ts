@@ -1,9 +1,9 @@
 import { OWNER_REASON } from '../back';
 import { eventName, type JournalEvent } from '../../brain/journal';
-import { AT_REST, track, type Turn } from '../talk';
+import { AT_REST, gist, track, type Turn } from '../talk';
 import { splitMarkers } from './images';
 import { clean } from './text';
-import { quietReply } from '../../brain/quiet';
+import { QUIET_REPLY, quietReply } from '../../brain/quiet';
 import { routineClock } from '../../body/sensors';
 
 // What the talk client knows, built from journal events one at a time: the transcript as a list
@@ -44,7 +44,11 @@ const NOTICE_CHARS = 6_000;
 /** The most entries kept. Older ones are dropped; they are in the journal. */
 export const ENTRY_LIMIT = 2_000;
 
-export type Entry = { id: number; rev: number } & (
+export type Entry = {
+  id: number; rev: number;
+  /** Part of a turn nobody asked for that is still going on: not final until the turn is, when it is kept or folded into one line. */
+  open?: true;
+} & (
   /**
    * The owner's words. `held`: typed here and kept by this client while the agent is in the
    * middle of a step: not sent, and the owner's to take back. `pending`: sent from here and not
@@ -76,7 +80,7 @@ export type Entry = { id: number; rev: number } & (
   | { kind: 'page'; title: string; text: string[]; tools?: Extract<Entry, { kind: 'tool' }>[] }
 );
 
-type Body<K extends Entry['kind']> = Omit<Extract<Entry, { kind: K }>, 'id' | 'rev'>;
+type Body<K extends Entry['kind']> = Omit<Extract<Entry, { kind: K }>, 'id' | 'rev' | 'open'>;
 
 /** Where the agent stands, as far as the journal shows. */
 export interface Standing {
@@ -251,10 +255,28 @@ const tailOf = (text: string, limit: number): string => (text.length > limit ? t
 export const inQueue = (e: Entry): boolean => e.kind === 'owner' && (e.held === true || e.pending === true || e.queued === true);
 
 /** Whether an entry may still change: a line the agent has not read yet, a tool call without its result. */
-export const unfinished = (e: Entry): boolean => inQueue(e) || (e.kind === 'tool' && e.status === 'running');
+export const unfinished = (e: Entry): boolean => inQueue(e) || e.open === true || (e.kind === 'tool' && e.status === 'running');
+
+/** What a stimulus is called in the transcript. */
+function arrivalLabel(source: string): string {
+  if (source.startsWith('agent:')) return `from ${cut(source.slice(6), 40)}`;
+  return source.startsWith('owner:') ? `from you, on ${cut(source.slice(6), 30)}` : cut(source, 40);
+}
 
 export class Transcript {
   readonly entries: Entry[] = [];
+  /**
+   * The turn in progress when nothing of the owner's is in it: where its entries begin, and what
+   * woke it. Such a turn that ends with nothing to say is folded into one line, and its thoughts
+   * are not shown at all: they are the model talking to itself about a wake nobody asked for.
+   */
+  private own: { first: Entry | null; label: string } | null = null;
+
+  /** The turn in progress is the owner's to see after all, or is over and said something: its entries are final. */
+  private release(): void {
+    this.own = null;
+    for (const e of this.entries) if (e.open) { delete e.open; e.rev += 1; }
+  }
   /** Whether entries were dropped from the start, or the journal was not read from its beginning. */
   truncated = false;
   private serial = 0;
@@ -266,7 +288,7 @@ export class Transcript {
 
   push<K extends Entry['kind']>(body: Body<K> & { kind: K }): Extract<Entry, { kind: K }> {
     this.serial += 1;
-    const entry = { ...body, id: this.serial, rev: 0 } as unknown as Extract<Entry, { kind: K }>;
+    const entry = { ...body, id: this.serial, rev: 0, ...(this.own !== null ? { open: true as const } : {}) } as unknown as Extract<Entry, { kind: K }>;
     this.entries.push(entry);
     if (this.entries.length > ENTRY_LIMIT) {
       this.truncated = true;
@@ -338,6 +360,8 @@ export class Transcript {
         const source = flat(clean(asText(f.source)));
         const text = clean(asText(f.text));
         if (source === 'terminal') {
+          // The owner is in this turn now: all of it is theirs to see.
+          this.release();
           // Only the owner's lines name images: what anyone else wrote in that form is text.
           const said = splitMarkers(text);
           let own = false;
@@ -355,16 +379,35 @@ export class Transcript {
           if (queued) this.held.push(line);
         } else if (source === 'birth') {
           this.push({ kind: 'quiet', label: 'the birth letter', text: '' });
-        } else if (source.startsWith('agent:')) {
-          this.push({ kind: 'quiet', label: `from ${cut(source.slice(6), 40)}`, text: cut(flat(text), 400) });
         } else {
-          this.push({ kind: 'quiet', label: cut(source, 40), text: cut(flat(text), 400) });
+          if (!before.turn.busy) this.own = { first: null, label: arrivalLabel(source) };
+          const line = this.push({ kind: 'quiet', label: arrivalLabel(source), text: cut(flat(gist(source, text)), 400) });
+          if (this.own !== null && this.own.first === null) this.own.first = line;
         }
         return;
       }
       case 'assistant': {
         const text = clean(asText(f.text)).trim();
         const reasoning = typeof f.reasoning === 'string' ? clean(f.reasoning).trim() : '';
+        const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
+        if (this.own !== null && calls === 0) {
+          const { first: began, label } = this.own;
+          this.release();
+          // By the entry, not by its place: older entries may have been dropped from the start meanwhile.
+          const from = began === null ? -1 : this.entries.indexOf(began);
+          if (text === QUIET_REPLY && from !== -1) {
+            // It was woken, looked, and had nothing to say: one line says so, and a tick that did nothing at all leaves none.
+            const gone = this.entries.splice(from);
+            const did = gone.filter((e) => e.kind === 'tool').length;
+            const first = gone.find((e) => e.kind === 'quiet');
+            const others = gone.filter((e) => e.kind === 'quiet').length - 1;
+            if (did > 0 || label !== 'clock') {
+              const what = first?.kind === 'quiet' && first.text !== '' ? `${first.text}${others > 0 ? ` (+${others} more)` : ''}` : '';
+              this.push({ kind: 'quiet', label: `${label}, nothing to say${did > 0 ? ` after ${did} ${did === 1 ? 'step' : 'steps'}` : ''}`, text: what });
+            }
+            return;
+          }
+        }
         if (reasoning !== '' && !text.startsWith(NOT_FROM_MODEL)) {
           this.push({ kind: 'reasoning', text: reasoning.length > REASONING_CHARS ? `${reasoning.slice(0, REASONING_CHARS)} [...]` : reasoning });
         }
@@ -374,7 +417,6 @@ export class Transcript {
           return;
         }
         const shown = text.length > REPLY_CHARS ? `${text.slice(0, REPLY_CHARS)}\n\n[... ${text.length - REPLY_CHARS} more characters are in the journal]` : text;
-        const calls = Array.isArray(f.toolCalls) ? f.toolCalls.length : 0;
         this.push({ kind: 'reply', text: shown, first: !before.spoke, ...(calls > 0 ? { aside: true } : {}) });
         return;
       }
@@ -399,6 +441,7 @@ export class Transcript {
         return;
       }
       case 'turn.interrupted':
+        this.release();
         // The owner stopped the turn, from this terminal or another.
         this.push({ kind: 'quiet', label: 'interrupted by you', text: '' });
         return;
@@ -409,6 +452,7 @@ export class Transcript {
         this.push({ kind: 'quiet', label: `species commit ${shortSha(f.commit)} accepted by you`, text: '' });
         return;
       case 'generation.started':
+        this.release();
         // A new process: whatever was running in the last one will never report.
         for (const { entry } of this.tools.values()) Object.assign(entry, { status: 'cut short', rev: entry.rev + 1 });
         this.tools.clear();

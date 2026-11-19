@@ -783,7 +783,7 @@ test('a clock turn that only calls `true` is settled quietly on the second such 
   expect(JSON.stringify(s.seen[1])).toContain('A turn ends with a reply that has no tool call');
 });
 
-test('outside a clock turn the stop is visible, and a real call between no-ops resets the count', async () => {
+test('at the owner terminal the stop is visible, and a real call between no-ops resets the count', async () => {
   const s = setup([
     { text: '', toolCalls: [bash('a')] },
     { text: '', toolCalls: [bash('b', 'echo hi')] },
@@ -793,4 +793,12 @@ test('outside a clock turn the stop is visible, and a real call between no-ops r
   expect(await runTurn(s.deps)).toBe('done');
   expect(s.seen.length).toBe(4);
   expect(readEvents(s.journal).at(-1)).toMatchObject({ type: 'assistant', text: NO_OP_REPLY });
+});
+
+test('only a line typed at the owner\'s terminal must be answered in words; any other wake may end quietly', async () => {
+  const { mayStayQuiet } = await import('../../brain/loop');
+  expect(mayStayQuiet('terminal')).toBe(false);
+  expect(mayStayQuiet('birth')).toBe(false);
+  expect(mayStayQuiet(undefined)).toBe(false);
+  for (const source of ['clock', 'work', 'agent:zulip', 'agent:github', 'owner:zulip']) expect(mayStayQuiet(source)).toBe(true);
 });

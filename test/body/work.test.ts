@@ -107,3 +107,30 @@ test('an owner interrupt holds queued work until something arrives', () => {
   expect(heldByInterrupt([t('stimulus'), t('turn.interrupted'), t('note')])).toBe(true);
   expect(heldByInterrupt([t('turn.interrupted'), t('stimulus')])).toBe(false);
 });
+
+test('a commitment is named by its mark or its words; a mark that names nothing never becomes a commitment of its own', async () => {
+  const s = setup();
+  try {
+    await work.run({ status: 'queued', task: 'Publish the signed offer', next: 'Run the check', outcome: 'A pull request is open' }, s.ctx);
+    const mark = item(s.journal, 'Publish the signed offer')!.mark;
+    expect(await work.run({ status: 'waiting', task: mark, next: "The owner's approval of the commit" }, s.ctx)).toContain('Nothing looks at it on a schedule');
+    const held = known(readEvents(s.journal)).intentions;
+    expect(held).toHaveLength(1);
+    expect(held[0]!.work).toMatchObject({ status: 'waiting', next: "The owner's approval of the commit", outcome: 'A pull request is open' });
+    expect(held[0]!.work!.checkAt).toBeUndefined();
+    await expect(work.run({ status: 'waiting', task: 'I0000zzzz', next: 'Something' }, s.ctx)).rejects.toThrow(`no open commitment has the mark I0000zzzz. Open: ${mark}`);
+    expect(known(readEvents(s.journal)).intentions).toHaveLength(1);
+
+    // Only what nobody will announce gets a time to look again.
+    const before = Date.now();
+    expect(await work.run({ status: 'waiting', task: mark, next: 'The nightly build', check: 45 }, s.ctx)).toContain('offered it again in 45 minutes');
+    const checkAt = item(s.journal, 'Publish the signed offer')!.work!.checkAt!;
+    expect(checkAt).toBeGreaterThanOrEqual(before + 45 * 60_000);
+    expect(checkAt).toBeLessThanOrEqual(Date.now() + 45 * 60_000);
+    await expect(work.run({ status: 'waiting', task: mark, next: 'x', check: 0 }, s.ctx)).rejects.toThrow('check is minutes from now');
+    // Ready again: the time to look is no part of a queued state.
+    await work.run({ status: 'queued', task: mark, next: 'Publish it' }, s.ctx);
+    expect(item(s.journal, 'Publish the signed offer')!.work!.checkAt).toBeUndefined();
+    expect(known(readEvents(s.journal)).intentions[0]!.work!.at).toBeDefined();
+  } finally { rmSync(s.dir, { recursive: true }); }
+});

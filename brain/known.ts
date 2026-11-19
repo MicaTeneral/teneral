@@ -107,6 +107,13 @@ export interface WorkState {
   attempts: number;
   /** Milliseconds since epoch: when an automatic resumption may be offered, not a calendar due date. */
   resumeAt: number;
+  /**
+   * Of what waits: milliseconds since epoch at which it is worth looking again. Absent, it waits for
+   * something that arrives by itself (the owner's word, a notification) and is not looked at on a schedule.
+   */
+  checkAt?: number;
+  /** When this state was recorded: the time of the note that holds it. Worked out, never stored. */
+  at?: string;
   outcome?: string;
   recovery?: string;
   evidence?: string;
@@ -142,6 +149,7 @@ function workState(d: Record<string, unknown>): WorkState | undefined {
   const w = (base !== undefined && typeof base === 'object' && base !== null ? base : d) as Record<string, unknown>;
   if ((w.status !== 'queued' && w.status !== 'waiting') || !short(w.next, 4000) || !Number.isSafeInteger(w.attempts) || (w.attempts as number) < 0) return undefined;
   const state: WorkState = { status: w.status, next: w.next as string, attempts: w.attempts as number, resumeAt: Number.isFinite(w.resumeAt) ? w.resumeAt as number : 0 };
+  if (w.status === 'waiting' && Number.isFinite(w.checkAt) && (w.checkAt as number) > 0) state.checkAt = w.checkAt as number;
   for (const key of ['outcome', 'recovery', 'evidence'] as const) if (w[key] !== undefined) {
     if (!short(w[key])) return undefined;
     state[key] = w[key] as string;
@@ -187,14 +195,14 @@ export function known(events: JournalEvent[]): Known {
         ...(origin === undefined ? {} : { origin }), ...(unsure ? { unsure: true as const } : {}),
         ...((origin === 'ask' || unsure) && text(d.to) ? { to: d.to.trim().slice(0, 200) } : {}),
         ...(typeof d.due === 'string' && DAY.test(d.due) ? { due: d.due } : {}), ...(text(d.episode) ? { episode: d.episode } : {}),
-        ...(workState(d) === undefined ? {} : { work: workState(d) }),
+        ...(workState(d) === undefined ? {} : { work: { ...workState(d)!, at: e.ts } }),
       });
     } else if (e.kind === WORK_KIND) {
       const item = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
       const work = workState(d);
       // A late progress note must not reopen a commitment after `done` (including a same-tick
       // scheduler checkpoint). Its evidence remains in the journal, but it is no longer runnable.
-      if (item !== undefined && work !== undefined && item.ended === undefined) item.work = work;
+      if (item !== undefined && work !== undefined && item.ended === undefined) item.work = { ...work, at: e.ts };
     } else if (e.kind === ALLOWED_KIND) {
       const idea = typeof d.intention === 'string' ? intentions.get(d.intention) : undefined;
       if (idea !== undefined && idea.unsure === true && text(d.words)) {
@@ -262,7 +270,8 @@ export function knownText(held: Pick<Known, 'facts' | 'intentions'>, today: stri
     for (const i of todo) {
       if (own.includes(i) && !shown.has(i.id)) continue;
       const due = i.due === undefined ? '' : i.due <= today ? ` [due ${i.due}, which has come]` : ` [due ${i.due}]`;
-      const progress = i.work === undefined ? '' : ` [${i.work.status}; next: ${i.work.next.replace(/\s+/g, ' ').slice(0, 300)}]`;
+      const again = i.work?.status !== 'waiting' ? '' : i.work.checkAt === undefined ? ', until what it waits for arrives' : `, to look again ${new Date(i.work.checkAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+      const progress = i.work === undefined ? '' : ` [${i.work.status}${again}; ${i.work.status === 'waiting' ? 'for' : 'next'}: ${i.work.next.replace(/\s+/g, ' ').slice(0, 300)}]`;
       lines.push(`${i.mark}${i.origin === 'own' ? (i.allowed === undefined ? ' [your own idea]' : ' [your own idea, your owner said yes]') : ''}${due}${progress} ${i.text}`);
       if (i.work !== undefined) for (const key of ['outcome', 'recovery', 'evidence'] as const) {
         const value = i.work[key];

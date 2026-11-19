@@ -1,14 +1,49 @@
-import { idleTicks, offered, reportAsk, toAsk } from '../brain/agenda';
+import { followUps, idleTicks, offered, reportAsk, toAsk } from '../brain/agenda';
 import { known, type Known } from '../brain/known';
 import { needsTurn } from '../brain/memory';
-import { standing } from '../brain/owned';
+import { fromOwner, standing } from '../brain/owned';
+import { QUIET_REPLY, ROUND_LIMIT_REPLY } from '../brain/quiet';
 import type { JournalEvent } from '../brain/journal';
 import { clockText, type Stimulus } from '../body/sensors';
+
+// The heart decides what happens between turns. Two rules shape it.
+//
+// What a turn leaves behind is settled at once, while it is fresh: one short request that asks
+// what remains of the work, queues the step that can be taken now and records what waits
+// (`settle` in brain/agenda.ts). That is the end of the turn's own work, not housekeeping.
+//
+// Everything else the agent does for itself waits for rest: forming memories, making them into
+// wider ones, looking ahead, and the clock's ticks that offer time of its own. Rest begins when
+// the owner has said nothing for a while. Until then nothing of the agent's own stands between
+// the owner and an answer, and nothing of it is paid for in the middle of a conversation.
 
 export type Beat = 'turn' | 'reflect' | 'remember' | 'pulse' | 'wait';
 export interface HeartState { look: boolean; pulse: boolean }
 export const heartCommand = (line: string): boolean => line.trim() === '/heart';
 
+/** How long after the owner's last word rest begins, unless the owner sets TENERAL_REST_MINUTES. */
+export const REST_MINUTES = 10;
+/** This many episodes waiting to be remembered are remembered without waiting for rest: memory must not fall behind a long conversation. */
+const BACKLOG = 4;
+/** The agent's own tools for its agenda: a turn that used one has kept its own account. */
+const AGENDA_TOOLS = new Set(['work', 'intend', 'done', 'allowed']);
+
+/**
+ * Milliseconds until rest begins: 0 when the agent is at rest. The owner's last word is what
+ * counts, on whatever channel it came; other people's messages and the agent's own turns do not
+ * put rest off, or a busy inbox would mean it never remembers anything.
+ */
+export function restIn(events: JournalEvent[], now: number, restMs: number): number {
+  const last = events.findLast(e => e.type === 'stimulus' && fromOwner(e.source));
+  return last === undefined ? 0 : Math.max(0, Date.parse(last.ts) + restMs - now);
+}
+
+/**
+ * Whether the turn that has just ended is worth settling. Not a turn of the agent's own time,
+ * which is told what to do with its agenda already. Not one the owner stopped, one that ended
+ * with nothing to say, or one that only talked with someone who is not the owner. And not one in
+ * which the agent kept its agenda itself, unless the limit of rounds stopped it mid-way.
+ */
 export function afterTurn(state: HeartState, events: JournalEvent[], enabled = true, from?: number): void {
   if (!enabled) return;
   // A direct caller supplies the complete turn by default; body/main snapshots its start before
@@ -19,15 +54,18 @@ export function afterTurn(state: HeartState, events: JournalEvent[], enabled = t
   const recent = events.slice(from);
   const ordinary = recent.findLastIndex(e => e.type === 'stimulus' && e.source !== 'clock' && e.source !== 'work');
   if (ordinary < 0) return;
-  if (!recent.slice(ordinary + 1).some(e => e.type === 'turn.interrupted')) state.look = true;
+  if (recent.slice(ordinary + 1).some(e => e.type === 'turn.interrupted')) return;
+  const said = recent.findLast(e => e.type === 'assistant');
+  if (said?.type !== 'assistant' || said.text.trim() === QUIET_REPLY) return;
+  const cut = said.text === ROUND_LIMIT_REPLY;
+  const calls = recent.flatMap(e => e.type === 'tool.intent' ? [e.name] : []);
+  if (!cut && calls.some(name => AGENDA_TOOLS.has(name))) return;
+  const owners = recent.some(e => e.type === 'stimulus' && fromOwner(e.source));
+  if (cut || owners || calls.length > 0) state.look = true;
 }
+/** Something the agent can take up now by itself: a ready step, an idea of its own, or a question not yet put. */
 export function pulseNeeded(held: Known, now: number): boolean {
   return held.intentions.some(i => !i.waits && (i.work?.status === 'queued' || i.origin === 'own')) || toAsk(held, now).length > 0;
-}
-/** A reflection may add nothing new even though an earlier promise still has a concrete next
- * step. Give that step one bounded look instead of silently waiting for a heartbeat. */
-export function followUpNeeded(held: Known): boolean {
-  return pulseNeeded(held, Date.now()) || held.intentions.some(i => !i.waits && i.work?.status === 'waiting');
 }
 export function agendaFor(events: JournalEvent[], now = Date.now(), reportMs?: number): string {
   const current = standing(events), held = known(current);
@@ -41,39 +79,51 @@ export interface HeartDeps {
   /** No idle work while the individual has not written its first soul and met its owner. */
   born: () => boolean;
   emit: (s: Stimulus) => void;
-  reflect: () => Promise<unknown>;
+  /** Settles the turn that has just ended (brain/agenda.ts). */
+  settle: () => Promise<unknown>;
+  /** One piece of the work of rest: a memory, a wider memory, a look ahead. False when there was none to do. */
   remember: () => Promise<boolean>;
+  /** How many episodes wait to be remembered. */
+  backlog?: () => number;
   onError: (error: unknown) => void;
   now?: () => number;
+  /** Milliseconds of the owner's silence after which rest begins. */
+  restMs?: number;
 }
 
-/** Chooses one bounded idle activity. Incoming work is checked before and after every request. */
+/** Chooses one bounded activity between turns. Incoming work is checked before and after every request. */
 export class Heart {
   private state: HeartState = { look: false, pulse: false };
   constructor(private d: HeartDeps) {}
+  private now(): number { return this.d.now?.() ?? Date.now(); }
   requestPulse(): void { this.state.pulse = true; }
   completed(events: JournalEvent[], enabled = true, from?: number): void { afterTurn(this.state, events, enabled, from); }
+  /** Milliseconds until rest begins, 0 at rest: how long the body may sleep before asking again. */
+  restIn(): number { return restIn(standing(this.d.events()), this.now(), this.d.restMs ?? REST_MINUTES * 60_000); }
   async next(): Promise<Beat> {
     if (needsTurn(standing(this.d.events()))) return 'turn';
     // An empty soul means the birth dialogue is still under way. Do not replace it with
     // reflection, agenda discovery or autonomous work, even when this heart was already asked.
     if (!this.d.born()) { this.state = { look: false, pulse: false }; return 'wait'; }
     if (this.state.pulse) {
+      // The owner asked for the agenda by hand: that is not held back for rest.
       this.state.pulse = false;
-      this.d.emit(agendaPulse(this.d.events(), this.d.now?.()));
+      this.d.emit(agendaPulse(this.d.events(), this.now()));
       return 'pulse';
     }
     if (this.state.look) {
       this.state.look = false;
-      if (needsTurn(standing(this.d.events()))) return 'turn';
-      try {
-        await this.d.reflect();
-        const after = standing(this.d.events());
-        if (followUpNeeded(known(after))) this.d.emit(agendaPulse(after, this.d.now?.()));
-      } catch (error) { this.d.onError(error); }
+      try { await this.d.settle(); } catch (error) { this.d.onError(error); }
+      // A step it named is queued, and the work sensor wakes it for that: no tick is made up here.
       return 'reflect';
     }
-    if (await this.d.remember()) return 'remember';
-    return 'wait';
+    if (this.restIn() > 0 && (this.d.backlog?.() ?? 0) < BACKLOG) return 'wait';
+    const before = standing(this.d.events());
+    const had = pulseNeeded(known(before), this.now()) || followUps(known(before), this.now()).length > 0;
+    if (!(await this.d.remember())) return 'wait';
+    // A look ahead may have set down something that can be begun: offer it now, not at the next tick.
+    const after = standing(this.d.events());
+    if (!had && !needsTurn(after) && this.restIn() === 0 && pulseNeeded(known(after), this.now())) this.d.emit(agendaPulse(after, this.now()));
+    return 'remember';
   }
 }

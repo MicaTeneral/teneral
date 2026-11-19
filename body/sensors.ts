@@ -63,18 +63,15 @@ export function clockMayTick(events: JournalEvent[], soulDir: string): boolean {
 }
 
 export function clockText(date: Date): string {
-  return `Clock tick at ${date.toISOString()}. Your owner has not written since their last message. ` +
-    'Advance queued commitments first. For a task blocked on an answer, keep waiting; do not retry it without new evidence. ' +
-    'If no work is queued and standing owner permission allows initiative, use one bounded agenda discovery pass from existing context: at most three candidates and one chosen outcome, with evidence, authority and an exploration budget. Otherwise stop quietly. Do not queue recursive work-finding tasks. ' +
-    `When you decide there is nothing to say or do, answer exactly ${QUIET_REPLY} on this clock turn: it settles the tick without adding a visible reply.`;
+  return `Clock tick at ${date.toISOString()}. This is time of your own, and what it holds follows. ` +
+    'Do what it names and no more; something that waits is not looked at before its time, and nothing is to be found to do. ' +
+    `When there is nothing to say, answer exactly ${QUIET_REPLY}: it settles the tick without a visible reply.`;
 }
 
-/** Exact routine heartbeat, not any clock stimulus carrying a substantive query. */
+/** A tick of the clock, by its opening words: this generation's or an older one's, whatever agenda follows them. */
 export function routineClock(text: string): boolean {
-  const timestamp = /^Clock tick at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\. Your owner has not written since their last message\./.exec(text)?.[1];
-  if (!timestamp) return false;
-  const date = new Date(timestamp);
-  return !Number.isNaN(date.getTime()) && text === clockText(date);
+  const timestamp = /^Clock tick at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\. /.exec(text)?.[1];
+  return timestamp !== undefined && !Number.isNaN(new Date(timestamp).getTime());
 }
 
 /**

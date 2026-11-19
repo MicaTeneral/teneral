@@ -9,11 +9,16 @@ export function zulipTypingTarget(e?: Extract<JournalEvent, { type: 'stimulus' }
   const first = e.text.split('\n', 1)[0];
   // Old arrivals before the typed-private/mention distinction have no route: fail silent rather
   // than guessing a recipient from history or a name in the content.
-  if (!/^Zulip (private|mention) [1-9][0-9]*$/.test(first ?? '')) return;
-  const line = e.text.split('\n')[2];
-  let m: Record<string, unknown>;
-  try { m = JSON.parse(line ?? ''); } catch { return; }
-  if (!m || typeof m !== 'object' || Array.isArray(m)) return;
+  if (!/^Zulip (private|mention|stream) [1-9][0-9]*$/.test(first ?? '')) return;
+  const lines = e.text.split('\n').slice(2);
+  // Ambient traffic is batched: use its last complete message, so typing stays in that exact topic.
+  let m: Record<string, unknown> | undefined;
+  for (const line of lines) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) m = parsed as Record<string, unknown>;
+  }
+  if (!m) return;
   if (m.type === 'private' && Number.isSafeInteger(m.sender_id) && (m.sender_id as number) > 0) return { type: 'direct', to: [m.sender_id as number] };
   if (m.type === 'stream' && Number.isSafeInteger(m.stream_id) && (m.stream_id as number) > 0 && typeof m.topic === 'string' && m.topic.length <= 200) return { type: 'stream', stream_id: m.stream_id as number, topic: m.topic };
   return;
