@@ -170,6 +170,12 @@ test('an idle clock marker settles the turn but is not a visible or first reply'
   const first = built([birth(), reply('[teneral: no reply]')]);
   expect(first.s.spoke).toBe(false);
   expect(kinds(first.t)).toEqual(['quiet']);
+  const repeated = reply(Array.from({ length: 42 }, () => '[teneral: no reply]').join('\n\n'));
+  const hidden = built([birth(), repeated]);
+  expect(kinds(hidden.t)).toEqual(['quiet']);
+  expect(hidden.s.spoke).toBe(false);
+  const mixed = built([birth(), reply('[teneral: no reply]\nThis is a real reply.')]);
+  expect(kinds(mixed.t)).toEqual(['quiet', 'reply']);
   const stopped = built([birth(), reply('Hello.'), said('work'), reply('[round limit reached; waiting for the next stimulus]')]);
   expect(kinds(stopped.t)).toEqual(['quiet', 'reply', 'owner']);
   expect(stopped.s.turn.busy).toBe(false);
